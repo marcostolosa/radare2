@@ -1,16 +1,18 @@
-#include "r_core.h"
+/* radare2 - LGPL - Copyright 2009-2020 - pancake */
+
+#include <r_core.h>
 
 static const char *fortunes[] = {
-	"tips", "fun", "nsfw", "creepy"
+	"tips", "fun",
 };
 
 static char *getFortuneFile(RCore *core, const char *type) {
-	return r_str_newf ("%s/share/doc/radare2/fortunes.%s",
-		r_config_get (core->config, "dir.prefix"), type);
+	return r_str_newf (R_JOIN_3_PATHS ("%s", R2_FORTUNES, "fortunes.%s"),
+		r_sys_prefix (NULL), type);
 }
 
 R_API void r_core_fortune_list_types(void) {
-	int i;
+	size_t i;
 	for (i = 0; i < R_ARRAY_SIZE (fortunes); i++) {
 		r_cons_printf ("%s\n", fortunes[i]);
 	}
@@ -19,11 +21,15 @@ R_API void r_core_fortune_list_types(void) {
 R_API void r_core_fortune_list(RCore *core) {
 	// TODO: use file.fortunes // can be dangerous in sandbox mode
 	const char *types = (char *)r_config_get (core->config, "cfg.fortunes.type");
-	int i, j;
+	size_t i, j;
 	for (i = 0; i < R_ARRAY_SIZE (fortunes); i++) {
 		if (strstr (types, fortunes[i])) {
-			char *file = getFortuneFile(core, fortunes[i]);
+			char *file = getFortuneFile (core, fortunes[i]);
 			char *str = r_file_slurp (file, NULL);
+			if (!str) {
+				free (file);
+				continue;
+			}
 			for (j = 0; str[j]; j++) {
 				if (str[j] == '\n') {
 					if (i < j) {
@@ -40,11 +46,12 @@ R_API void r_core_fortune_list(RCore *core) {
 }
 
 static char *getrandomline(RCore *core) {
-	int i, lines = 0;
+	size_t i;
 	const char *types = (char *)r_config_get (core->config, "cfg.fortunes.type");
 	char *line = NULL, *templine;
 	for (i = 0; i < R_ARRAY_SIZE (fortunes); i++) {
 		if (strstr (types, fortunes[i])) {
+			int lines = 0;
 			char *file = getFortuneFile(core, fortunes[i]);
 			templine = r_file_slurp_random_line_count (file, &lines);
 			if (templine && *templine) {
@@ -63,13 +70,13 @@ R_API void r_core_fortune_print_random(RCore *core) {
 	if (!line) {
 		line = getrandomline (core);
 	}
-	if (line) {
-		if (r_config_get_i (core->config, "cfg.fortunes.clippy")) {
-			r_core_clippy (line);
+	if (R_STR_ISNOTEMPTY (line)) {
+		if (r_config_get_b (core->config, "cfg.fortunes.clippy")) {
+			r_core_clippy (core, line);
 		} else {
 			r_cons_printf (" -- %s\n", line);
 		}
-		if (r_config_get_i (core->config, "cfg.fortunes.tts")) {
+		if (r_config_get_b (core->config, "cfg.fortunes.tts")) {
 			r_sys_tts (line, true);
 		}
 		free (line);

@@ -76,7 +76,8 @@ enum HeaderFileType {
 	MH_BUNDLE      = 0x8u,
 	MH_DYLIB_STUB  = 0x9u,
 	MH_DSYM        = 0xAu,
-	MH_KEXT_BUNDLE = 0xBu
+	MH_KEXT_BUNDLE = 0xBu,
+	MH_FILESET     = 0xCu
 };
 
 enum {
@@ -165,7 +166,23 @@ enum LoadCommandType {
 	LC_LINKER_OPTION        = 0x0000002Du,
 	LC_LINKER_OPTIMIZATION_HINT = 0x0000002Eu,
 	LC_VERSION_MIN_TVOS     = 0x0000002Fu,
-	LC_VERSION_MIN_WATCHOS  = 0x00000030u
+	LC_VERSION_MIN_WATCHOS  = 0x00000030u,
+	LC_NOTE                 = 0x00000031u,
+	LC_BUILD_VERSION        = 0x00000032u,
+	LC_DYLD_EXPORTS_TRIE    = 0x80000033u,
+	LC_DYLD_CHAINED_FIXUPS  = 0x80000034u,
+	LC_KEXT  = 0x80000035u, /* TODO: get the right name */
+/*
+Load command 9
+       cmd LC_BUILD_VERSION
+   cmdsize 32
+  platform macos
+       sdk 10.14
+     minos 10.14
+    ntools 1
+      tool ld
+   version 409.11
+*/
 };
 
 enum {
@@ -351,7 +368,13 @@ enum BindOpcode {
 	BIND_OPCODE_DO_BIND                          = 0x90u,
 	BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB            = 0xA0u,
 	BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED      = 0xB0u,
-	BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB = 0xC0u
+	BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB = 0xC0u,
+	BIND_OPCODE_THREADED                         = 0xD0u
+};
+
+enum BindSubOpcode {
+	BIND_SUBOPCODE_THREADED_SET_BIND_ORDINAL_TABLE_SIZE_ULEB = 0x00,
+	BIND_SUBOPCODE_THREADED_APPLY                            = 0x01,
 };
 
 enum {
@@ -418,7 +441,7 @@ enum {
 	SELF_LIBRARY_ORDINAL   = 0x0,
 	MAX_LIBRARY_ORDINAL    = 0xfd,
 	DYNAMIC_LOOKUP_ORDINAL = 0xfe,
-	EXECUTABLE_ORDINAL     = 0xff 
+	EXECUTABLE_ORDINAL     = 0xff
 };
 
 enum StabType {
@@ -1038,11 +1061,11 @@ static inline void SET_LIBRARY_ORDINAL(uint16_t *n_desc, uint8_t ordinal) {
 	*n_desc = (((*n_desc) & 0x00ff) | (((ordinal) & 0xff) << 8));
 }
 
-static inline uint8_t GET_COMM_ALIGN (uint16_t n_desc) {
+static inline uint8_t GET_COMM_ALIGN(uint16_t n_desc) {
 	return (n_desc >> 8u) & 0x0fu;
 }
 
-static inline void SET_COMM_ALIGN (uint16_t *n_desc, uint8_t align) {
+static inline void SET_COMM_ALIGN(uint16_t *n_desc, uint8_t align) {
 	*n_desc = ((*n_desc & 0xf0ffu) | ((align & 0x0fu) << 8u));
 }
 
@@ -1050,7 +1073,8 @@ static inline void SET_COMM_ALIGN (uint16_t *n_desc, uint8_t align) {
 enum {
 	// Capability bits used in the definition of cpu_type.
 	CPU_ARCH_MASK  = 0xff000000,   // Mask for architecture bits
-	CPU_ARCH_ABI64 = 0x01000000    // 64 bit ABI
+	CPU_ARCH_ABI64 = 0x01000000,   // 64 bit ABI
+	CPU_ARCH_ABI32 = 0x02000000    // Used for ARM64_32 (new Apple Watch)
 };
 
 // Constants for the cputype field.
@@ -1066,6 +1090,7 @@ enum CPUType {
 	CPU_TYPE_HPPA      = 11,
 	CPU_TYPE_ARM       = 12,
 	CPU_TYPE_ARM64     = CPU_TYPE_ARM | CPU_ARCH_ABI64,
+	CPU_TYPE_ARM64_32  = CPU_TYPE_ARM | CPU_ARCH_ABI32,
 	CPU_TYPE_MC88000   = 13,
 	CPU_TYPE_SPARC     = 14,
 	CPU_TYPE_I860      = 15,
@@ -1142,7 +1167,9 @@ enum CPUSubTypeARM {
 };
 
 enum CPUSubTypeARM64 {
-	CPU_SUBTYPE_ARM64_ALL   = 0
+	CPU_SUBTYPE_ARM64_ALL   = 0,
+	CPU_SUBTYPE_ARM64_V8    = 1,
+	CPU_SUBTYPE_ARM64E      = 2
 };
 
 enum CPUSubTypeSPARC {
@@ -1403,5 +1430,183 @@ sizeof(struct x86_thread_state_t) / sizeof(uint32_t);
 sizeof(struct x86_float_state_t) / sizeof(uint32_t);
 #define x86_EXCEPTION_STATE_COUNT \
 sizeof(struct x86_exception_state_t) / sizeof(uint32_t);
+
+#define EXPORT_SYMBOL_FLAGS_KIND_MASK 0x03
+#define EXPORT_SYMBOL_FLAGS_KIND_REGULAR 0x00
+#define EXPORT_SYMBOL_FLAGS_KIND_THREAD_LOCAL 0x01
+#define EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE 0x02
+#define EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION 0x04
+#define EXPORT_SYMBOL_FLAGS_REEXPORT 0x08
+#define EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER 0x10
+
+struct dyld_chained_fixups_header
+{
+	uint32_t fixups_version;
+	uint32_t starts_offset;
+	uint32_t imports_offset;
+	uint32_t symbols_offset;
+	uint32_t imports_count;
+	uint32_t imports_format;
+	uint32_t symbols_format;
+};
+
+struct dyld_chained_starts_in_image {
+	uint32_t seg_count;
+};
+
+struct dyld_chained_starts_in_segment {
+	uint32_t size;
+	uint16_t page_size;
+	uint16_t pointer_format;
+	uint64_t segment_offset;
+	uint32_t max_valid_pointer;
+	uint16_t page_count;
+};
+
+struct r_dyld_chained_starts_in_segment {
+	uint32_t size;
+	uint16_t page_size;
+	uint16_t pointer_format;
+	uint64_t segment_offset;
+	uint32_t max_valid_pointer;
+	uint16_t page_count;
+	ut16 * page_start;
+};
+
+enum {
+	DYLD_CHAINED_PTR_START_NONE   = 0xFFFF,
+	DYLD_CHAINED_PTR_START_MULTI  = 0x8000,
+	DYLD_CHAINED_PTR_START_LAST   = 0x8000,
+};
+
+enum {
+	DYLD_CHAINED_PTR_ARM64E      = 1,
+	DYLD_CHAINED_PTR_64          = 2,
+	DYLD_CHAINED_PTR_32          = 3,
+	DYLD_CHAINED_PTR_32_CACHE    = 4,
+	DYLD_CHAINED_PTR_32_FIRMWARE = 5,
+	DYLD_CHAINED_PTR_64_OFFSET = 6,
+	DYLD_CHAINED_PTR_ARM64E_KERNEL = 7,
+	DYLD_CHAINED_PTR_64_KERNEL_CACHE = 8,
+	DYLD_CHAINED_PTR_ARM64E_USERLAND24 = 12,
+};
+
+struct dyld_chained_ptr_arm64e_rebase {
+	uint64_t target : 43,
+		high8 : 8,
+		next : 11,
+		bind : 1, // == 0
+		auth : 1; // == 0
+};
+
+struct dyld_chained_ptr_arm64e_bind {
+	uint64_t ordinal : 16,
+		zero : 16,
+		addend : 19,
+		next : 11,
+		bind : 1, // == 1
+		auth : 1; // == 0
+};
+
+struct dyld_chained_ptr_arm64e_auth_rebase {
+	uint64_t target : 32,
+		diversity : 16,
+		addrDiv : 1,
+		key : 2,
+		next : 11,
+		bind : 1, // == 0
+		auth : 1; // == 1
+};
+
+struct dyld_chained_ptr_arm64e_auth_bind {
+	uint64_t ordinal : 16,
+		zero : 16,
+		diversity : 16,
+		addrDiv : 1,
+		key : 2,
+		next : 11,
+		bind : 1, // == 1
+		auth : 1; // == 1
+};
+
+/* WARNING: this is guesswork based on trial and error */
+struct dyld_chained_ptr_arm64e_cache_rebase {
+	uint64_t target : 43,
+		high8 : 8,
+		next : 12,
+		auth : 1; // == 0
+};
+
+struct dyld_chained_ptr_arm64e_cache_auth_rebase {
+	uint64_t target : 32,
+		diversity : 16,
+		addrDiv : 1,
+		key : 2,
+		next : 12,
+		auth : 1; // == 1
+};
+
+struct dyld_chained_ptr_64_rebase {
+	uint64_t target : 36,
+		high8 : 8,
+		reserved : 7,
+		next : 12,
+		bind : 1; // == 0
+};
+
+struct dyld_chained_ptr_64_bind {
+	uint64_t ordinal : 24,
+		addend : 8,
+		reserved : 19,
+		next : 12,
+		bind : 1; // == 1
+};
+
+struct dyld_chained_ptr_arm64e_bind24 {
+	uint64_t ordinal : 24,
+		zero : 8,
+		addend : 19,
+		next : 11,
+		bind : 1, // == 1
+		auth : 1; // == 0
+};
+
+struct dyld_chained_ptr_arm64e_auth_bind24 {
+	uint64_t ordinal : 24,
+		zero : 8,
+		diversity : 16,
+		addrDiv : 1,
+		key : 2,
+		next : 11,
+		bind : 1, // == 1
+		auth : 1; // == 1
+};
+
+enum {
+	DYLD_CHAINED_IMPORT          = 1,
+	DYLD_CHAINED_IMPORT_ADDEND   = 2,
+	DYLD_CHAINED_IMPORT_ADDEND64 = 3,
+};
+
+struct dyld_chained_import {
+	uint32_t lib_ordinal : 8,
+		weak_import : 1,
+		name_offset : 23;
+};
+
+struct dyld_chained_import_addend {
+	uint32_t lib_ordinal : 8,
+		weak_import : 1,
+		name_offset : 23;
+	int32_t addend;
+};
+
+struct dyld_chained_import_addend64 {
+	uint64_t lib_ordinal : 16,
+		weak_import : 1,
+		reserved : 15,
+		name_offset : 32;
+	uint64_t addend;
+};
 
 #endif

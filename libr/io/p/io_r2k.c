@@ -1,9 +1,8 @@
-/* io_r2k - radare2 - LGPL - Copyright 2016-2018 - SkUaTeR + panda */
+/* io_r2k - radare2 - LGPL - Copyright 2016-2021 - SkUaTeR + panda */
 
 #include <r_io.h>
 #include <r_lib.h>
 #include <r_types.h>
-#include <r_print.h>
 #include <r_util.h>
 #include <sys/types.h>
 
@@ -11,7 +10,9 @@
 #include "io_r2k_windows.h"
 #elif defined (__linux__) && !defined (__GNU__)
 #include "io_r2k_linux.h"
-struct io_r2k_linux r2k_struct;		//TODO: move this into desc->data
+struct io_r2k_linux r2k_struct; // TODO: move this into desc->data
+#else
+int r2k_struct; // dummy
 #endif
 
 int r2k__write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
@@ -59,7 +60,7 @@ static int r2k__read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 #endif
 }
 
-static int r2k__close(RIODesc *fd) {
+static bool r2k__close(RIODesc *fd) {
 #if __WINDOWS__
 	if (gHandleDriver) {
 		CloseHandle (gHandleDriver);
@@ -72,7 +73,7 @@ static int r2k__close(RIODesc *fd) {
 #else
 	eprintf ("TODO: r2k not implemented for this plataform.\n");
 #endif
-	return 0;
+	return true;
 }
 
 static ut64 r2k__lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
@@ -85,6 +86,9 @@ static bool r2k__plugin_open(RIO *io, const char *pathname, bool many) {
 }
 
 static char *r2k__system(RIO *io, RIODesc *fd, const char *cmd) {
+	if (!strcmp (cmd, "")) {
+		return NULL;
+	}
 	if (!strncmp (cmd, "mod", 3)) {
 #if __WINDOWS__
 		GetSystemModules (io);
@@ -102,8 +106,7 @@ static char *r2k__system(RIO *io, RIODesc *fd, const char *cmd) {
 
 static RIODesc *r2k__open(RIO *io, const char *pathname, int rw, int mode) {
 	if (!strncmp (pathname, "r2k://", 6)) {
-		rw |= R_IO_WRITE;
-		rw |= R_IO_EXEC;
+		rw |= R_PERM_WX;
 #if __WINDOWS__
 		RIOW32 *w32 = R_NEW0 (RIOW32);
 		if (Init (&pathname[6]) == FALSE) {
@@ -133,19 +136,20 @@ static RIODesc *r2k__open(RIO *io, const char *pathname, int rw, int mode) {
 
 RIOPlugin r_io_plugin_r2k = {
 	.name = "r2k",
-	.desc = "kernel access API io (r2k://)",
+	.desc = "Kernel access API io",
+	.uris = "r2k://",
 	.license = "LGPL3",
 	.open = r2k__open,
 	.close = r2k__close,
 	.read = r2k__read,
 	.check = r2k__plugin_open,
-	.lseek = r2k__lseek,
+	.seek = r2k__lseek,
 	.system = r2k__system,
 	.write = r2k__write,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_IO,
 	.data = &r_io_plugin_r2k,
 	.version = R2_VERSION

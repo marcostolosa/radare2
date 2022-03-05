@@ -42,9 +42,9 @@ enum {
 	GPR_I7 = 31,
 };
 
-const char * gpr_regs[] = {"g0", "g1", "g2", "g3", "g4", "g5", "g6", "g7", 
-	"o0", "o1", "o2", "o3", "o4", "o5", "o6", "o7", 
-	"l0", "l1", "l2", "l3", "l4", "l5", "l6", "l7", 
+const char * gpr_regs[] = {"g0", "g1", "g2", "g3", "g4", "g5", "g6", "g7",
+	"o0", "o1", "o2", "o3", "o4", "o5", "o6", "o7",
+	"l0", "l1", "l2", "l3", "l4", "l5", "l6", "l7",
 	"i0", "i1", "i2", "i3", "i4", "i5", "i6","i7"};
 
 enum {
@@ -84,7 +84,7 @@ enum {
 	FCC_UL = 0x3,
 	FCC_ULE = 0xe,
 };
-/* Define some additional conditions that are nor mapable to
+/* Define some additional conditions that are nor mappable to
    the existing R_ANAL_COND* ones and need to be handled in a
    special way. */
 enum {
@@ -266,7 +266,7 @@ enum {
 	OP33_INV14 = 0x2e,
 	OP33_INV15 = 0x2f,
 	OP33_INV16 = 0x3f,
-};    
+};
 
 static st64 get_immed_sgnext(const ut64 insn, const ut8 nbit) {
 	const ut64 mask = ~(((ut64)1 << (nbit + 1)) - 1);
@@ -274,20 +274,20 @@ static st64 get_immed_sgnext(const ut64 insn, const ut8 nbit) {
 		| (((insn & ((ut64)1 << nbit)) >> nbit) * mask));
 }
 
-static RAnalValue * value_fill_addr_pc_disp(const ut64 addr, const st64 disp) {
+static RAnalValue *value_fill_addr_pc_disp(const ut64 addr, const st64 disp) {
 	RAnalValue *val = r_anal_value_new();
 	val->base = addr + disp;
 	return val;
 }
 
-static RAnalValue * value_fill_addr_reg_regdelta(RAnal const * const anal, const int ireg, const int iregdelta) {
+static RAnalValue * value_fill_addr_reg_regdelta(RAnal const *const anal, const int ireg, const int iregdelta) {
 	RAnalValue *val = r_anal_value_new();
 	val->reg = r_reg_get(anal->reg, gpr_regs[ireg], R_REG_TYPE_GPR);
 	val->reg = r_reg_get(anal->reg, gpr_regs[iregdelta], R_REG_TYPE_GPR);
 	return val;
 }
 
-static RAnalValue * value_fill_addr_reg_disp(RAnal const * const anal, const int ireg, const st64 disp) {
+static RAnalValue * value_fill_addr_reg_disp(RAnal const *const anal, const int ireg, const st64 disp) {
 	RAnalValue *val = r_anal_value_new();
 	val->reg = r_reg_get(anal->reg, gpr_regs[ireg], R_REG_TYPE_GPR);
 	val->delta = disp;
@@ -302,10 +302,11 @@ static void anal_call(RAnalOp *op, const ut32 insn, const ut64 addr) {
 	op->fail = addr + 4;
 }
 
-static void anal_jmpl(RAnal const * const anal, RAnalOp *op, const ut32 insn, const ut64 addr) {
+static void anal_jmpl(RAnal const *const anal, RAnalOp *op, const ut32 insn, const ut64 addr) {
 	st64 disp = 0;
-	if (X_LDST_I(insn))
-		disp = get_immed_sgnext(insn, 12);
+	if (X_LDST_I (insn)) {
+		disp = get_immed_sgnext (insn, 12);
+	}
 
 	if (X_RD(insn) == GPR_O7) {
 		op->type = R_ANAL_OP_TYPE_UCALL;
@@ -368,16 +369,13 @@ static void anal_branch(RAnalOp *op, const ut32 insn, const ut64 addr) {
 }
 
 // TODO: this implementation is just a fast hack. needs to be rewritten and completed
-static int sparc_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len) {
+static int sparc_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len, RAnalOpMask mask) {
 	int sz = 4;
 	ut32 insn;
 
-	memset (op, 0, sizeof (RAnalOp));
 	op->family = R_ANAL_OP_FAMILY_CPU;
 	op->addr = addr;
 	op->size = sz;
-	op->jump = op->fail = -1;
-	op->ptr = op->val = -1;
 
 	if(!anal->big_endian) {
 		((char*)&insn)[0] = data[3];
@@ -466,18 +464,20 @@ static int sparc_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 	return sz;
 }
 
-static int set_reg_profile(RAnal *anal) {
+static bool set_reg_profile(RAnal *anal) {
 	/* As far as I can see, sparc v9 register and instruction set
 	   don't depened  on bits of the running application.
 	   But: They depend on the bits of the consuming application,
-	   that is the bits radare had been compiled with. 
-	   See sys/procfs_isa.h on a Solaris10 Sparc machine and 
+	   that is the bits radare had been compiled with.
+	   See sys/procfs_isa.h on a Solaris10 Sparc machine and
 	   'man 4 core' for reference.
 	 */
 	const char *p =
 	"=PC	pc\n"
 	"=SP	o6\n"
 	"=BP	i6\n"
+	"=A0	g0\n"
+	"=A1	g1\n"
 	/* prgregset_t for _LP64 */
 	"gpr	g0	.64	0	0\n"
 	"gpr	g1	.64	8	0\n"
@@ -618,8 +618,8 @@ RAnalPlugin r_anal_plugin_sparc_gnu = {
 	.set_reg_profile = set_reg_profile,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_sparc_gnu,
 	.version = R2_VERSION

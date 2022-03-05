@@ -36,16 +36,18 @@ R_API void r_anal_pin_init(RAnal *a) {
 }
 
 R_API void r_anal_pin_fini(RAnal *a) {
-	sdb_free (DB);
+	if (sdb_free (DB)) {
+		DB = NULL;
+	}
 }
 
-R_API void r_anal_pin (RAnal *a, ut64 addr, const char *name) {
+R_API void r_anal_pin(RAnal *a, ut64 addr, const char *name) {
 	char buf[64];
 	const char *key = sdb_itoa (addr, buf, 16);
 	sdb_set (DB, key, name, 0);
 }
 
-R_API void r_anal_pin_unset (RAnal *a, ut64 addr) {
+R_API void r_anal_pin_unset(RAnal *a, ut64 addr) {
 	char buf[64];
 	const char *key = sdb_itoa (addr, buf, 16);
 	sdb_unset (DB, key, 0);
@@ -55,7 +57,14 @@ R_API const char *r_anal_pin_call(RAnal *a, ut64 addr) {
 	char buf[64];
 	const char *key = sdb_itoa (addr, buf, 16);
 	if (key) {
-		return sdb_const_get (DB, key, NULL);
+		const char *name = sdb_const_get (DB, key, NULL);
+		// printf ("CALL %llx (%s) (cmd:%s)%c", addr, name, a->pincmd, 10);
+		if (name && a->pincmd) {
+			// printf ("%s %s", a->pincmd, name);
+			a->coreb.cmdf (a->coreb.core, "%s %s", a->pincmd, name);
+			r_cons_flush ();
+		}
+		return name;
 #if 0
 		const char *name;
 		if (name) {
@@ -71,11 +80,12 @@ R_API const char *r_anal_pin_call(RAnal *a, ut64 addr) {
 	return NULL;
 }
 
-static int cb_list(void *user, const char *k, const char *v) {
+static bool cb_list(void *user, const char *k, const char *v) {
 	RAnal *a = (RAnal*)user;
 	if (*k == '0') {
 		// bind
-		a->cb_printf ("%s = %s\n", k, v);
+		a->cb_printf ("aep %s @ %s\n", v, k);
+	//	a->cb_printf ("%s = %s\n", k, v);
 	} else {
 		// ptr
 		a->cb_printf ("PIN %s\n", k);

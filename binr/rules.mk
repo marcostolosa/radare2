@@ -1,47 +1,85 @@
 BINR_PROGRAM=1
 include ../../libr/config.mk
 include ../../shlr/zip/deps.mk
+include ../../shlr/sdb.mk
 
-ifneq ($(OSTYPE),windows)
-# tcc doesn't recognize the -pie option
+# despite libs are pic, some systems/compilers dont
+# like relocatable executables, so here we do the magic
+USE_PIE=0
 ifeq (,$(findstring tcc,${CC}))
+ifeq (,$(findstring vinix,${CC}))
+USE_PIE=1
+endif
+endif
+
+ifeq ($(USE_PIE),1)
 CFLAGS+=-pie
 endif
-endif
-CFLAGS+=-I$(LTOP)/include
+CFLAGS:=-I$(LTOP)/include -I$(LTOP)/include/sdb $(CFLAGS)
 
-ifeq (${COMPILER},emscripten)
-EXT_EXE=.js
+ifeq (${ANDROID},1)
+LDFLAGS+=-lm
+else
+ifneq (${OSTYPE},linux)
+LDFLAGS+=-lpthread
+ifeq (${OSTYPE},freebsd)
+LDFLAGS+=-ldl
+endif
+LDFLAGS+=-lm
+endif
+endif
+ifeq ($(USE_LTO),1)
+LDFLAGS+=-flto
 endif
 
-ifeq ($(USE_RPATH),1)
-LDFLAGS+=-Wl,-rpath "${LIBDIR}"
+ifeq (${COMPILER},wasi)
+LINK+=$(SHLR)/zip/librz.a
+LINK+=$(SHLR)/gdb/lib/libgdbr.a
+LINK+=$(SHLR)/capstone/libcapstone.a
+LINK+=$(SHLR)/sdb/src/libsdb.a
+
+# instead of libr.a
+LINK+=$(LIBR)/util/libr_util.a
+LINK+=$(LIBR)/core/libr_core.a
+LINK+=$(LIBR)/magic/libr_magic.a
+LINK+=$(LIBR)/socket/libr_socket.a
+LINK+=$(LIBR)/debug/libr_debug.a
+LINK+=$(LIBR)/anal/libr_anal.a
+LINK+=$(LIBR)/reg/libr_reg.a
+LINK+=$(LIBR)/bp/libr_bp.a
+LINK+=$(LIBR)/io/libr_io.a
+LINK+=$(LIBR)/flag/libr_flag.a
+LINK+=$(LIBR)/hash/libr_hash.a
+LINK+=$(LIBR)/syscall/libr_syscall.a
+LINK+=$(LIBR)/egg/libr_egg.a
+LINK+=$(LIBR)/fs/libr_fs.a
+LINK+=$(LIBR)/parse/libr_parse.a
+LINK+=$(LIBR)/bin/libr_bin.a
+LINK+=$(LIBR)/asm/libr_asm.a
+LINK+=$(LIBR)/search/libr_search.a
+LINK+=$(LIBR)/cons/libr_cons.a
+LINK+=$(LIBR)/lang/libr_lang.a
+LINK+=$(LIBR)/config/libr_config.a
+LINK+=$(LIBR)/crypto/libr_crypto.a
+LINK+=$(LIBR)/main/libr_main.a
+else ifeq (${COMPILER},emscripten)
+LINK+=$(SHLR)/libr_shlr.a
+LINK+=$(SHLR)/sdb/src/libsdb.a
+include $(SHLR)/capstone.mk
+CFLAGS+= -s SIDE_MODULE=1
+#CFLAGS+=-s ERROR_ON_UNDEFINED_SYMBOLS=0
+#EXT_EXE=.js
+#EXT_EXE=.html
+EXT_EXE=.bc
+#EXT_EXE=.wasm
 endif
+
+LDFLAGS+=$(LDFLAGS_RPATH)
 
 OBJ+=${BIN}.o
 BEXE=${BIN}${EXT_EXE}
 
-ifeq ($(WITHNONPIC),1)
-## LDFLAGS+=$(addsuffix /lib${BINDEPS}.a,$(addprefix ../../libr/,$(subst r_,,$(BINDEPS))))
-LDFLAGS+=$(shell for a in ${BINDEPS} ; do b=`echo $$a |sed -e s,r_,,g`; echo ../../libr/$$b/lib$$a.${EXT_AR} ; done )
-LDFLAGS+=../../shlr/sdb/src/libsdb.a
-ifeq (1,$(WITH_GPL))
-LDFLAGS+=../../shlr/grub/libgrubfs.a
-endif
-LDFLAGS+=../../shlr/gdb/lib/libgdbr.a
-LDFLAGS+=../../shlr/windbg/libr_windbg.a
-LDFLAGS+=../../shlr/capstone/libcapstone.a
-LDFLAGS+=../../shlr/java/libr_java.a
-LDFLAGS+=../../libr/socket/libr_socket.a
-LDFLAGS+=../../libr/util/libr_util.a
-ifneq (${OSTYPE},haiku)
-ifneq ($(CC),cccl)
-LDFLAGS+=-lm
-endif
-endif
-endif
 LDFLAGS+=${DL_LIBS}
-LDFLAGS+=${LINK}
 ifneq (${ANDROID},1)
 ifneq (${OSTYPE},windows)
 ifneq (${OSTYPE},linux)
@@ -62,31 +100,49 @@ endif
 # Rules for programs #
 #--------------------#
 
+LDFLAGS+=-lm
 # For some reason w32 builds contain -shared in LDFLAGS. boo!
 
 ifneq ($(BIN)$(BINS),)
 
+ifeq ($(OSTYPE),linux)
+LDFLAGS+=-static
+endif
+
 all: ${BEXE} ${BINS}
+
+ifeq ($(WITH_LIBR),1)
+${BINS}: ${OBJS}
+	${CC} ${CFLAGS} $@.c ${OBJS} ../../libr/libr.a -o $@ $(LDFLAGS)
+
+${BEXE}: ${OBJ} ${SHARED_OBJ}
+ifeq ($(COMPILER),wasi)
+	${CC} ${CFLAGS} $+ -L.. -o $@ $(LDFLAGS)
+else
+ifeq ($(CC),emcc)
+	emcc $(BIN).c ../../shlr/libr_shlr.a ../../shlr/capstone/libcapstone.a ../../libr/libr.a ../../shlr/gdb/lib/libgdbr.a ../../shlr/zip/librz.a -I ../../libr/include -o $(BIN).js
+else
+	${CC} ${CFLAGS} $+ -L.. -o $@ ../../libr/libr.a $(LDFLAGS)
+endif
+endif
+else
 
 ${BINS}: ${OBJS}
 ifneq ($(SILENT),)
 	@echo CC $@
 endif
-	${CC} ${CFLAGS} $@.c ${OBJS} ${REAL_LDFLAGS} -o $@
+	${CC} ${CFLAGS} $@.c ${OBJS} ${REAL_LDFLAGS} $(LINK) -o $@
 
 # -static fails because -ldl -lpthread static-gcc ...
 ${BEXE}: ${OBJ} ${SHARED_OBJ}
-ifeq ($(WITHNONPIC),1)
-	${CC} -pie ${CFLAGS} $+ -L.. -o $@ $(REAL_LDFLAGS)
-else
 ifneq ($(SILENT),)
 	@echo LD $@
 endif
-	${CC} ${CFLAGS} $+ -L.. -o $@ $(REAL_LDFLAGS)
+	${CC} ${CFLAGS} $+ -L.. -o $@ $(REAL_LDFLAGS) $(LINK)
 endif
 endif
 
-# Dummy myclean rule that can be overriden by the t/ Makefile
+# Dummy myclean rule that can be overridden by the t/ Makefile
 # TODO: move to config.mk ? it must be a precondition
 myclean:
 
@@ -96,7 +152,9 @@ clean:: myclean
 mrproper: clean
 	-rm -f *.d
 
+ifeq ($(INSTALL_TARGET),)
 install:
 	cd ../.. && ${MAKE} install
+endif
 
 .PHONY: all clean myclean mrproper install

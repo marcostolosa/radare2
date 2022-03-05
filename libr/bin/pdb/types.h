@@ -6,7 +6,8 @@
 
 #define READ_PAGE_FAIL 0x01
 
-//TODO: MOVE TO GENERAL MACROSE
+// TODO: Move to a general macros in r_util/r_types
+
 ///////////////////////////////////////////////////////////////////////////////
 #define GET_PAGE(pn, off, pos, page_size)	{ \
 	(pn) = (pos) / (page_size); \
@@ -30,7 +31,7 @@
 
 ///////////////////////////////////////////////////////////////////////////////
 #define CAN_READ(curr_read_bytes, bytes_for_read, max_len) { \
-	if ((((curr_read_bytes) + (bytes_for_read)) >= (max_len))) { \
+	if ((((curr_read_bytes) + (bytes_for_read)) > (max_len))) { \
 		return 0; \
 	} \
 }
@@ -124,19 +125,87 @@ typedef get_arg_type_ get_modified_type_;
 typedef get_value get_index_val;
 typedef get_value_name get_print_type_;
 
+// start of refactoring the simple type to mode and kind
 typedef enum {
-	eT_NOTYPE =               0x00000000,
+	DIRECT = 0, // Not a pointer
+	NEAR_POINTER = 1, // Near pointer
+	FAR_POINTER = 2, // Far pointer
+	HUGE_POINTER = 3, // Huge pointer
+	NEAR_POINTER32 = 4, // 32 bit near pointer
+	FAR_POINTER32 = 5, // 32 bit far pointer
+	NEAR_POINTER64 = 6, // 64 bit near pointer
+	NEAR_POINTER128 = 7 // 128 bit near pointer
+} SimpleTypeMode;
+
+typedef enum {
+	PDB_NONE = 0x0000, // uncharacterized type (no type)
+	PDB_VOID = 0x0003, // void
+	PDB_NOT_TRANSLATED = 0x0007, // type not translated by cvpack
+	PDB_HRESULT = 0x0008, // OLE/COM HRESULT
+
+	PDB_SIGNED_CHAR = 0x0010, // 8 bit signed
+	PDB_UNSIGNED_CHAR = 0x0020, // 8 bit unsigned
+	PDB_NARROW_CHAR = 0x0070, // really a char
+	PDB_WIDE_CHAR = 0x0071, // wide char
+	PDB_CHAR16 = 0x007a, // char16_t
+	PDB_CHAR32 = 0x007b, // char32_t
+
+	PDB_SBYTE = 0x0068, // 8 bit signed int
+	PDB_BYTE = 0x0069, // 8 bit unsigned int
+	PDB_INT16_SHORT = 0x0011, // 16 bit signed
+	PDB_UINT16_SHORT = 0x0021, // 16 bit unsigned
+	PDB_INT16 = 0x0072, // 16 bit signed int
+	PDB_UINT16 = 0x0073, // 16 bit unsigned int
+	PDB_INT32_LONG = 0x0012, // 32 bit signed
+	PDB_UINT32_LONG = 0x0022, // 32 bit unsigned
+	PDB_INT32 = 0x0074, // 32 bit signed int
+	PDB_UINT32 = 0x0075, // 32 bit unsigned int
+	PDB_INT64_QUAD = 0x0013, // 64 bit signed
+	PDB_UINT64_QUAD = 0x0023, // 64 bit unsigned
+	PDB_INT64 = 0x0076, // 64 bit signed int
+	PDB_UINT64 = 0x0077, // 64 bit unsigned int
+	PDB_INT128_OCT = 0x0014, // 128 bit signed int
+	PDB_UINT128_OCT = 0x0024, // 128 bit unsigned int
+	PDB_INT128 = 0x0078, // 128 bit signed int
+	PDB_UINT128 = 0x0079, // 128 bit unsigned int
+
+	PDB_FLOAT16 = 0x0046, // 16 bit real
+	PDB_FLOAT32 = 0x0040, // 32 bit real
+	PDB_FLOAT32_PP = 0x0045, // 32 bit PP (partial precision) real
+	PDB_FLOAT48 = 0x0044, // 48 bit real
+	PDB_FLOAT64 = 0x0041, // 64 bit real
+	PDB_FLOAT80 = 0x0042, // 80 bit real
+	PDB_FLOAT128 = 0x0043, // 128 bit real
+
+	PDB_COMPLEX16 = 0x0056, // 16 bit complex
+	PDB_COMPLEX32 = 0x0050, // 32 bit complex
+	PDB_COMPLEX32_PP = 0x0055, // 32 bit PP (partial precision) complex
+	PDB_COMPLEX48 = 0x0054, // 48 bit complex
+	PDB_COMPLEX64 = 0x0051, // 64 bit complex
+	PDB_COMPLEX80 = 0x0052, // 80 bit complex
+	PDB_COMPLEX128 = 0x0053, // 128 bit complex
+
+	PDB_BOOL8 = 0x0030, // 8 bit boolean
+	PDB_BOOL16 = 0x0031, // 16 bit boolean
+	PDB_BOOL32 = 0x0032, // 32 bit boolean
+	PDB_BOOL64 = 0x0033, // 64 bit boolean
+	PDB_BOOL128 = 0x0034, // 128 bit boolean
+} SimpleTypeKind;
+// https://llvm.org/docs/PDB/TpiStream.html#type-indices
+// This can be done smarter splitting it up on mode and kind
+typedef enum {
+	eT_NOTYPE =               0x00000000, // uncharacterized type (no type)
 	eT_ABS =                  0x00000001,
 	eT_SEGMENT =              0x00000002,
-	eT_VOID =                 0x00000003,
+	eT_VOID =                 0x00000003, // void
 
-	eT_HRESULT =              0x00000008,
+	eT_HRESULT =              0x00000008, // OLE/COM HRESULT
 	eT_32PHRESULT =           0x00000408,
 	eT_64PHRESULT =           0x00000608,
 
-	eT_PVOID =                0x00000103,
-	eT_PFVOID =               0x00000203,
-	eT_PHVOID =               0x00000303,
+	eT_PVOID =                0x00000103, // near ptr to void
+	eT_PFVOID =               0x00000203, // far ptr to void (4 bytes)
+	eT_PHVOID =               0x00000303, // huge ptr to void (4 bytes)
 	eT_32PVOID =              0x00000403,
 	eT_32PFVOID =             0x00000503,
 	eT_64PVOID =              0x00000603,
@@ -180,23 +249,23 @@ typedef enum {
 	eT_32PFWCHAR =            0x00000571,
 	eT_64PWCHAR =             0x00000671,
 
-	eT_INT1 =                 0x00000068,
-	eT_PINT1 =                0x00000168,
-	eT_PFINT1 =               0x00000268,
-	eT_PHINT1 =               0x00000368,
-	eT_32PINT1 =              0x00000468,
-	eT_32PFINT1 =             0x00000568,
-	eT_64PINT1 =              0x00000668,
+	eT_BYTE =                 0x00000068,
+	eT_PBYTE =                0x00000168,
+	eT_PFBYTE =               0x00000268,
+	eT_PHBYTE =               0x00000368,
+	eT_32PBYTE =              0x00000468,
+	eT_32PFBYTE =             0x00000568,
+	eT_64PBYTE =              0x00000668,
 
-	eT_UINT1 =                0x00000069,
-	eT_PUINT1 =               0x00000169,
-	eT_PFUINT1 =              0x00000269,
-	eT_PHUINT1 =              0x00000369,
-	eT_32PUINT1 =             0x00000469,
-	eT_32PFUINT1 =            0x00000569,
-	eT_64PUINT1 =             0x00000669,
+	eT_UBYTE =                0x00000069,
+	eT_PUBYTE =               0x00000169,
+	eT_PFUBYTE =              0x00000269,
+	eT_PHUBYTE =              0x00000369,
+	eT_32PUBYTE =             0x00000469,
+	eT_32PFUBYTE =            0x00000569,
+	eT_64PUBYTE =             0x00000669,
 
-	eT_SHORT =                0x00000011,
+	eT_SHORT =                0x00000011, // 16 bit short
 	eT_PSHORT =               0x00000111,
 	eT_PFSHORT =              0x00000211,
 	eT_PHSHORT =              0x00000311,
@@ -204,7 +273,7 @@ typedef enum {
 	eT_32PFSHORT =            0x00000511,
 	eT_64PSHORT =             0x00000611,
 
-	eT_USHORT =               0x00000021,
+	eT_USHORT =               0x00000021, // 16 bit short
 	eT_PUSHORT =              0x00000121,
 	eT_PFUSHORT =             0x00000221,
 	eT_PHUSHORT =             0x00000321,
@@ -212,23 +281,23 @@ typedef enum {
 	eT_32PFUSHORT =           0x00000521,
 	eT_64PUSHORT =            0x00000621,
 
-	eT_INT2 =                 0x00000072,
-	eT_PINT2 =                0x00000172,
-	eT_PFINT2 =               0x00000272,
-	eT_PHINT2 =               0x00000372,
-	eT_32PINT2 =              0x00000472,
-	eT_32PFINT2 =             0x00000572,
-	eT_64PINT2 =              0x00000672,
+	eT_INT16 =                 0x00000072, // 16 bit
+	eT_PINT16 =                0x00000172,
+	eT_PFINT16 =               0x00000272,
+	eT_PHINT16 =               0x00000372,
+	eT_32PINT16 =              0x00000472,
+	eT_32PFINT16 =             0x00000572,
+	eT_64PINT16 =              0x00000672,
 
-	eT_UINT2 =                0x00000073,
-	eT_PUINT2 =               0x00000173,
-	eT_PFUINT2 =              0x00000273,
-	eT_PHUINT2 =              0x00000373,
-	eT_32PUINT2 =             0x00000473,
-	eT_32PFUINT2 =            0x00000573,
-	eT_64PUINT2 =             0x00000673,
+	eT_UINT16 =                0x00000073, // 16 bit
+	eT_PUINT16 =               0x00000173,
+	eT_PFUINT16 =              0x00000273,
+	eT_PHUINT16 =              0x00000373,
+	eT_32PUINT16 =             0x00000473,
+	eT_32PFUINT16 =            0x00000573,
+	eT_64PUINT16 =             0x00000673,
 
-	eT_LONG =                 0x00000012,
+	eT_LONG =                 0x00000012, // 32 bit
 	eT_PLONG =                0x00000112,
 	eT_PFLONG =               0x00000212,
 	eT_PHLONG =               0x00000312,
@@ -260,7 +329,7 @@ typedef enum {
 	eT_32PFUINT4 =            0x00000575,
 	eT_64PUINT4 =             0x00000675,
 
-	eT_QUAD =                 0x00000013,
+	eT_QUAD =                 0x00000013, // 64 bit signed
 	eT_PQUAD =                0x00000113,
 	eT_PFQUAD =               0x00000213,
 	eT_PHQUAD =               0x00000313,
@@ -308,21 +377,21 @@ typedef enum {
 	eT_32PFUOCT =             0x00000524,
 	eT_64PUOCT =              0x00000624,
 
-	eT_INT16 =                0x00000078,
-	eT_PINT16 =               0x00000178,
-	eT_PFINT16 =              0x00000278,
-	eT_PHINT16 =              0x00000378,
-	eT_32PINT16 =             0x00000478,
-	eT_32PFINT16 =            0x00000578,
-	eT_64PINT16 =             0x00000678,
+	eT_INT128 =                0x00000078,
+	eT_PINT128 =               0x00000178,
+	eT_PFINT128 =              0x00000278,
+	eT_PHINT128 =              0x00000378,
+	eT_32PINT128 =             0x00000478,
+	eT_32PFINT128 =            0x00000578,
+	eT_64PINT128 =             0x00000678,
 
-	eT_UINT16 =               0x00000079,
-	eT_PUINT16 =              0x00000179,
-	eT_PFUINT16 =             0x00000279,
-	eT_PHUINT16 =             0x00000379,
-	eT_32PUINT16 =            0x00000479,
-	eT_32PFUINT16 =           0x00000579,
-	eT_64PUINT16 =            0x00000679,
+	eT_UINT128 =               0x00000079,
+	eT_PUINT128 =              0x00000179,
+	eT_PFUINT128 =             0x00000279,
+	eT_PHUINT128 =             0x00000379,
+	eT_32PUINT128 =            0x00000479,
+	eT_32PFUINT128 =           0x00000579,
+	eT_64PUINT128 =            0x00000679,
 
 	eT_REAL32 =               0x00000040,
 	eT_PREAL32 =              0x00000140,
@@ -428,13 +497,21 @@ typedef enum {
 	eT_32PFBOOL64 =           0x00000533,
 	eT_64PBOOL64 =            0x00000633,
 
+	eT_BOOL128 =               0x00000034,
+	eT_PBOOL128 =              0x00000134,
+	eT_PFBOOL128 =             0x00000234,
+	eT_PHBOOL128 =             0x00000334,
+	eT_32PBOOL128 =            0x00000434,
+	eT_32PFBOOL128 =           0x00000534,
+	eT_64PBOOL128 =            0x00000634,
+
 	eT_NCVPTR =               0x000001F0,
 	eT_FCVPTR =               0x000002F0,
 	eT_HCVPTR =               0x000003F0,
 	eT_32NCVPTR =             0x000004F0,
 	eT_32FCVPTR =             0x000005F0,
 	eT_64NCVPTR =             0x000006F0,
-} EBASE_TYPES;
+} PDB_SIMPLE_TYPES;
 
 typedef enum {
 	eNEAR_C          = 0x00000000,
@@ -465,18 +542,22 @@ typedef enum {
 
 typedef union {
 	struct {
-		unsigned char scoped : 1;
-		unsigned char reserved : 7; // swapped
-		unsigned char packed : 1;
-		unsigned char ctor : 1;
-		unsigned char ovlops : 1;
-		unsigned char isnested : 1;
-		unsigned char cnested : 1;
-		unsigned char opassign : 1;
-		unsigned char opcast : 1;
-		unsigned char fwdref : 1;
+		ut16 packed : 1; // true if structure is packed
+		ut16 ctor : 1; // true if constructors or destructors present
+		ut16 ovlops : 1; // true if overloaded operators present
+		ut16 isnested : 1; // true if this is a nested class
+		ut16 cnested : 1; // true if this class contains nested types
+		ut16 opassign : 1; // true if overloaded assignment (=)
+		ut16 opcast : 1; // true if casting methods
+		ut16 fwdref : 1; // true if forward reference (incomplete defn)
+		ut16 scoped : 1; // scoped definition
+		ut16 hasuniquename : 1; // true if there is a decorated name following the regular name
+		ut16 sealed : 1; // true if class cannot be used as a base class
+		ut16 hfa : 2; // CV_HFA_e
+		ut16 intrinsic : 1; // true if class is an intrinsic type (e.g. __m128d)
+		ut16 mocom : 2; // CV_MOCOM_UDT_e
 	} bits;
-	unsigned short cv_property;
+	ut16 cv_property;
 } UCV_PROPERTY;
 
 typedef enum {
@@ -497,63 +578,73 @@ typedef enum {
 	eAccessMax
 } EACCESS;
 
+// Struct to represent base types
+typedef struct {
+	char *type;
+	ut32 size;
+	PDB_SIMPLE_TYPES simple_type;
+} SLF_SIMPLE_TYPE;
 //### CodeView bitfields and enums
 //# NOTE: Construct assumes big-endian
 //# ordering for BitStructs
 typedef union {
 	struct {
-		unsigned char access : 2;
-		unsigned char mprop : 3;
-		unsigned char pseudo : 1;
-		unsigned char noinherit : 1;
-		unsigned char noconstruct : 1;
-		unsigned char padding : 7;
-		unsigned char compgenx : 1;
+		ut16 access : 2; // access protection CV_access_t
+		ut16 mprop : 3; // method properties CV_methodprop_t
+		ut16 pseudo : 1; // compiler generated fcn and does not exist
+		ut16 noinherit : 1; // true if class cannot be inherited
+		ut16 noconstruct : 1; // true if class cannot be constructed
+		ut16 compgenx : 1; // compiler generated fcn and does exist
+		ut16 sealed : 1; // true if method cannot be overridden
+		ut16 unused : 6; // unused
 	} bits;
-	unsigned short fldattr;
+	ut16 fldattr;
 } UCV_fldattr;
 
+R_PACKED(
 typedef struct {
-	unsigned int return_type;
+	ut16 return_type;
 	ECV_CALL call_conv;
-	unsigned char reserved;
-	unsigned short parm_count;
-	unsigned int arg_list;
-	unsigned char pad;
-} SLF_PROCEDURE;
+	ut8 reserved;
+	ut16 parm_count;
+	ut32 arg_list;
+	ut8 pad;
+}) SLF_PROCEDURE;
 
+R_PACKED(
 typedef struct {
-	unsigned int return_type;
-	unsigned int class_type;
-	unsigned int this_type;
+	ut32 return_type;
+	ut32 class_type;
+	ut32 this_type;
 	ECV_CALL call_conv; // 1 byte
-	unsigned char reserved;
-	unsigned short parm_count;
-	unsigned int arglist;
-	int this_adjust;
-	unsigned char pad;
-} SLF_MFUNCTION;
+	ut8 reserved;
+	ut16 parm_count;
+	ut32 arglist;
+	st32 this_adjust;
+	ut8 pad;
+}) SLF_MFUNCTION;
 
+R_PACKED(
 typedef struct {
-	unsigned int count;
-	unsigned int *arg_type;
-	unsigned char pad;
-} SLF_ARGLIST;
+	ut32 count;
+	ut32 *arg_type;
+	ut8 pad;
+}) SLF_ARGLIST;
 
+R_PACKED(
 typedef struct {
-	unsigned int modified_type;
+	ut32 modified_type;
 	union {
 		struct {
-			unsigned char pad2 : 8;
-			unsigned char const_ : 1;
-			unsigned char volatile_ : 1;
-			unsigned char unaligned : 1;
-			unsigned char pad1 : 5;
+			ut16 const_ : 1;
+			ut16 volatile_ : 1;
+			ut16 unaligned : 1;
+			ut16 unused : 13;
 		} bits;
-		unsigned short modifier;
+		ut16 modifier;
 	} umodifier;
-	unsigned char pad;
-} SLF_MODIFIER;
+	ut8 pad;
+}) SLF_MODIFIER;
 
 typedef enum {
 	ePTR_MODE_PTR         = 0x00000000,
@@ -582,32 +673,38 @@ typedef enum {
 	eTypeMax
 } EType;
 
+R_PACKED(
 typedef union {
 	struct {
-		unsigned char pad[2];
-		unsigned char flat32 : 1;
-		unsigned char volatile_ : 1;
-		unsigned char const_ : 1;
-		unsigned char unaligned : 1;
-		unsigned char restrict_ : 1;
-		unsigned char pad1 : 3;
-		unsigned char type : 5;
-		unsigned char mode : 3;
+		ut32 ptrtype : 5; // ordinal specifying pointer type
+		ut32 ptrmode : 3; // ordinal specifying pointer mode
+		ut32 flat32 : 1; // true if 0:32 pointer
+		ut32 volatile_ : 1; // TRUE if volatile pointer
+		ut32 const_ : 1; // TRUE if const pointer
+		ut32 unaligned : 1; // TRUE if unaligned pointer
+		ut32 restrict_ : 1; // TRUE if restricted pointer (allow agressive opts)
+		ut32 size : 6; // size of pointer (in bytes)
+		ut32 mocom : 1; // TRUE if it is a MoCOM pointer (^ or %)
+		ut32 lref : 1; // TRUE if it is this pointer of member function with & ref-qualifier
+		ut32 rref : 1; // TRUE if it is this pointer of member function with && ref-qualifier
+		ut32 unused : 10; // pad out to 32-bits for following cv_typ_t's
 	} bits;
-	unsigned int ptr_attr;
-} UPTR_ATTR;
+	ut32 ptr_attr;
+}) UPTR_ATTR;
 
+R_PACKED(
 typedef struct {
-	unsigned int utype;
+	ut32 utype;
 	UPTR_ATTR ptr_attr;
-	unsigned char pad;
-} SLF_POINTER;
+	ut8 pad;
+}) SLF_POINTER;
 
+R_PACKED(
 typedef struct {
-	int stream_size;
-	int num_pages;
-	char *stream_pages;
-} SPage;
+	st32 stream_size;
+	st32 num_pages;
+	ut8 *stream_pages;
+}) SPage;
 
 typedef struct {
 //	FILE *fp;
@@ -656,148 +753,166 @@ typedef struct {
 	f_load load;
 } SParsedPDBStream;
 
+R_PACKED(
 typedef struct {
-	unsigned int size;
 	char *name;
-} SCString;
+	ut32 size;
+}) SCString;
 
+R_PACKED(
 typedef struct {
 	SCString name;
-} SNoVal;
+}) SNoVal;
 
+R_PACKED(
 typedef struct {
 	char value;
 	SCString name;
-} SVal_LF_CHAR;
+}) SVal_LF_CHAR;
 
+R_PACKED(
 typedef struct {
-	short value;
+	st16 value;
 	SCString name;
-} SVal_LF_SHORT;
+}) SVal_LF_SHORT;
 
+R_PACKED(
 typedef struct {
-	unsigned short value;
+	ut16 value;
 	SCString name;
-} SVal_LF_USHORT;
+}) SVal_LF_USHORT;
 
 typedef struct {
-	long value;
+	st32 value;
 	SCString name;
 } SVal_LF_LONG;
 
 typedef struct {
-	unsigned long value;
+	ut32 value;
 	SCString name;
 } SVal_LF_ULONG;
 
 typedef struct {
-    int64_t value;
-    SCString name;
+	st64 value;
+	SCString name;
 } SVal_LF_QUADWORD;
 
 typedef struct {
-    uint64_t value;
-    SCString name;
+	ut64 value;
+	SCString name;
 } SVal_LF_UQUADWORD;
 
+R_PACKED(
 typedef struct {
-	unsigned short value_or_type;
+	ut16 value_or_type;
 	void *name_or_val;
-} SVal;
+}) SVal;
 
+R_PACKED(
 typedef struct {
-	unsigned int element_type;
-	unsigned int index_type;
+	ut32 element_type;
+	ut32 index_type;
 	SVal size;
-	unsigned char pad;
-} SLF_ARRAY;
+	ut8 pad;
+}) SLF_ARRAY;
 
+R_PACKED(
 typedef struct {
-	unsigned short count;
+	ut16 count;
+	UCV_PROPERTY prop; // // property attribute field
+	ut32 field_list; // type index of LF_FIELD descriptor list
+	ut32 derived; // type index of derived from list if not zero
+	ut32 vshape; // type index of vshape table for this class
+	SVal size;
+	ut8 pad;
+}) SLF_STRUCTURE, SLF_CLASS;
+
+R_PACKED(
+typedef struct {
+	ut16 count;
 	UCV_PROPERTY prop;
-	unsigned int field_list;
-	unsigned int derived;
-	unsigned int vshape;
+	ut32 field_list;
 	SVal size;
-	unsigned char pad;
-} SLF_STRUCTURE, SLF_CLASS;
+	ut32 pad;
+}) SLF_UNION;
 
+R_PACKED(
 typedef struct {
-	unsigned short count;
-	UCV_PROPERTY prop;
-	unsigned int field_list;
-	SVal size;
-	unsigned pad;
-} SLF_UNION;
+	ut32 base_type;
+	ut8 length;
+	ut8 position;
+	ut8 pad;
+}) SLF_BITFIELD;
 
+R_PACKED(
 typedef struct {
-	unsigned int base_type;
-	unsigned char length;
-	unsigned char position;
-	unsigned char pad;
-} SLF_BITFIELD;
-
-typedef struct {
-	unsigned short count;
+	ut16 count;
 	char *vt_descriptors;
-	unsigned char pad;
-} SLF_VTSHAPE;
+	ut8 pad;
+}) SLF_VTSHAPE;
 
+R_PACKED(
 typedef struct {
-	unsigned short count;
+	ut16 count;
 	UCV_PROPERTY prop;
-	unsigned int utype;
-	unsigned int field_list;
+	ut32 utype;
+	ut32 field_list;
 	SCString name;
-	unsigned char pad;
-} SLF_ENUM;
+	ut8 pad;
+}) SLF_ENUM;
 
+R_PACKED(
 typedef struct {
 	UCV_fldattr fldattr;
 	SVal enum_value;
-	unsigned char pad;
+	ut8 pad;
 
 	free_func free_;
-} SLF_ENUMERATE;
+}) SLF_ENUMERATE;
 
+R_PACKED(
 typedef struct {
-	unsigned short pad;
-	unsigned int index;
+	ut16 pad;
+	ut32 index;
 	SCString name;
 
 	free_func free_;
-} SLF_NESTTYPE;
+}) SLF_NESTTYPE;
 
+R_PACKED(
 typedef struct {
-	unsigned short count;
-	unsigned int mlist;
+	ut16 count;
+	ut32 mlist;
 	SCString name;
-	unsigned char pad;
+	ut8 pad;
 
 	free_func free_;
-} SLF_METHOD;
+}) SLF_METHOD;
 
+R_PACKED(
 typedef struct {
 	UCV_fldattr fldattr;
-	unsigned int inedex;
+	ut32 index;
 	SVal offset;
-	unsigned char pad;
+	ut8 pad;
 
 	// TODO: remove free_
 	free_func free_;
-} SLF_MEMBER;
+}) SLF_MEMBER;
 
+R_PACKED(
 typedef struct {
-	unsigned int val;
+	ut32 val;
 	SCString str_data;
-} SLF_ONEMETHOD_VAL;
+}) SLF_ONEMETHOD_VAL;
 
+R_PACKED(
 typedef struct {
 	UCV_fldattr fldattr;
-	unsigned int index;
+	ut32 index;
 	SLF_ONEMETHOD_VAL val;
-	unsigned char pad;
-} SLF_ONEMETHOD;
+	ut8 pad;
+}) SLF_ONEMETHOD;
 
 typedef struct {
 //	ELeafType leaf_type;
@@ -805,165 +920,172 @@ typedef struct {
 } SLF_FIELDLIST;
 
 typedef struct {
-	int off;
-	int cb;
+	st32 offset;
+	ut32 buff_len;
 } SOffCb;
 
 typedef struct {
-	short sn;
-	short padding;
-	int hash_key;
-	int buckets;
-	SOffCb hash_vals;
-	SOffCb ti_off;
+	ut16 hash_stream_idx;
+	ut16 hash_aux_stream_idx;
+	st32 hash_key_size;
+	st32 buckets;
+	SOffCb hash_val;
+	SOffCb idx_off;
 	SOffCb hash_adj;
 } STPI;
 
 typedef struct {
-	unsigned int version;
-	int hdr_size;
-	unsigned int ti_min;
-	unsigned int ti_max;
-	unsigned int follow_size;
+	ut32 version;
+	ut32 hdr_size; // should be ut32
+	ut32 idx_begin;
+	ut32 idx_end;
+	ut32 follow_size;
 	STPI tpi;
 } STPIHeader;
 
 typedef enum {
-	eLF_MODIFIER_16t         = 0x00000001,
+	eLF_MODIFIER_16t         = 0x00000001, // type record for a generalized built-in type modifier
 	eLF_POINTER_16t          = 0x00000002,
-	eLF_ARRAY_16t            = 0x00000003,
+	eLF_ARRAY_16t            = 0x00000003, // type record for basic array
 	eLF_CLASS_16t            = 0x00000004,
 	eLF_STRUCTURE_16t        = 0x00000005,
 	eLF_UNION_16t            = 0x00000006,
-	eLF_ENUM_16t             = 0x00000007,
-	eLF_PROCEDURE_16t        = 0x00000008,
-	eLF_MFUNCTION_16t        = 0x00000009,
-	eLF_VTSHAPE              = 0x0000000A,
-	eLF_COBOL0_16t           = 0x0000000B,
-	eLF_COBOL1               = 0x0000000C,
-	eLF_BARRAY_16t           = 0x0000000D,
+	eLF_ENUM_16t             = 0x00000007, // type record for LF_ENUM
+	eLF_PROCEDURE_16t        = 0x00000008, // Type record for LF_PROCEDURE
+	eLF_MFUNCTION_16t        = 0x00000009, // Type record for member function
+	eLF_VTSHAPE              = 0x0000000A, // type record for virtual function table shape
+	eLF_COBOL0_16t           = 0x0000000B, // type record for cobol0
+	eLF_COBOL1               = 0x0000000C, // type record for cobol1
+	eLF_BARRAY_16t           = 0x0000000D, // type record for basic array
 	eLF_LABEL                = 0x0000000E,
 	eLF_NULL                 = 0x0000000F,
 	eLF_NOTTRAN              = 0x00000010,
-	eLF_DIMARRAY_16t         = 0x00000011,
-	eLF_VFTPATH_16t          = 0x00000012,
-	eLF_PRECOMP_16t          = 0x00000013,
-	eLF_ENDPRECOMP           = 0x00000014,
-	eLF_OEM_16t              = 0x00000015,
-	eLF_TYPESERVER_ST        = 0x00000016,
+	eLF_DIMARRAY_16t         = 0x00000011, // type record for dimensioned arrays
+	eLF_VFTPATH_16t          = 0x00000012, // type record describing path to virtual function table
+	eLF_PRECOMP_16t          = 0x00000013, // type record describing inclusion of precompiled types
+	eLF_ENDPRECOMP           = 0x00000014, // type record describing end of precompiled types that can be
+	eLF_OEM_16t              = 0x00000015, // type record for OEM definable type strings
+	eLF_TYPESERVER_ST        = 0x00000016, // type record describing using of a type server
 	eLF_SKIP_16t             = 0x00000200,
 	eLF_ARGLIST_16t          = 0x00000201,
 	eLF_DEFARG_16t           = 0x00000202,
 	eLF_LIST                 = 0x00000203,
 	eLF_FIELDLIST_16t        = 0x00000204,
-	eLF_DERIVED_16t          = 0x00000205,
-	eLF_BITFIELD_16t         = 0x00000206,
-	eLF_METHODLIST_16t       = 0x00000207,
-	eLF_DIMCONU_16t          = 0x00000208,
-	eLF_DIMCONLU_16t         = 0x00000209,
-	eLF_DIMVARU_16t          = 0x0000020A,
-	eLF_DIMVARLU_16t         = 0x0000020B,
-	eLF_REFSYM               = 0x0000020C,
-	eLF_BCLASS_16t           = 0x00000400,
-	eLF_VBCLASS_16t          = 0x00000401,
+	eLF_DERIVED_16t          = 0x00000205, // derived class list leaf
+	eLF_BITFIELD_16t         = 0x00000206, // type record for LF_BITFIELD
+	eLF_METHODLIST_16t       = 0x00000207, // type record for non-static methods and friends in overloaded method list
+	eLF_DIMCONU_16t          = 0x00000208, // type record for dimensioned array with constant bounds
+	eLF_DIMCONLU_16t         = 0x00000209, // type record for dimensioned array with constant bounds
+	eLF_DIMVARU_16t          = 0x0000020A, // type record for dimensioned array with variable bounds
+	eLF_DIMVARLU_16t         = 0x0000020B, // type record for dimensioned array with variable bounds
+	eLF_REFSYM               = 0x0000020C, // type record for referenced symbol
+	eLF_BCLASS_16t           = 0x00000400, // subfield record for base class field
+	eLF_VBCLASS_16t          = 0x00000401, // subfield record for direct and indirect virtual base class field
 	eLF_IVBCLASS_16t         = 0x00000402,
-	eLF_ENUMERATE_ST         = 0x00000403,
-	eLF_FRIENDFCN_16t        = 0x00000404,
-	eLF_INDEX_16t            = 0x00000405,
+	eLF_ENUMERATE_ST         = 0x00000403, // subfield record for enumerate
+	eLF_FRIENDFCN_16t        = 0x00000404, // subfield record for friend function
+	eLF_INDEX_16t            = 0x00000405, // index leaf - contains type index of another leaf
 	eLF_MEMBER_16t           = 0x00000406,
 	eLF_STMEMBER_16t         = 0x00000407,
-	eLF_METHOD_16t           = 0x00000408,
-	eLF_NESTTYPE_16t         = 0x00000409,
-	eLF_VFUNCTAB_16t         = 0x0000040A,
-	eLF_FRIENDCLS_16t        = 0x0000040B,
-	eLF_ONEMETHOD_16t        = 0x0000040C,
-	eLF_VFUNCOFF_16t         = 0x0000040D,
+	eLF_METHOD_16t           = 0x00000408, // subfield record for overloaded method list
+	eLF_NESTTYPE_16t         = 0x00000409, // type record for nested (scoped) type definition
+	eLF_VFUNCTAB_16t         = 0x0000040A, // subfield record for virtual function table pointer
+	eLF_FRIENDCLS_16t        = 0x0000040B, // subfield record for friend class
+	eLF_ONEMETHOD_16t        = 0x0000040C, // subfield record for nonoverloaded method
+	eLF_VFUNCOFF_16t         = 0x0000040D, // subfield record for virtual function table pointer with offset
 	eLF_TI16_MAX             = 0x00001000,
-	eLF_MODIFIER             = 0x00001001,
+	eLF_MODIFIER             = 0x00001001, // type record for a generalized built-in type modifier
 	eLF_POINTER              = 0x00001002,
-	eLF_ARRAY_ST             = 0x00001003,
+	eLF_ARRAY_ST             = 0x00001003, // type record for basic array
 	eLF_CLASS_ST             = 0x00001004,
 	eLF_STRUCTURE_ST         = 0x00001005,
 	eLF_UNION_ST             = 0x00001006,
-	eLF_ENUM_ST              = 0x00001007,
-	eLF_PROCEDURE            = 0x00001008,
-	eLF_MFUNCTION            = 0x00001009,
+	eLF_ENUM_ST              = 0x00001007, // type record for LF_ENUM
+	eLF_PROCEDURE            = 0x00001008, // Type record for LF_PROCEDURE
+	eLF_MFUNCTION            = 0x00001009, // Type record for member function
 	eLF_COBOL0               = 0x0000100A,
-	eLF_BARRAY               = 0x0000100B,
-	eLF_DIMARRAY_ST          = 0x0000100C,
-	eLF_VFTPATH              = 0x0000100D,
-	eLF_PRECOMP_ST           = 0x0000100E,
-	eLF_OEM                  = 0x0000100F,
+	eLF_BARRAY               = 0x0000100B, // type record for basic array
+	eLF_DIMARRAY_ST          = 0x0000100C, // type record for dimensioned arrays
+	eLF_VFTPATH              = 0x0000100D, // type record describing path to virtual function table
+	eLF_PRECOMP_ST           = 0x0000100E, // type record describing inclusion of precompiled types
+	eLF_OEM                  = 0x0000100F, // type record for OEM definable type strings
 	eLF_ALIAS_ST             = 0x00001010,
-	eLF_OEM2                 = 0x00001011,
+	eLF_OEM2                 = 0x00001011, // type record for OEM definable type strings
 	eLF_SKIP                 = 0x00001200,
 	eLF_ARGLIST              = 0x00001201,
 	eLF_DEFARG_ST            = 0x00001202,
 	eLF_FIELDLIST            = 0x00001203,
-	eLF_DERIVED              = 0x00001204,
-	eLF_BITFIELD             = 0x00001205,
-	eLF_METHODLIST           = 0x00001206,
-	eLF_DIMCONU              = 0x00001207,
-	eLF_DIMCONLU             = 0x00001208,
-	eLF_DIMVARU              = 0x00001209,
-	eLF_DIMVARLU             = 0x0000120A,
-	eLF_BCLASS               = 0x00001400,
-	eLF_VBCLASS              = 0x00001401,
+	eLF_DERIVED              = 0x00001204, // derived class list leaf
+	eLF_BITFIELD             = 0x00001205, // type record for LF_BITFIELD
+	eLF_METHODLIST           = 0x00001206, // subfield record for overloaded method list
+	eLF_DIMCONU              = 0x00001207, // type record for dimensioned array with constant bounds
+	eLF_DIMCONLU             = 0x00001208, // type record for dimensioned array with constant bounds
+	eLF_DIMVARU              = 0x00001209, // type record for dimensioned array with variable bounds
+	eLF_DIMVARLU             = 0x0000120A, // type record for dimensioned array with variable bounds
+	eLF_BCLASS               = 0x00001400, // subfield record for base class field
+	eLF_VBCLASS              = 0x00001401, // subfield record for direct and indirect virtual base class field
 	eLF_IVBCLASS             = 0x00001402,
-	eLF_FRIENDFCN_ST         = 0x00001403,
+	eLF_FRIENDFCN_ST         = 0x00001403, // subfield record for friend function
 	eLF_INDEX                = 0x00001404,
-	eLF_MEMBER_ST            = 0x00001405,
+	eLF_MEMBER_ST            = 0x00001405, // subfield record for non-static data members
 	eLF_STMEMBER_ST          = 0x00001406,
-	eLF_METHOD_ST            = 0x00001407,
-	eLF_NESTTYPE_ST          = 0x00001408,
-	eLF_VFUNCTAB             = 0x00001409,
-	eLF_FRIENDCLS            = 0x0000140A,
-	eLF_ONEMETHOD_ST         = 0x0000140B,
-	eLF_VFUNCOFF             = 0x0000140C,
-	eLF_NESTTYPEEX_ST        = 0x0000140D,
-	eLF_MEMBERMODIFY_ST      = 0x0000140E,
+	eLF_METHOD_ST            = 0x00001407, // subfield record for overloaded method list
+	eLF_NESTTYPE_ST          = 0x00001408, // type record for nested (scoped) type definition
+	eLF_VFUNCTAB             = 0x00001409, // subfield record for virtual function table pointer
+	eLF_FRIENDCLS            = 0x0000140A, //  subfield record for friend class
+	eLF_ONEMETHOD_ST         = 0x0000140B, // subfield record for nonoverloaded method
+	eLF_VFUNCOFF             = 0x0000140C, // subfield record for virtual function table pointer with offset
+	eLF_NESTTYPEEX_ST        = 0x0000140D, // type record for nested (scoped) type definition, with attributes
+	eLF_MEMBERMODIFY_ST      = 0x0000140E, // type record for modifications to members
 	eLF_MANAGED_ST           = 0x0000140F,
 	eLF_ST_MAX               = 0x00001500,
-	eLF_TYPESERVER           = 0x00001501,
-	eLF_ENUMERATE            = 0x00001502,
-	eLF_ARRAY                = 0x00001503,
+	eLF_TYPESERVER           = 0x00001501, // type record describing using of a type server
+	eLF_ENUMERATE            = 0x00001502, // subfield record for enumerate
+	eLF_ARRAY                = 0x00001503, // type record for basic array
 	eLF_CLASS                = 0x00001504,
 	eLF_STRUCTURE            = 0x00001505,
 	eLF_UNION                = 0x00001506,
-	eLF_ENUM                 = 0x00001507,
-	eLF_DIMARRAY             = 0x00001508,
-	eLF_PRECOMP              = 0x00001509,
+	eLF_ENUM                 = 0x00001507, // type record for LF_ENUM
+	eLF_DIMARRAY             = 0x00001508, // type record for dimensioned arrays
+	eLF_PRECOMP              = 0x00001509, // type record describing inclusion of precompiled types
 	eLF_ALIAS                = 0x0000150A,
 	eLF_DEFARG               = 0x0000150B,
-	eLF_FRIENDFCN            = 0x0000150C,
-	eLF_MEMBER               = 0x0000150D,
+	eLF_FRIENDFCN            = 0x0000150C, // subfield record for friend function
+	eLF_MEMBER               = 0x0000150D, // subfield record for non-static data members
 	eLF_STMEMBER             = 0x0000150E,
-	eLF_METHOD               = 0x0000150F,
-	eLF_NESTTYPE             = 0x00001510,
-	eLF_ONEMETHOD            = 0x00001511,
-	eLF_NESTTYPEEX           = 0x00001512,
-	eLF_MEMBERMODIFY         = 0x00001513,
+	eLF_METHOD               = 0x0000150F, // subfield record for overloaded method list
+	eLF_NESTTYPE             = 0x00001510, // type record for nested (scoped) type definition
+	eLF_ONEMETHOD            = 0x00001511, // subfield record for nonoverloaded method
+	eLF_NESTTYPEEX           = 0x00001512, // type record for nested (scoped) type definition, with attributes
+	eLF_MEMBERMODIFY         = 0x00001513, // type record for modifications to members
 	eLF_MANAGED              = 0x00001514,
-	eLF_TYPESERVER2          = 0x00001515,
-	eLF_CHAR                 = 0x00008000,
-	eLF_SHORT                = 0x00008001,
-	eLF_USHORT               = 0x00008002,
-	eLF_LONG                 = 0x00008003,
-	eLF_ULONG                = 0x00008004,
-	eLF_REAL32               = 0x00008005,
-	eLF_REAL64               = 0x00008006,
-	eLF_REAL80               = 0x00008007,
-	eLF_REAL128              = 0x00008008,
-	eLF_QUADWORD             = 0x00008009,
-	eLF_UQUADWORD            = 0x0000800A,
-	eLF_REAL48               = 0x0000800B,
-	eLF_COMPLEX32            = 0x0000800C,
-	eLF_COMPLEX64            = 0x0000800D,
-	eLF_COMPLEX80            = 0x0000800E,
-	eLF_COMPLEX128           = 0x0000800F,
-	eLF_VARSTRING            = 0x00008010,
-	eLF_OCTWORD              = 0x00008017,
-	eLF_UOCTWORD             = 0x00008018,
+	eLF_TYPESERVER2          = 0x00001515, // type record describing using of a type server with v7 (GUID) signatures
+
+	/**     the following are numeric leaves.  They are used to indicate the
+	*      size of the following variable length data.  When the numeric
+	*      data is a single byte less than 0x8000, then the data is output
+	*      directly.  If the data is more the 0x8000 or is a negative value,
+	*      then the data is preceeded by the proper index.
+	*/
+	eLF_CHAR                 = 0x00008000, // signed character leaf
+	eLF_SHORT                = 0x00008001, // signed short leaf
+	eLF_USHORT               = 0x00008002, // unsigned short leaf
+	eLF_LONG                 = 0x00008003, // signed long leaf
+	eLF_ULONG                = 0x00008004, // unsigned long leaf
+	eLF_REAL32               = 0x00008005, // real 32-bit leaf
+	eLF_REAL64               = 0x00008006, // real 64-bit leaf
+	eLF_REAL80               = 0x00008007, // real 80-bit leaf
+	eLF_REAL128              = 0x00008008, // real 128-bit leaf
+	eLF_QUADWORD             = 0x00008009, // signed quad leaf
+	eLF_UQUADWORD            = 0x0000800A, // unsigned quad leaf
+	eLF_REAL48               = 0x0000800B, // real 48-bit leaf
+	eLF_COMPLEX32            = 0x0000800C, // complex 32-bit leaf
+	eLF_COMPLEX64            = 0x0000800D, // complex 64-bit leaf
+	eLF_COMPLEX80            = 0x0000800E, // complex 80-bit leaf
+	eLF_COMPLEX128           = 0x0000800F, // complex 128-bit leaf
+	eLF_VARSTRING            = 0x00008010, // variable length numeric field
+	eLF_OCTWORD              = 0x00008017, // signed int128 leaf
+	eLF_UOCTWORD             = 0x00008018, // unsigned int128 leaf
 	eLF_DECIMAL              = 0x00008019,
 	eLF_DATE                 = 0x0000801A,
 	eLF_UTF8STRING           = 0x0000801B,
@@ -983,9 +1105,11 @@ typedef enum {
 	eLF_PAD13                = 0x000000FD,
 	eLF_PAD14                = 0x000000FE,
 	eLF_PAD15                = 0x000000FF,
+	eLF_SIMPLE_TYPE          = 0xEFFFFFFF, // Custom, hopefully it doesn't collide
 	eLF_MAX                  = 0xFFFFFFFF
 } ELeafType;
 
+R_PACKED(
 typedef struct {
 	ELeafType leaf_type;
 	void *type_info;
@@ -1012,15 +1136,16 @@ typedef struct {
 	get_value is_fwdref;
 	get_print_type_ get_print_type;
 
-} STypeInfo;
+}) STypeInfo;
 
+R_PACKED(
 typedef struct {
-	unsigned short length;
-	unsigned int tpi_idx;
+	ut16 length;
+	ut32 tpi_idx;
 	STypeInfo type_data;
 
 //	free_func free_;
-} SType;
+}) SType;
 
 typedef struct {
 	STPIHeader header;
@@ -1030,18 +1155,18 @@ typedef struct {
 } STpiStream;
 
 typedef struct {
-	unsigned int data1;
-	unsigned short data2;
-	unsigned short data3;
-	char data4[8];
+	ut32 data1;
+	ut16 data2;
+	ut16 data3;
+	ut8 data4[8];
 } SGUID;
 
 typedef struct {
-	unsigned int version;
-	unsigned int time_date_stamp;
-	unsigned int age;
+	ut32 version;
+	ut32 time_date_stamp;
+	ut32 age;
 	SGUID guid;
-	unsigned int cb_names;
+	ut32 cb_names;
 	char *names;
 
 	free_func free_;
@@ -1057,79 +1182,75 @@ typedef enum {
 	eMaxMachine
 } EMachine;
 
-#pragma pack(push, 1)
+R_PACKED(
 typedef struct {
-	short section;
-	short padding1;
-	int offset;
-	int size;
-	unsigned int flags;
-	int module;
-	short padding2;
-	unsigned int data_crc;
-	unsigned int reloc_crc;
-} SSymbolRange;
-#pragma pack(pop)
+	ut16 section;
+	ut16 padding1;
+	st32 offset;
+	st32 size;
+	ut32 flags;
+	st32 module;
+	st16 padding2;
+	ut32 data_crc;
+	ut32 reloc_crc;
+}) SSymbolRange;
 
-#pragma pack(push, 1)
+R_PACKED(
 typedef struct {
-	unsigned int opened;
+	ut32 opened;
 	SSymbolRange range;
-	unsigned short flags;
-	short stream;
-	unsigned int symSize;
-	unsigned int oldLineSize;
-	unsigned int lineSize;
-	short nSrcFiles;
-	short padding1;
-	unsigned int offsets;
-	unsigned int niSource;
-	unsigned int niCompiler;
+	ut16 flags;
+	st16 stream;
+	ut32 symSize;
+	ut32 oldLineSize;
+	ut32 lineSize;
+	st16 nSrcFiles;
+	st16 padding1;
+	ut32 offsets;
+	ut32 niSource;
+	ut32 niCompiler;
 	SCString modName;
 	SCString objName;
-} SDBIExHeader;
-#pragma pack(pop)
+}) SDBIExHeader;
 
-#pragma pack(push, 1)
+R_PACKED(
 typedef struct {
-	short sn_fpo;
-	short sn_exception;
-	short sn_fixup;
-	short sn_omap_to_src;
-	short sn_omap_from_src;
-	short sn_section_hdr;
-	short sn_token_rid_map;
-	short sn_xdata;
-	short sn_pdata;
-	short sn_new_fpo;
-	short sn_section_hdr_orig;
-} SDbiDbgHeader;
-#pragma pack(pop)
+	st16 sn_fpo;
+	st16 sn_exception;
+	st16 sn_fixup;
+	st16 sn_omap_to_src;
+	st16 sn_omap_from_src;
+	st16 sn_section_hdr;
+	st16 sn_token_rid_map;
+	st16 sn_xdata;
+	st16 sn_pdata;
+	st16 sn_new_fpo;
+	st16 sn_section_hdr_orig;
+}) SDbiDbgHeader;
 
-#pragma pack(push, 1)
+R_PACKED(
 typedef struct {
-	unsigned int magic;
-	unsigned int version;
-	unsigned int age;
-	short gssymStream;
-	unsigned short vers;
-	short pssymStream;
-	unsigned short pdbver;
-	short symrecStream;
-	unsigned short pdbver2;
-	unsigned int module_size;
-	unsigned int seccon_size;
-	unsigned int secmap_size;
-	unsigned int filinf_size;
-	unsigned int tsmap_size;
-	unsigned int mfc_index;
-	unsigned int dbghdr_size;
-	unsigned int ecinfo_size;
-	unsigned short flags;
+	ut32 magic;
+	ut32 version;
+	ut32 age;
+	st16 gssymStream;
+	ut16 vers;
+	st16 pssymStream;
+	ut16 pdbver;
+	st16 symrecStream;
+	ut16 pdbver2;
+	ut32 module_size;
+	ut32 seccon_size;
+	ut32 secmap_size;
+	ut32 filinf_size;
+	ut32 tsmap_size;
+	ut32 mfc_index;
+	ut32 dbghdr_size;
+	ut32 ecinfo_size;
+	ut16 flags;
 	EMachine machine; // read just 2 bytes
-	unsigned int resvd;
-} SDBIHeader;
-#pragma pack(pop)
+	ut32 resvd;
+}) SDBIHeader;
 
 typedef struct {
 	SDBIHeader dbi_header;
@@ -1143,23 +1264,24 @@ typedef struct {
 // start of FPO stream structures
 typedef union {
 	struct {
-		unsigned char cbRegs : 3;
-		unsigned char fHashSEH : 1;
-		unsigned char fUseBp : 1;
-		unsigned char reserved : 1;
-		unsigned char cbFrame : 2;
-		unsigned char cbProlog : 8;
+		ut8 cbRegs : 3;
+		ut8 fHashSEH : 1;
+		ut8 fUseBp : 1;
+		ut8 reserved : 1;
+		ut8 cbFrame : 2;
+		ut8 cbProlog : 8;
 	} bits;
-	unsigned short bit_values;
+	ut16 bit_values;
 } UBit_values;
 
+R_PACKED(
 typedef struct {
-	unsigned int ul_off_start;
-	unsigned int cb_proc_size;
-	unsigned int cdw_locals;
-	unsigned short cdw_params;
+	ut32 ul_off_start;
+	ut32 cb_proc_size;
+	ut32 cdw_locals;
+	ut16 cdw_params;
 	UBit_values bit_values;
-} SFPO_DATA;
+}) SFPO_DATA;
 
 typedef struct {
 	RList *fpo_data_list;
@@ -1172,17 +1294,18 @@ typedef enum {
 	eFPO_DATA_FLAGS_MAX
 } EFPO_DATA_FLAGS;
 
+R_PACKED(
 typedef struct {
-	unsigned int ul_off_start;
-	unsigned int cb_proc_size;
-	unsigned int cdw_locals;
-	unsigned int cdw_params;
-	unsigned int max_stack;
-	unsigned int programm_string_offset;
-	unsigned short cb_prolog;
-	unsigned short cb_save_regs;
+	ut32 ul_off_start;
+	ut32 cb_proc_size;
+	ut32 cdw_locals;
+	ut32 cdw_params;
+	ut32 max_stack;
+	ut32 programm_string_offset;
+	ut16 cb_prolog;
+	ut16 cb_save_regs;
 	EFPO_DATA_FLAGS flags;
-} SFPO_DATA_V2;
+}) SFPO_DATA_V2;
 
 typedef struct {
 	RList *fpo_data_list;
@@ -1194,35 +1317,38 @@ typedef struct {
 	RList *globals_list;
 } SGDATAStream;
 
+R_PACKED (
 typedef struct {
-	unsigned short leaf_type;
-	unsigned int symtype;
-	unsigned int offset;
-	unsigned short segment;
+	ut16 leaf_type;
+	ut32 symtype;
+	ut32 offset;
+	ut16 segment;
 	SCString name;
-} SGlobal;
+}) SGlobal;
 // end GDATA structures
 
 // PE stream structures
+// TODO: Support 64bit addressing!
 typedef union {
-	unsigned int physical_address;
-	unsigned int virtual_address;
+	ut32 physical_address;
+	ut32 virtual_address;
 } UMISC;
 
 #define PDB_SIZEOF_SECTION_NAME 8
 
+R_PACKED(
 typedef struct {
 	char name[PDB_SIZEOF_SECTION_NAME];
 	UMISC misc;
-	unsigned int virtual_address;
-	unsigned int size_of_raw_data;
-	unsigned int pointer_to_raw_data;
-	unsigned int pointer_to_relocations;
-	unsigned int pointer_to_line_numbers;
-	unsigned short number_of_relocations;
-	unsigned short number_of_line_numbers;
-	unsigned int charactestics;
-} SIMAGE_SECTION_HEADER;
+	ut32 virtual_address;
+	ut32 size_of_raw_data;
+	ut32 pointer_to_raw_data;
+	ut32 pointer_to_relocations;
+	ut32 pointer_to_line_numbers;
+	ut16 number_of_relocations;
+	ut16 number_of_line_numbers;
+	ut32 charactestics;
+}) SIMAGE_SECTION_HEADER;
 
 typedef struct {
 	RList *sections_hdrs;
@@ -1231,13 +1357,13 @@ typedef struct {
 
 // omap structures
 typedef struct {
-	unsigned int from;
-	unsigned int to;
+	ut32 from;
+	ut32 to;
 } SOmapEntry;
 
 typedef struct {
 	RList *omap_entries;
-	unsigned int *froms;
+	ut32 *froms;
 } SOmapStream;
 // end of omap structures
 

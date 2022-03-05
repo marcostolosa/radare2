@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2015 - condret */
+/* radare - LGPL - Copyright 2015-2022 - condret */
 
 #include <string.h>
 #include <r_types.h>
@@ -8,13 +8,13 @@
 #include "../../asm/arch/snes/snes_op_table.h"
 #include "../../asm/p/asm_snes.h"
 
-static struct snes_asm_flags* snesflags = NULL;
+static R_TH_LOCAL struct snes_asm_flags* snesflags = NULL;
 
-static int snes_anop(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len) {
-	memset (op, '\0', sizeof (RAnalOp));
+static int snes_anop(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len, RAnalOpMask mask) {
 	op->size = snes_op_get_size(snesflags->M, snesflags->X, &snes_op[data[0]]);
-	if (op->size > len)
+	if (op->size > len) {
 		return op->size = 0;
+	}
 	op->nopcode = 1;
 	op->addr = addr;
 	op->type = R_ANAL_OP_TYPE_UNK;
@@ -219,24 +219,34 @@ static int snes_anop(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int l
 		op->type = R_ANAL_OP_TYPE_RET;
 		break;
 	case 0xc2: // rep
-		if ( ((st8)data[1]) & 0x10 ) snesflags->X = 0;
-		if ( ((st8)data[1]) & 0x20 ) snesflags->M = 0;
+		if (((st8)data[1]) & 0x10) {
+			snesflags->X = 0;
+		}
+		if (((st8)data[1]) & 0x20) {
+			snesflags->M = 0;
+		}
 		break;
 	case 0xe2: // sep
-		if ( ((st8)data[1]) & 0x10 ) snesflags->X = 1;
-		if ( ((st8)data[1]) & 0x20 ) snesflags->M = 1;
+		if (((st8)data[1]) & 0x10) {
+			snesflags->X = 1;
+		}
+		if (((st8)data[1]) & 0x20) {
+			snesflags->M = 1;
+		}
 		break;
 	}
 	return op->size;
 }
 
-static int snes_anal_init (void* user) {
-	if (!snesflags) snesflags = malloc(sizeof( struct snes_asm_flags ));
+static int snes_anal_init(void* user) {
+	if (!snesflags) {
+		snesflags = malloc (sizeof (struct snes_asm_flags));
+	}
 	memset(snesflags,0,sizeof (struct snes_asm_flags));
 	return 0;
 }
 
-static int snes_anal_fini (void* user) {
+static int snes_anal_fini(void* user) {
 	free(snesflags);
 	snesflags = NULL;
 	return 0;
@@ -253,8 +263,8 @@ RAnalPlugin r_anal_plugin_snes = {
 	.op = &snes_anop,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_snes,
 	.version = R2_VERSION

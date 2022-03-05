@@ -4,13 +4,12 @@
 #include <r_types.h>
 #include <r_lib.h>
 
-static int null_anal(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len) {
-	memset (op, '\0', sizeof(RAnalOp));
+static int null_anal(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len, RAnalOpMask mask) {
 	/* This should better follow the disassembler */
 	return op->size = 1;
 }
 
-static int null_set_reg_profile(RAnal* anal){
+static bool null_set_reg_profile(RAnal* anal){
 	return r_reg_set_profile_string(anal->reg, "");
 }
 
@@ -24,8 +23,8 @@ RAnalPlugin r_anal_plugin_null = {
 	.set_reg_profile = &null_set_reg_profile,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_null,
 	.version = R2_VERSION

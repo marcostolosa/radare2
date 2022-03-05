@@ -62,7 +62,7 @@
 typedef unsigned int arc_insn;
 
 struct arc_opcode {
-  char *syntax;			/* syntax of insn */
+  const char *syntax;			/* syntax of insn */
   unsigned long mask, value;	/* recognize insn if (op&mask)==value */
   int flags;			/* various flag bits */
 
@@ -356,7 +356,7 @@ struct arc_operand {
      string (the operand will be inserted in any case).  If the
      operand value is legal, *ERRMSG will be unchanged.
 
-     REG is non-NULL when inserting a register value.  
+     REG is non-NULL when inserting a register value.
      extend is only meaningful for extended length instructions
      and the special fields that use them.
   */

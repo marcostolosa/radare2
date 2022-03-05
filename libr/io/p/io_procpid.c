@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2010-2016 - pancake */
+/* radare - LGPL - Copyright 2010-2021 - pancake */
 
 #include <r_userconf.h>
 
@@ -18,8 +18,8 @@ typedef struct {
 	int pid;
 } RIOProcpid;
 
-#define RIOPROCPID_PID(x) (((RIOProcpid*)x->data)->pid)
-#define RIOPROCPID_FD(x) (((RIOProcpid*)x->data)->fd)
+#define RIOPROCPID_PID(x) (((RIOProcpid*)(x)->data)->pid)
+#define RIOPROCPID_FD(x) (((RIOProcpid*)(x)->data)->fd)
 
 static int __waitpid(int pid) {
 	int st = 0;
@@ -58,7 +58,7 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 	int fd, ret = -1;
 	if (__plugin_open (io, file, 0)) {
 		int pid = atoi (file + 10);
-		if (file[0]=='a') {
+		if (file[0] == 'a') {
 			ret = ptrace (PTRACE_ATTACH, pid, 0, 0);
 			if (ret == -1) {
 				switch (errno) {
@@ -105,11 +105,10 @@ static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 	return offset;
 }
 
-static int __close(RIODesc *fd) {
+static bool __close(RIODesc *fd) {
 	int ret = ptrace (PTRACE_DETACH, RIOPROCPID_PID (fd), 0, 0);
-	free (fd->data);
-	fd->data = NULL;
-	return ret;
+	R_FREE (fd->data);
+	return ret == 0;
 }
 
 static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
@@ -128,25 +127,26 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 
 RIOPlugin r_io_plugin_procpid = {
 	.name = "procpid",
-	.desc = "/proc/pid/mem io",
+	.desc = "Open /proc/[pid]/mem io",
 	.license = "LGPL3",
+	.uris = "procpid://",
 	.open = __open,
 	.close = __close,
 	.read = __read,
 	.check = __plugin_open,
-	.lseek = __lseek,
+	.seek = __lseek,
 	.system = __system,
 	.write = __write,
 };
 
 #else
-struct r_io_plugin_t r_io_plugin_procpid = {
+RIOPlugin r_io_plugin_procpid = {
 	.name = NULL
 };
 #endif
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_IO,
 	.data = &r_io_plugin_procpid,
 	.version = R2_VERSION

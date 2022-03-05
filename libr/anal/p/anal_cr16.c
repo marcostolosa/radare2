@@ -11,24 +11,20 @@
 #include <cr16_disas.h>
 
 static int cr16_op(RAnal *anal, RAnalOp *op, ut64 addr,
-		const ut8 *buf, int len)
+		const ut8 *buf, int len, RAnalOpMask mask)
 {
 	int ret;
 	struct cr16_cmd cmd;
 
 	memset(&cmd, 0, sizeof (cmd));
-	memset(op, 0, sizeof (RAnalOp));
 
-	ret = op->size = cr16_decode_command(buf, &cmd);
+	ret = op->size = cr16_decode_command(buf, &cmd, len);
 
 	if (ret <= 0) {
 		return ret;
 	}
 
-
 	op->addr = addr;
-	op->jump = op->fail = -1;
-	op->ptr = op->val = -1;
 
 	switch (cmd.type) {
 	case CR16_TYPE_MOV:
@@ -132,8 +128,8 @@ RAnalPlugin r_anal_plugin_cr16 = {
 	.op = cr16_op,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_cr16,
 	.version = R2_VERSION

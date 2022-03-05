@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2017 - pancake */
+/* radare - LGPL - Copyright 2009-2021 - pancake */
 
 #include <r_userconf.h>
 
@@ -8,7 +8,7 @@
 
 #if __APPLE__ && DEBUGGER
 
-static int __get_pid (RIODesc *desc);
+static int __get_pid(RIODesc *desc);
 #define EXCEPTION_PORT 0
 
 // NOTE: mach/mach_vm is not available for iOS
@@ -39,6 +39,13 @@ static int __get_pid (RIODesc *desc);
 
 #define R_MACH_MAGIC r_str_hash ("mach")
 
+typedef struct r_io_mach_data_t {
+	ut32 magic;
+	int pid;
+	int tid;
+	void *data;
+} RIOMachData;
+
 typedef struct {
 	task_t task;
 } RIOMach;
@@ -47,7 +54,7 @@ typedef struct {
 #define RIOMACH_TASK(x) (x ? ((RIOMach*)(x))->task : -1)
 */
 
-int RIOMACH_TASK(RIODescData *x) {
+int RIOMACH_TASK(RIOMachData *x) {
 	// TODO
 	return -1;
 }
@@ -104,14 +111,26 @@ static task_t task_for_pid_ios9pangu(int pid) {
 	return task;
 }
 
-static task_t pid_to_task(int pid) {
+static task_t pid_to_task(RIODesc *fd, int pid) {
 	task_t task = 0;
 	static task_t old_task = 0;
 	static int old_pid = -1;
 	kern_return_t kr;
-	if (old_task != 0 && old_pid == pid) {
-		return old_task;
-	} else if (old_task != 0 && old_pid != pid) {
+
+	RIOMachData *iodd = fd? (RIOMachData *)fd->data: NULL;
+	RIOMach *riom = NULL;
+	if (iodd) {
+		riom = iodd->data;
+		if (riom && riom->task) {
+			old_task = riom->task;
+			riom->task = 0;
+			old_pid = iodd->pid;
+		}
+	}
+	if (old_task != 0) {
+		if (old_pid == pid) {
+			return old_task;
+		}
 		//we changed the process pid so deallocate a ref from the old_task
 		//since we are going to get a new task
 		kr = mach_port_deallocate (mach_task_self (), old_task);
@@ -137,10 +156,10 @@ static task_t pid_to_task(int pid) {
 	return task;
 }
 
-static bool task_is_dead (int pid) {
+static bool task_is_dead(RIODesc *fd, int pid) {
 	unsigned int count = 0;
 	kern_return_t kr = mach_port_get_refs (mach_task_self (),
-		pid_to_task (pid), MACH_PORT_RIGHT_SEND, &count);
+		pid_to_task (fd, pid), MACH_PORT_RIGHT_SEND, &count);
 	return (kr != KERN_SUCCESS || !count);
 }
 
@@ -154,7 +173,7 @@ static ut64 getNextValid(RIO *io, RIODesc *fd, ut64 addr) {
 	natural_t depth = 0;
 	kern_return_t kr;
 	int tid = __get_pid (fd);
-	task_t task = pid_to_task (tid);
+	task_t task = pid_to_task (fd, tid);
 	ut64 lower = addr;
 #if __arm64__ || __aarch64__
 	size = osize = 16384; // acording to frida
@@ -201,7 +220,7 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int len) {
 	vm_size_t size = 0;
 	int blen, err, copied = 0;
 	int blocksize = 32;
-	RIODescData *dd = (RIODescData *)desc->data;
+	RIOMachData *dd = (RIOMachData *)desc->data;
 	if (!io || !desc || !buf || !dd) {
 		return -1;
 	}
@@ -210,8 +229,8 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int len) {
 	}
 	memset (buf, 0xff, len);
 	int pid = __get_pid (desc);
-	task_t task = pid_to_task (pid);
-	if (task_is_dead (pid)) {
+	task_t task = pid_to_task (desc, pid);
+	if (task_is_dead (desc, pid)) {
 		return -1;
 	}
 	if (pid == 0) {
@@ -248,7 +267,7 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int len) {
 		}
 		if (size == 0) {
 			if (blocksize == 1) {
-				memset (buf+copied, 0xff, len-copied);
+				memset (buf + copied, 0xff, len - copied);
 				return len;
 			}
 			blocksize = 1;
@@ -273,7 +292,7 @@ static int tsk_getperm(RIO *io, task_t task, vm_address_t addr) {
 
 static int tsk_pagesize(RIODesc *desc) {
 	int tid = __get_pid (desc);
-	task_t task = pid_to_task (tid);
+	task_t task = pid_to_task (desc, tid);
 	static vm_size_t pagesize = 0;
 	return pagesize
 		? pagesize
@@ -314,9 +333,9 @@ static int mach_write_at(RIO *io, RIODesc *desc, const void *buf, int len, ut64 
 	if (!desc || pid < 0) {
 		return 0;
 	}
-	task_t task = pid_to_task (pid);
+	task_t task = pid_to_task (desc, pid);
 
-	if (len < 1 || task_is_dead (task)) {
+	if (len < 1 || task_is_dead (desc, task)) {
 		return 0;
 	}
 	pageaddr = tsk_getpagebase (desc, addr);
@@ -369,13 +388,13 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 	if (endptr == pidfile || pid < 0) {
 		return NULL;
 	}
-	task = pid_to_task (pid);
+	task = pid_to_task (NULL, pid);
 	if (task == -1) {
 		return NULL;
 	}
 	if (!task) {
 		if (pid > 0 && !strncmp (file, "smach://", 8)) {
-			kill (pid, 9);
+			kill (pid, SIGKILL);
 			eprintf ("Child killed\n");
 		}
 #if 0
@@ -384,7 +403,7 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 		 * what was this intended to check anyway ? */
 		if (pid > 0 && io->referer && !strncmp (io->referer, "dbg://", 6)) {
 			eprintf ("Child killed\n");
-			kill (pid, 9);
+			kill (pid, SIGKILL);
 		}
 #endif
 		switch (errno) {
@@ -402,13 +421,17 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 		}
 		return NULL;
 	}
-	RIODescData *iodd = R_NEW0 (RIODescData);
+	RIOMachData *iodd = R_NEW0 (RIOMachData);
 	if (iodd) {
 		iodd->pid = pid;
 		iodd->tid = pid;
 		iodd->data = NULL;
 	}
 	riom = R_NEW0 (RIOMach);
+	if (!riom) {
+		R_FREE (iodd);
+		return NULL;
+	}
 	riom->task = task;
 	iodd->magic = r_str_hash ("mach");
 	iodd->data = riom;
@@ -418,10 +441,10 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 		: strdup ("kernel");
 	if (!strncmp (file, "smach://", 8)) {
 		ret = r_io_desc_new (io, &r_io_plugin_mach, &file[1],
-			       rw | R_IO_EXEC, mode, iodd);
+			       rw | R_PERM_X, mode, iodd);
 	} else {
 		ret = r_io_desc_new (io, &r_io_plugin_mach, file,
-			       rw | R_IO_EXEC, mode, iodd);
+			       rw | R_PERM_X, mode, iodd);
 	}
 	ret->name = pidpath;
 	return ret;
@@ -429,33 +452,31 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 
 static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 	switch (whence) {
-	case 0: // abs
+	case R_IO_SEEK_SET:
 		io->off = offset;
 		break;
-	case 1: // cur
-		io->off += (int)offset;
+	case R_IO_SEEK_CUR:
+		io->off += offset;
 		break;
-	case 2: // end
-		io->off = UT64_MAX;
-		break;
+	case R_IO_SEEK_END:
+		io->off = ST64_MAX;
 	}
 	return io->off;
 }
 
-static int __close(RIODesc *fd) {
+static bool __close(RIODesc *fd) {
 	if (!fd) {
 		return false;
 	}
-	RIODescData *iodd = fd->data;
-	kern_return_t kr;
+	RIOMachData *iodd = fd->data;
 	if (!iodd) {
 		return false;
 	}
 	if (iodd->magic != R_MACH_MAGIC) {
 		return false;
 	}
-	task_t task = pid_to_task (iodd->pid);
-	kr = mach_port_deallocate (mach_task_self (), task);
+	task_t task = pid_to_task (fd, iodd->pid);
+	kern_return_t kr = mach_port_deallocate (mach_task_self (), task);
 	if (kr != KERN_SUCCESS) {
 		perror ("__close io_mach");
 	}
@@ -467,17 +488,18 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 	if (!io || !fd || !cmd || !fd->data) {
 		return NULL;
 	}
-	RIODescData *iodd = fd->data;
+	RIOMachData *iodd = fd->data;
 	if (iodd->magic != R_MACH_MAGIC) {
 		return NULL;
 	}
-
-	task_t task = pid_to_task (iodd->tid);
-	/* XXX ugly hack for testing purposes */
+	if (!strcmp (cmd, "")) {
+		return NULL;
+	}
 	if (!strncmp (cmd, "perm", 4)) {
 		int perm = r_str_rwx (cmd + 4);
 		if (perm) {
 			int pagesize = tsk_pagesize (fd);
+			task_t task = pid_to_task (fd, iodd->tid);
 			tsk_setperm (io, task, io->off, pagesize, perm);
 		} else {
 			eprintf ("Usage: =!perm [rwx]\n");
@@ -485,48 +507,48 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 		return NULL;
 	}
 	if (!strncmp (cmd, "pid", 3)) {
-		const char *pidstr = cmd + 3;
-		int pid = -1;
-		if (*pidstr) {
-			// int pid = __get_pid (fd);
+		RIOMachData *iodd = fd->data;
+		RIOMach *riom = iodd->data;
+		const char *pidstr = r_str_trim_head_ro (cmd + 3);
+		if (R_STR_ISEMPTY (pidstr)) {
+			io->cb_printf ("%d\n", iodd->pid);
 			return NULL;
 		}
+		int pid = __get_pid (fd);
 		if (!strcmp (pidstr, "0")) {
 			pid = 0;
 		} else {
 			pid = atoi (pidstr);
-			if (!pid) {
+			if (pid < 1) {
 				pid = -1;
 			}
 		}
-		if (pid != -1) {
-			task_t task = pid_to_task (pid);
+		if (pid >= 0) {
+			task_t task = pid_to_task (fd, pid);
 			if (task != -1) {
-				eprintf ("PID=%d\n", pid);
-				eprintf ("TODO: must set the pid in io here\n");
-		//		riom->pid = pid;
-		//		riom->task = task;
+				riom->task = task;
+				iodd->pid = pid;
+				iodd->tid = pid;
 				return NULL;
 			}
 		}
 		eprintf ("io_mach_system: Invalid pid %d\n", pid);
 	} else {
-		eprintf ("Try: '=!pid' or '=!perm'\n");
+		eprintf ("Try: ':pid' or ':perm'\n");
 	}
 	return NULL;
 }
 
-static int __get_pid (RIODesc *desc) {
+static int __get_pid(RIODesc *desc) {
 	// dupe for ? r_io_desc_get_pid (desc);
-	if (!desc || !desc->data) {
-		return -1;
-	}
-	RIODescData *iodd = desc->data;
-	if (iodd) {
-		if (iodd->magic != R_MACH_MAGIC) {
-			return -1;
+	if (desc) {
+		RIOMachData *iodd = desc->data;
+		if (iodd) {
+			if (iodd->magic != R_MACH_MAGIC) {
+				return -1;
+			}
+			return iodd->pid;
 		}
-		return iodd->pid;
 	}
 	return -1;
 }
@@ -534,15 +556,16 @@ static int __get_pid (RIODesc *desc) {
 // TODO: rename ptrace to io_mach .. err io.ptrace ??
 RIOPlugin r_io_plugin_mach = {
 	.name = "mach",
-	.desc = "mach debugger io plugin (mach://pid)",
+	.desc = "Attach to mach debugger instance",
 	.license = "LGPL",
+	.uris = "attach://,mach://,smach://",
 	.open = __open,
 	.close = __close,
 	.read = __read,
 	.getpid = __get_pid,
 	.gettid = __get_pid,
 	.check = __plugin_open,
-	.lseek = __lseek,
+	.seek = __lseek,
 	.system = __system,
 	.write = __write,
 	.isdbg = true
@@ -556,8 +579,8 @@ RIOPlugin r_io_plugin_mach = {
 };
 #endif
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_IO,
 	.data = &r_io_plugin_mach,
 	.version = R2_VERSION

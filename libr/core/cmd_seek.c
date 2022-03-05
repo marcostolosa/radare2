@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2018 - pancake */
+/* radare - LGPL - Copyright 2009-2021 - pancake */
 
 #include "r_types.h"
 #include "r_config.h"
@@ -7,9 +7,12 @@
 #include "r_debug.h"
 #include "r_io.h"
 
+static void __core_cmd_search_backward_prelude(RCore *core, bool doseek, bool forward);
+
 static const char *help_msg_s[] = {
 	"Usage: s", "", " # Help for the seek commands. See ?$? to see all variables",
 	"s", "", "Print current address",
+	"s.", "[?]hexoff", "Seek honoring a base from core->offset",
 	"s:", "pad", "Print current address with N padded zeros (defaults to 8)",
 	"s", " addr", "Seek to address",
 	"s-", "", "Undo seek",
@@ -22,7 +25,6 @@ static const char *help_msg_s[] = {
 	"s[j*=!]", "", "List undo seek history (JSON, =list, *r2, !=names, s==)",
 	"s/", " DATA", "Search for next occurrence of 'DATA'",
 	"s/x", " 9091", "Search for next occurrence of \\x90\\x91",
-	"s.", "hexoff", "Seek honoring a base from core->offset",
 	"sa", " [[+-]a] [asz]", "Seek asz (or bsize) aligned to addr",
 	"sb", "", "Seek aligned to bb start",
 	"sC", "[?] string", "Seek to comment matching given string",
@@ -32,10 +34,19 @@ static const char *help_msg_s[] = {
 	"sg/sG", "", "Seek begin (sg) or end (sG) of section or file",
 	"sl", "[?] [+-]line", "Seek to line",
 	"sn/sp", " ([nkey])", "Seek to next/prev location, as specified by scr.nkey",
+	"snp", "", "Seek to next function prelude",
+	"spp", "", "Seek to prev function prelude",
 	"so", " [N]", "Seek to N next opcode(s)",
 	"sr", " pc", "Seek to register",
-	"ss", "", "Seek silently (without adding an entry to the seek history)",
+	"ss", "[?]", "Seek silently (without adding an entry to the seek history)",
 	// "sp [page]  seek page N (page = block)",
+	NULL
+};
+
+static const char *help_msg_sdot[] = {
+	"Usage:", "s.", "seek here or there (near seeks)",
+	"s.", "", "Seek here, same as 's $$'",
+	"s..", "32a8", "Seek to the same address but replacing the lower nibbles",
 	NULL
 };
 
@@ -46,12 +57,27 @@ static const char *help_msg_sC[] = {
 	NULL
 };
 
+static const char *help_msg_sn[] = {
+	"Usage:", "sn[p]", "",
+	"sn", " [line]", "Seek to next address",
+	"snp", "", "Seek to next prelude",
+	NULL
+};
+
+static const char *help_msg_sp[] = {
+	"Usage:", "sp[p]", "",
+	"sp", " [line]", "Seek to previous address",
+	"spp", "", "Seek to previous prelude",
+	NULL
+};
+
 static const char *help_msg_sl[] = {
 	"Usage:", "sl+ or sl- or slc", "",
 	"sl", " [line]", "Seek to absolute line",
 	"sl", "[+-][line]", "Seek to relative line",
 	"slc", "", "Clear line cache",
 	"sll", "", "Show total number of lines",
+	"sleep", " [seconds]", "Sleep for an specific amount of time (support decimal values)",
 	NULL
 };
 
@@ -61,19 +87,13 @@ static const char *help_msg_ss[] = {
 	NULL
 };
 
-static void cmd_seek_init(RCore *core) {
-	DEFINE_CMD_DESCRIPTOR (core, s);
-	DEFINE_CMD_DESCRIPTOR (core, sC);
-	DEFINE_CMD_DESCRIPTOR (core, sl);
-	DEFINE_CMD_DESCRIPTOR (core, ss);
-}
-
 static void __init_seek_line(RCore *core) {
 	ut64 from, to;
 
 	r_config_bump (core->config, "lines.to");
 	from = r_config_get_i (core->config, "lines.from");
-	to = r_config_get_i (core->config, "lines.to");
+	const char *to_str = r_config_get (core->config, "lines.to");
+	to = r_num_math (core->num, (to_str && *to_str) ? to_str : "$s");
 	if (r_core_lines_initcache (core, from, to) == -1) {
 		eprintf ("ERROR: \"lines.from\" and \"lines.to\" must be set\n");
 	}
@@ -101,7 +121,7 @@ static void __seek_line_absolute(RCore *core, int numline) {
 	if (numline < 1 || numline > core->print->lines_cache_sz - 1) {
 		eprintf ("ERROR: Line must be between 1 and %d\n", core->print->lines_cache_sz - 1);
 	} else {
-		r_core_seek (core, core->print->lines_cache[numline - 1], 1);
+		r_core_seek (core, core->print->lines_cache[numline - 1], true);
 	}
 }
 
@@ -112,7 +132,7 @@ static void __seek_line_relative(RCore *core, int numlines) {
 	} else if (numlines < 0 && curr + numlines < 1) {
 		eprintf ("ERROR: Line must be > 1\n");
 	} else {
-		r_core_seek (core, core->print->lines_cache[curr + numlines - 1], 1);
+		r_core_seek (core, core->print->lines_cache[curr + numlines - 1], true);
 	}
 }
 
@@ -140,9 +160,7 @@ R_API int r_core_lines_currline(RCore *core) {  // make priv8 again
 }
 
 R_API int r_core_lines_initcache(RCore *core, ut64 start_addr, ut64 end_addr) {
-	int i, line_count;
-	int bsz = core->blocksize;
-	char *buf;
+	int i, bsz = core->blocksize;
 	ut64 off = start_addr;
 	ut64 baddr;
 	if (start_addr == UT64_MAX || end_addr == UT64_MAX) {
@@ -155,17 +173,11 @@ R_API int r_core_lines_initcache(RCore *core, ut64 start_addr, ut64 end_addr) {
 		return -1;
 	}
 
-#if 0	//review this
-	{
-		RIOSection *s = r_io_section_mget_in (core->io, core->offset);
-		baddr = s? s->paddr: r_config_get_i (core->config, "bin.baddr");
-	}
-#endif
 	baddr = r_config_get_i (core->config, "bin.baddr");
 
-	line_count = start_addr? 0: 1;
+	int line_count = start_addr? 0: 1;
 	core->print->lines_cache[0] = start_addr? 0: baddr;
-	buf = malloc (bsz);
+	char *buf = malloc (bsz);
 	if (!buf) {
 		return -1;
 	}
@@ -176,18 +188,22 @@ R_API int r_core_lines_initcache(RCore *core, ut64 start_addr, ut64 end_addr) {
 		}
 		r_io_read_at (core->io, off, (ut8 *) buf, bsz);
 		for (i = 0; i < bsz; i++) {
-			if (buf[i] == '\n') {
-				core->print->lines_cache[line_count] = start_addr? off + i + 1: off + i + 1 + baddr;
-				line_count++;
-				if (line_count % bsz == 0) {
-					ut64 *tmp = realloc (core->print->lines_cache,
-						(line_count + bsz) * sizeof (ut64));
-					if (tmp) {
-						core->print->lines_cache = tmp;
-					} else {
-						R_FREE (core->print->lines_cache);
-						goto beach;
-					}
+			if (buf[i] != '\n') {
+				continue;
+			}
+			if ((line_count + 1) >= bsz) {
+				break;
+			}
+			core->print->lines_cache[line_count] = start_addr? off + i + 1: off + i + 1 + baddr;
+			line_count++;
+			if (line_count % bsz == 0) {
+				ut64 *tmp = realloc (core->print->lines_cache,
+					(line_count + bsz) * sizeof (ut64));
+				if (tmp) {
+					core->print->lines_cache = tmp;
+				} else {
+					R_FREE (core->print->lines_cache);
+					goto beach;
 				}
 			}
 		}
@@ -203,23 +219,123 @@ beach:
 }
 
 static void seek_to_register(RCore *core, const char *input, bool is_silent) {
-	ut64 off;
-	if (core->io->debug) {
-		off = r_debug_reg_get (core->dbg, input);
+	if (r_config_get_b (core->config, "cfg.debug")) {
+		ut64 off = r_debug_reg_get (core->dbg, input);
 		if (!is_silent) {
 			r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
 		}
-		r_core_seek (core, off, 1);
+		r_core_seek (core, off, true);
 	} else {
 		RReg *orig = core->dbg->reg;
 		core->dbg->reg = core->anal->reg;
-		off = r_debug_reg_get (core->dbg, input);
+		ut64 off = r_debug_reg_get (core->dbg, input);
 		core->dbg->reg = orig;
 		if (!is_silent) {
 			r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
 		}
-		r_core_seek (core, off, 1);
+		r_core_seek (core, off, true);
 	}
+}
+
+static int cmd_sort(void *data, const char *input) { // "sort"
+	RCore *core = (RCore *)data;
+	const char *arg = strchr (input, ' ');
+	if (arg) {
+		arg = r_str_trim_head_ro (arg + 1);
+	}
+	switch (*input) {
+	case '?': // "sort?"
+		eprintf ("Usage: sort # sort the contents of the file\n");
+		break;
+	default: // "ls"
+		if (!arg) {
+			arg = "";
+		}
+		if (r_fs_check (core->fs, arg)) {
+			r_core_cmdf (core, "md %s", arg);
+		} else {
+			char *res = r_syscmd_sort (arg);
+			if (res) {
+				r_cons_print (res);
+				free (res);
+			}
+		}
+		break;
+	}
+	return 0;
+}
+
+static int cmd_seek_opcode_backward(RCore *core, int numinstr) {
+	int i, val = 0;
+	// N previous instructions
+	ut64 addr = core->offset;
+	int ret = 0;
+	if (r_core_prevop_addr (core, core->offset, numinstr, &addr)) {
+		ret = core->offset - addr;
+	} else {
+#if 0
+		// core_asm_bwdis_len is buggy as hell we should kill it. seems like prevop_addr
+		// works as expected, because is the one used from visual
+		ret = r_core_asm_bwdis_len (core, &instr_len, &addr, numinstr);
+#endif
+		addr = core->offset;
+		const int mininstrsize = r_anal_archinfo (core->anal, R_ANAL_ARCHINFO_MIN_OP_SIZE);
+		for (i = 0; i < numinstr; i++) {
+			ut64 prev_addr = r_core_prevop_addr_force (core, addr, 1);
+			if (prev_addr == UT64_MAX) {
+				prev_addr = addr - mininstrsize;
+			}
+			if (prev_addr == UT64_MAX || prev_addr >= core->offset) {
+				break;
+			}
+			RAsmOp op = {0};
+			r_core_seek (core, prev_addr, true);
+			r_asm_disassemble (core->rasm, &op, core->block, 32);
+			if (op.size < mininstrsize) {
+				op.size = mininstrsize;
+			}
+			val += op.size;
+			addr = prev_addr;
+		}
+	}
+	r_core_seek (core, addr, true);
+	val += ret;
+	return val;
+}
+
+static int cmd_seek_opcode_forward(RCore *core, int n) {
+	// N forward instructions
+	int i, ret, val = 0;
+	for (val = i = 0; i < n; i++) {
+		RAnalOp op;
+		ret = r_anal_op (core->anal, &op, core->offset, core->block,
+			core->blocksize, R_ANAL_OP_MASK_BASIC);
+		if (ret < 1) {
+			ret = 1;
+		}
+		r_core_seek_delta (core, ret);
+		r_anal_op_fini (&op);
+		val += ret;
+	}
+	return val;
+}
+
+static void cmd_seek_opcode(RCore *core, const char *input) {
+	if (input[0] == '?') {
+		eprintf ("Usage: so [-][n]\n");
+		return;
+	}
+	if (!strcmp (input, "-")) {
+		input = "-1";
+	}
+	int n = r_num_math (core->num, input);
+	if (n == 0) {
+		n = 1;
+	}
+	int val = (n < 0)
+		? cmd_seek_opcode_backward (core, -n)
+		: cmd_seek_opcode_forward (core, n);
+	core->num->value = val;
 }
 
 static int cmd_seek(void *data, const char *input) {
@@ -240,7 +356,7 @@ static int cmd_seek(void *data, const char *input) {
 		free (dup);
 	}
 	const char *inputnum = strchr (input, ' ');
-	{
+	if (r_str_cmp (input, "ort", 3)) {					// hack to handle Invalid Argument for sort
 		const char *u_num = inputnum? inputnum + 1: input + 1;
 		off = r_num_math (core->num, u_num);
 		if (*u_num == '-') {
@@ -282,77 +398,43 @@ static int cmd_seek(void *data, const char *input) {
 		if (input[1] == '*') { // "sC*"
 			r_core_cmd0 (core, "C*~^\"CC");
 		} else if (input[1] == ' ') {
-			typedef struct {
-				ut64 addr;
-				char *str;
-			} MetaCallback;
-			int count = 0;
-			MetaCallback cb = {
-				0, NULL
-			};
-			ut64 addr;
-			char key[128];
-			const char *val, *comma;
-			char *list = sdb_get (core->anal->sdb_meta, "meta.C", 0);
-			char *str, *next, *cur = list;
-			if (list) {
-				for (;;) {
-					cur = sdb_anext (cur, &next);
-					addr = sdb_atoi (cur);
-					snprintf (key, sizeof (key) - 1, "meta.C.0x%"PFMT64x, addr);
-					val = sdb_const_get (core->anal->sdb_meta, key, 0);
-					if (val) {
-						comma = strchr (val, ',');
-						if (comma) {
-							str = (char *) sdb_decode (comma + 1, 0);
-							if (strstr (str, input + 2)) {
-								r_cons_printf ("0x%08"PFMT64x "  %s\n", addr, str);
-								count++;
-								cb.addr = addr;
-								free (cb.str);
-								cb.str = str;
-							} else {
-								free (str);
-							}
-						}
-					} else {
-						eprintf ("sdb_const_get key not found '%s'\n", key);
+			RIntervalTreeIter it;
+			RAnalMetaItem *meta;
+			bool seeked = false;
+			r_interval_tree_foreach (&core->anal->meta, it, meta) {
+				if (meta->type == R_META_TYPE_COMMENT && !strcmp (meta->str, input + 2)) {
+					if (!silent) {
+						r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
 					}
-					if (!next) {
-						break;
-					}
-					cur = next;
+					r_core_seek (core, off, true);
+					r_core_block_read (core);
+					seeked = true;
+					break;
 				}
 			}
-
-			switch (count) {
-			case 0:
-				eprintf ("No matching comments\n");
-				break;
-			case 1:
-				off = cb.addr;
-				if (!silent) {
-					r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
-				}
-				r_core_seek (core, off, 1);
-				r_core_block_read (core);
-				break;
-			default:
-				eprintf ("Too many results\n");
-				break;
+			if (!seeked) {
+				eprintf ("No matching comment.\n");
 			}
-			free (cb.str);
 		} else {
 			r_core_cmd_help (core, help_msg_sC);
 		}
 		break;
 	case ' ': // "s "
+	{
+		ut64 addr = r_num_math (core->num, input + 1);
+		if (core->num->nc.errors) {
+			if (r_cons_singleton ()->context->is_interactive) {
+				eprintf ("Cannot seek to unknown address '%s'\n", core->num->nc.calc_buf);
+			}
+			break;
+		}
 		if (!silent) {
 			r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
 		}
-		r_core_seek (core, r_num_math (core->num, input + 1), 1);
+		r_core_seek (core, addr, true);
 		r_core_block_read (core);
-		break;
+	}
+	break;
 	case '/': // "s/"
 	{
 		const char *pfx = r_config_get (core->config, "search.prefix");
@@ -383,7 +465,7 @@ static int cmd_seek(void *data, const char *input) {
 			r_config_set_i (core->config, "search.from", core->offset + 1);
 			r_config_set_i (core->config, "search.maxhits", 1);
 			r_core_cmdf (core, "s+1; %s; s-1; s %s%d_0; f-%s%d_0",
-				input, pfx, kwidx, pfx, kwidx, pfx, kwidx);
+				input, pfx, kwidx, pfx, kwidx);
 			r_config_set_i (core->config, "search.from", saved_from);
 			r_config_set_i (core->config, "search.maxhits", saved_maxhits);
 			break;
@@ -397,12 +479,20 @@ static int cmd_seek(void *data, const char *input) {
 		}
 	}
 	break;
-	case '.': // "s."
-		for (input++; *input == '.'; input++) {
-			;
+	case '.': // "s." "s.."
+		if (input[1] == '?') {
+			r_core_cmd_help (core, help_msg_sdot);
+		} else if (input[1]) {
+			for (input++; *input == '.'; input++) {
+				;
+			}
+			r_core_seek_base (core, input);
+			r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
+		} else {
+			// just re-read the current block
+			r_core_seek (core, core->offset, true);
+			r_core_block_read (core);
 		}
-		r_core_seek_base (core, input);
-		r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
 		break;
 	case 'j':  // "sj"
 		{
@@ -417,9 +507,7 @@ static int cmd_seek(void *data, const char *input) {
 				r_list_foreach (list, iter, undo) {
 					char *name = NULL;
 
-					core->flags->space_strict = true;
 					RFlagItem *f = r_flag_get_at (core->flags, undo->off, true);
-					core->flags->space_strict = false;
 					if (f) {
 						if (f->offset != undo->off) {
 							name = r_str_newf ("%s+%d", f->name,
@@ -444,18 +532,25 @@ static int cmd_seek(void *data, const char *input) {
 				}
 				r_list_free (list);
 			}
-			r_cons_printf ("[");
-			for (i = 0; i < lsz; ++i) {
+			PJ *pj = pj_new ();
+			pj_a (pj);
+			for (i = 0; i < lsz; i++) {
 				ut64 *addr = r_list_get_n (addrs, i);
 				const char *name = r_list_get_n (names, i);
-				// XXX(should the "name" field be optional? That might make
-				// a bit more sense.
-				r_cons_printf ("{\"offset\":%"PFMT64d",\"symbol\":\"%s\"}", *addr, name);
-				if (i != lsz - 1) {
-					r_cons_printf (",");
+				pj_o (pj);
+				pj_kn (pj, "offset", *addr);
+				if (name && *name) {
+					pj_ks (pj, "name", name);
 				}
+				if (core->io->undo.undos == i) {
+					pj_kb (pj, "current", true);
+				}
+				pj_end (pj);
 			}
-			r_cons_printf ("]\n");
+			pj_end (pj);
+			char *s = pj_drain (pj);
+			r_cons_printf ("%s\n", s);
+			free (s);
 			r_list_free (addrs);
 			r_list_free (names);
 		}
@@ -475,9 +570,7 @@ static int cmd_seek(void *data, const char *input) {
 				r_list_foreach (list, iter, undo) {
 					char *name = NULL;
 
-					core->flags->space_strict = true;
 					RFlagItem *f = r_flag_get_at (core->flags, undo->off, true);
-					core->flags->space_strict = false;
 					if (f) {
 						if (f->offset != undo->off) {
 							name = r_str_newf ("%s + %d\n", f->name,
@@ -487,7 +580,7 @@ static int cmd_seek(void *data, const char *input) {
 						}
 					}
 					if (mode) {
-						r_cons_printf ("0x%"PFMT64x" %s\n", undo->off, name? name: "");
+						r_cons_printf ("0x%"PFMT64x" %s\n", undo->off, r_str_get (name));
 					} else {
 						if (!name) {
 							name = r_str_newf ("0x%"PFMT64x, undo->off);
@@ -523,7 +616,7 @@ static int cmd_seek(void *data, const char *input) {
 		} else {
 			RIOUndos *undo = r_io_sundo_redo (core->io);
 			if (undo) {
-				r_core_seek (core, undo->off, 0);
+				r_core_seek (core, undo->off, false);
 				r_core_block_read (core);
 			}
 		}
@@ -537,7 +630,7 @@ static int cmd_seek(void *data, const char *input) {
 			{
 				RIOUndos *undo = r_io_sundo (core->io, core->offset);
 				if (undo) {
-					r_core_seek (core, undo->off, 0);
+					r_core_seek (core, undo->off, false);
 					r_core_block_read (core);
 				}
 			}
@@ -545,9 +638,9 @@ static int cmd_seek(void *data, const char *input) {
 		case '-': // "s--"
 		default:
 			{
-				int delta = -off;
+				st64 delta = -(st64)off;
 				if (input[1] == '-') {
-					delta = -core->blocksize;
+					delta = -(st64)core->blocksize;
 					int mult = r_num_math (core->num, input + 2);
 					if (mult > 0) {
 						delta /= mult;
@@ -564,7 +657,11 @@ static int cmd_seek(void *data, const char *input) {
 		}
 		break;
 	case 'n': // "sn"
-		{
+		if (input[1] == '?') {
+			r_core_cmd_help (core, help_msg_sn);
+		} else if (input[1] == 'p') { // "snp" - seek next prelude
+			__core_cmd_search_backward_prelude (core, true, true);
+		} else {
 			if (!silent) {
 				r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
 			}
@@ -575,7 +672,11 @@ static int cmd_seek(void *data, const char *input) {
 		}
 		break;
 	case 'p': // "sp"
-		{
+		if (input[1] == '?') {
+			r_core_cmd_help (core, help_msg_sp);
+		} else if (input[1] == 'p') { // "spp" - seek previous prelude
+			__core_cmd_search_backward_prelude (core, true, false);
+		} else {
 			if (!silent) {
 				r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
 			}
@@ -619,81 +720,64 @@ static int cmd_seek(void *data, const char *input) {
 		case '\0': // "sf"
 			fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
 			if (fcn) {
-				r_core_seek (core, fcn->addr + r_anal_fcn_size (fcn), 1);
+				r_core_seek (core, r_anal_function_max_addr (fcn), true);
 			}
 			break;
 		case ' ': // "sf "
-			fcn = r_anal_fcn_find_name (core->anal, input + 2);
+			fcn = r_anal_get_function_byname (core->anal, input + 2);
 			if (fcn) {
-				r_core_seek (core, fcn->addr, 1);
+				r_core_seek (core, fcn->addr, true);
 			}
 			break;
 		case '.': // "sf."
 			fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
 			if (fcn) {
-				r_core_seek (core, fcn->addr, 1);
+				r_core_seek (core, fcn->addr, true);
 			}
 			break;
 		}
 		break;
 	}
 	case 'o': // "so"
-	if (input[1] == '?') {
-		eprintf ("Usage: so [n-instructions]\n");
-	} else {
-		int val = 0, ret, i, n = r_num_math (core->num, input + 1);
-		if (n == 0) {
-			n = 1;
-		}
-		if (n < 0) {
-			int instr_len;
-			ut64 addr = core->offset;
-			int numinstr = n * -1;
-			if (r_core_prevop_addr (core, core->offset, numinstr, &addr)) {
-				ret = core->offset - addr;
+		switch (input[1]) {
+		case 'r':
+			if (input[2] == 't') {
+				cmd_sort (core, input);
 			} else {
-				ret = r_core_asm_bwdis_len (core, &instr_len, &addr, numinstr);
+				return -1;
 			}
-			r_core_seek (core, addr, true);
-			val += ret;
-		} else {
-			for (val = i = 0; i < n; i++) {
-				RAnalOp op;
-
-				ret = r_anal_op (core->anal, &op,
-					core->offset, core->block, core->blocksize, R_ANAL_OP_MASK_ALL);
-				if (ret < 1) {
-					ret = 1;
-				}
-				r_core_seek_delta (core, ret);
-				r_anal_op_fini (&op);
-				val += ret;
-			}
+			break;
+		case ' ':
+		case '\0':
+		case '+':
+		case '-':
+			cmd_seek_opcode (core, input + 1);
+			break;
+		default:
+			return -1;	// invalid command
 		}
-		core->num->value = val;
-	}
-	break;
+		break;
 	case 'g': // "sg"
 	{
-		RIOSection *s = r_io_section_vget (core->io, core->offset);
-		if (s) {
-			r_core_seek (core, s->vaddr, 1);
+		RIOMap *map  = r_io_map_get_at (core->io, core->offset);
+		if (map) {
+			r_core_seek (core, r_io_map_begin (map), true);
 		} else {
-			r_core_seek (core, 0, 1);
+			r_core_seek (core, 0, true);
 		}
 	}
 	break;
 	case 'G': // "sG"
 	{
-		if (!core->file) {
+		if (!core->io->desc) {
 			break;
 		}
-		RIOSection *s = r_io_section_vget (core->io, core->offset);
+		RIOMap *map = r_io_map_get_at (core->io, core->offset);
 		// XXX: this +2 is a hack. must fix gap between sections
-		if (s) {
-			r_core_seek (core, s->vaddr + s->size + 2, 1);
+		if (map) {
+			r_core_seek (core, r_io_map_end (map) + 2, true);
 		} else {
-			r_core_seek (core, r_io_fd_size (core->io, core->file->fd), 1);
+			r_core_seek (core, r_io_fd_size (core->io, core->io->desc->fd), true);
 		}
 	}
 	break;
@@ -701,6 +785,25 @@ static int cmd_seek(void *data, const char *input) {
 	{
 		int sl_arg = r_num_math (core->num, input + 1);
 		switch (input[1]) {
+		case 'e': // "sleep"
+			{
+				const char *arg = strchr (input, ' ');
+				if (arg) {
+					arg++;
+					void *bed = r_cons_sleep_begin ();
+					if (strchr (arg, '.')) {
+						double d = 0;
+						sscanf (arg, "%lf", &d);
+						r_sys_usleep ((int)(d * 1000000));
+					} else {
+						r_sys_sleep (atoi (arg));
+					}
+					r_cons_sleep_end (bed);
+				} else {
+					eprintf ("Usage: sleep [seconds]\n");
+				}
+			}
+			break;
 		case '\0': // "sl"
 			if (!core->print->lines_cache) {
 				__init_seek_line (core);
@@ -748,7 +851,7 @@ static int cmd_seek(void *data, const char *input) {
 				if (!silent) {
 					r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
 				}
-				r_core_seek (core, n, 1);
+				r_core_seek (core, n, true);
 				r_core_block_read (core);
 			}
 		}

@@ -1,3 +1,5 @@
+/* radare - LGPL - Copyright 2017-2020 - maskray, thestr4ng3r */
+
 #include "r_vector.h"
 
 // Optimize memory usage on glibc
@@ -16,8 +18,8 @@
 	: vec->capacity + (vec->capacity >> 1))
 
 #define RESIZE_OR_RETURN_NULL(next_capacity) do { \
-		int new_capacity = next_capacity; \
-		void **new_a = realloc (vec->a, sizeof(void *) * new_capacity); \
+		size_t new_capacity = next_capacity; \
+		void **new_a = realloc (vec->a, vec->elem_size * new_capacity); \
 		if (!new_a) { \
 			return NULL; \
 		} \
@@ -25,260 +27,351 @@
 		vec->capacity = new_capacity; \
 	} while (0)
 
-R_API void r_vector_clear(RVector *vec, void (*elem_free)(void *)) {
-	if (elem_free) {
+R_API void r_vector_init(RVector *vec, size_t elem_size, RVectorFree free, void *free_user) {
+	r_return_if_fail (vec);
+	vec->a = NULL;
+	vec->capacity = vec->len = 0;
+	vec->elem_size = elem_size;
+	vec->free = free;
+	vec->free_user = free_user;
+}
+
+R_API RVector *r_vector_new(size_t elem_size, RVectorFree free, void *free_user) {
+	RVector *vec = R_NEW (RVector);
+	if (!vec) {
+		return NULL;
+	}
+	r_vector_init (vec, elem_size, free, free_user);
+	return vec;
+}
+
+static void vector_free_elems(RVector *vec) {
+	if (vec->free) {
 		while (vec->len > 0) {
-			elem_free (vec->a[--vec->len]);
+			vec->free (r_vector_index_ptr (vec, --vec->len), vec->free_user);
 		}
 	} else {
 		vec->len = 0;
 	}
+}
+
+R_API void r_vector_fini(RVector *vec) {
+	r_return_if_fail (vec);
+	r_vector_clear (vec);
+	vec->free = NULL;
+	vec->free_user = NULL;
+}
+
+R_API void r_vector_clear(RVector *vec) {
+	r_return_if_fail (vec);
+	vector_free_elems (vec);
 	R_FREE (vec->a);
 	vec->capacity = 0;
 }
 
-R_API RVector *r_vector_clone(RVector *vec) {
-	RVector *ret = R_NEW (RVector);
-	if (ret) {
-		ret->capacity = vec->capacity;
-		ret->len = vec->len;
-		if (!vec->len) {
-			ret->a = NULL;
-		} else {
-			ret->a = malloc (sizeof (void *) * vec->len);
-			if (!ret->a) {
-				R_FREE (ret);
-			} else {
-				memcpy (ret->a, vec->a, sizeof (void *) * vec->len);
-			}
-		}
+R_API void r_vector_free(RVector *vec) {
+	if (vec) {
+		r_vector_fini (vec);
+		free (vec);
 	}
-	return ret;
 }
 
-R_API void **r_vector_contains(RVector *vec, void *x) {
-	int i;
-	for (i = 0; i < vec->len; i++) {
-		if (vec->a[i] == x) {
-			return &vec->a[i];
-		}
-	}
-	return NULL;
-}
-
-R_API void *r_vector_delete_at(RVector *vec, int n) {
-	void *ret = vec->a[n];
-	vec->len--;
-	for (; n < vec->len; n++) {
-		vec->a[n] = vec->a[n+1];
-	}
-	return ret;
-}
-
-R_API bool r_vector_empty(RVector *vec) {
-	return vec->len == 0;
-}
-
-R_API void r_vector_free(RVector *vec, void (*elem_free)(void *)) {
-	if (elem_free) {
-		while (vec->len > 0) {
-			elem_free (vec->a[--vec->len]);
-		}
+static bool vector_clone(RVector *dst, RVector *src) {
+	r_return_val_if_fail (dst && src, false);
+	dst->capacity = src->capacity;
+	dst->len = src->len;
+	dst->elem_size = src->elem_size;
+	dst->free = src->free;
+	dst->free_user = src->free_user;
+	if (!dst->len) {
+		dst->a = NULL;
 	} else {
-		vec->len = 0;
+		dst->a = malloc (src->elem_size * src->capacity);
+		if (!dst->a) {
+			return false;
+		}
+		memcpy (dst->a, src->a, src->elem_size * src->len);
 	}
-	free (vec->a);
-	free (vec);
+	return true;
 }
 
-R_API void r_vector_init(RVector *vec) {
-	vec->a = NULL;
-	vec->capacity = vec->len = 0;
+R_API RVector *r_vector_clone(RVector *vec) {
+	r_return_val_if_fail (vec, NULL);
+	RVector *ret = R_NEW (RVector);
+	if (!ret) {
+		return NULL;
+	}
+	if (!vector_clone (ret, vec)) {
+		free (ret);
+		return NULL;
+	}
+	return ret;
 }
 
-R_API void **r_vector_insert(RVector *vec, int n, void *x) {
+R_API void r_vector_assign(RVector *vec, void *p, void *elem) {
+	r_return_if_fail (vec && p && elem);
+	memcpy (p, elem, vec->elem_size);
+}
+
+R_API void *r_vector_assign_at(RVector *vec, size_t index, void *elem) {
+	void *p = r_vector_index_ptr (vec, index);
+	if (elem) {
+		r_vector_assign (vec, p, elem);
+	}
+	return p;
+}
+
+R_API void r_vector_remove_at(RVector *vec, size_t index, void *into) {
+	r_return_if_fail (vec);
+	void *p = r_vector_index_ptr (vec, index);
+	if (into) {
+		r_vector_assign (vec, into, p);
+	}
+	vec->len--;
+	if (index < vec->len) {
+		memmove (p, (char *)p + vec->elem_size, vec->elem_size * (vec->len - index));
+	}
+}
+
+R_API void *r_vector_insert(RVector *vec, size_t index, void *x) {
+	r_return_val_if_fail (vec && index <= vec->len, NULL);
 	if (vec->len >= vec->capacity) {
 		RESIZE_OR_RETURN_NULL (NEXT_VECTOR_CAPACITY);
 	}
-	int i;
-	for (i = vec->len++; i > n; i--) {
-		vec->a[i] = vec->a[i-1];
+	void *p = r_vector_index_ptr (vec, index);
+	if (index < vec->len) {
+		memmove ((char *)p + vec->elem_size, p, vec->elem_size * (vec->len - index));
 	}
-	vec->a[n] = x;
-	return &vec->a[n];
-}
-
-R_API void **r_vector_insert_range(RVector *vec, int n, void **first, void **last) {
-	if (last - first + vec->len > vec->capacity) {
-		RESIZE_OR_RETURN_NULL (R_MAX (NEXT_VECTOR_CAPACITY, last - first + vec->len));
+	vec->len++;
+	if (x) {
+		r_vector_assign (vec, p, x);
 	}
-	int i;
-	for (i = vec->len; i > n; ) {
-		i--;
-		vec->a[last - first + i] = vec->a[i];
+	return p;
+}
+
+R_API void *r_vector_insert_range(RVector *vec, size_t index, void *first, size_t count) {
+	r_return_val_if_fail (vec && index <= vec->len, NULL);
+	if (vec->len + count > vec->capacity) {
+		RESIZE_OR_RETURN_NULL (R_MAX (NEXT_VECTOR_CAPACITY, vec->len + count));
 	}
-	vec->len += last - first;
-	i = n;
-	while (first != last) {
-		vec->a[i++] = *first++;
+	size_t sz = count * vec->elem_size;
+	void *p = r_vector_index_ptr (vec, index);
+	if (index < vec->len) {
+		memmove ((char *)p + sz, p, vec->elem_size * (vec->len - index));
 	}
-	return &vec->a[n];
+	vec->len += count;
+	if (first) {
+		memcpy (p, first, sz);
+	}
+	return p;
 }
 
-R_API RVector *r_vector_new(void) {
-	return R_NEW0 (RVector);
+R_API void r_vector_pop(RVector *vec, void *into) {
+	r_return_if_fail (vec);
+	if (into) {
+		r_vector_assign (vec, into, r_vector_index_ptr (vec, vec->len - 1));
+	}
+	vec->len--;
 }
 
-R_API void *r_vector_pop(RVector *vec) {
-	return vec->a[--vec->len];
+R_API void r_vector_pop_front(RVector *vec, void *into) {
+	r_return_if_fail (vec);
+	r_vector_remove_at (vec, 0, into);
 }
 
-R_API void *r_vector_pop_front(RVector *vec) {
-	return r_vector_delete_at (vec, 0);
-}
-
-R_API void **r_vector_push(RVector *vec, void *x) {
+R_API void *r_vector_push(RVector *vec, void *x) {
+	r_return_val_if_fail (vec, NULL);
 	if (vec->len >= vec->capacity) {
 		RESIZE_OR_RETURN_NULL (NEXT_VECTOR_CAPACITY);
 	}
-	vec->a[vec->len] = x;
-	return &vec->a[vec->len++];
+	void *p = r_vector_index_ptr (vec, vec->len++);
+	if (x) {
+		r_vector_assign (vec, p, x);
+	}
+	return p;
 }
 
-R_API void **r_vector_push_front(RVector *vec, void *x) {
+R_API void *r_vector_push_front(RVector *vec, void *x) {
+	r_return_val_if_fail (vec, NULL);
 	return r_vector_insert (vec, 0, x);
 }
 
-R_API void **r_vector_reserve(RVector *vec, int capacity) {
+R_API void *r_vector_reserve(RVector *vec, size_t capacity) {
+	r_return_val_if_fail (vec, NULL);
 	if (vec->capacity < capacity) {
 		RESIZE_OR_RETURN_NULL (capacity);
 	}
 	return vec->a;
 }
 
-R_API void **r_vector_shrink(RVector *vec) {
+R_API void *r_vector_shrink(RVector *vec) {
+	r_return_val_if_fail (vec, NULL);
 	if (vec->len < vec->capacity) {
 		RESIZE_OR_RETURN_NULL (vec->len);
 	}
 	return vec->a;
 }
 
+R_API void *r_vector_flush(RVector *vec) {
+       r_return_val_if_fail (vec, NULL);
+       r_vector_shrink (vec);
+       void *r = vec->a;
+       vec->a = NULL;
+       vec->capacity = vec->len = 0;
+       return r;
+}
+
+// pvector
+
+static void pvector_free_elem(void *e, void *user) {
+	void *p = *((void **)e);
+	RPVectorFree elem_free = (RPVectorFree)user;
+	elem_free (p);
+}
+
+R_API void r_pvector_init(RPVector *vec, RPVectorFree free) {
+	r_vector_init (&vec->v, sizeof (void *), free ? pvector_free_elem : NULL, free);
+}
+
+R_API RPVector *r_pvector_new(RPVectorFree free) {
+	RPVector *v = R_NEW (RPVector);
+	if (!v) {
+		return NULL;
+	}
+	r_pvector_init (v, free);
+	return v;
+}
+
+R_API RPVector *r_pvector_new_with_len(RPVectorFree free, size_t length) {
+	RPVector *v = r_pvector_new (free);
+	if (!v) {
+		return NULL;
+	}
+	void** p = r_pvector_reserve (v, length);
+	if (!p) {
+		r_pvector_free (v);
+		return NULL;
+	}
+	memset (p, 0, v->v.elem_size * v->v.capacity);
+	v->v.len = length;
+	return v;
+}
+
+R_API void r_pvector_clear(RPVector *vec) {
+	r_return_if_fail (vec);
+	r_vector_clear (&vec->v);
+}
+
+R_API void r_pvector_fini(RPVector *vec) {
+	r_return_if_fail (vec);
+	r_vector_fini (&vec->v);
+}
+
+R_API void r_pvector_free(RPVector *vec) {
+	if (!vec) {
+		return;
+	}
+	r_vector_fini (&vec->v);
+	free (vec);
+}
+
+R_API void **r_pvector_contains(RPVector *vec, void *x) {
+	r_return_val_if_fail (vec, NULL);
+	size_t i;
+	for (i = 0; i < vec->v.len; i++) {
+		if (((void **)vec->v.a)[i] == x) {
+			return &((void **)vec->v.a)[i];
+		}
+	}
+	return NULL;
+}
+
+R_API void *r_pvector_remove_at(RPVector *vec, size_t index) {
+	r_return_val_if_fail (vec, NULL);
+	void *r = r_pvector_at (vec, index);
+	r_vector_remove_at (&vec->v, index, NULL);
+	return r;
+}
+
+R_API void r_pvector_remove_data(RPVector *vec, void *x) {
+	void **el = r_pvector_contains (vec, x);
+	if (!el) {
+		return;
+	}
+
+	size_t index = el - (void **)vec->v.a;
+	r_vector_remove_at (&vec->v, index, NULL);
+}
+
+R_API void *r_pvector_pop(RPVector *vec) {
+	r_return_val_if_fail (vec, NULL);
+	if (r_pvector_len (vec) < 1) {
+		return NULL;
+	}
+	void *r = r_pvector_at (vec, vec->v.len - 1);
+	r_vector_pop (&vec->v, NULL);
+	return r;
+}
+
+R_API void *r_pvector_pop_front(RPVector *vec) {
+	r_return_val_if_fail (vec, NULL);
+	if (r_pvector_len (vec) < 1) {
+		return NULL;
+	}
+	void *r = r_pvector_at (vec, 0);
+	r_vector_pop_front (&vec->v, NULL);
+	return r;
+}
+
 // CLRS Quicksort. It is slow, but simple.
-static void quick_sort(void **a, int n, RVectorComparator cmp) {
-	if (n <= 1) return;
-	int i = rand() % n, j = 0;
+static void quick_sort(void **a, size_t n, RPVectorComparator cmp) {
+	if (n <= 1) {
+		return;
+	}
+	size_t i = rand() % n, j = 0;
 	void *t, *pivot = a[i];
 	a[i] = a[n - 1];
-	for (i = 0; i < n - 1; i++)
+	for (i = 0; i < n - 1; i++) {
 		if (cmp (a[i], pivot) < 0) {
 			t = a[i];
 			a[i] = a[j];
 			a[j] = t;
 			j++;
 		}
+	}
 	a[n - 1] = a[j];
 	a[j] = pivot;
 	quick_sort (a, j, cmp);
 	quick_sort (a + j + 1, n - j - 1, cmp);
 }
 
-R_API void r_vector_sort(RVector *vec, RVectorComparator cmp) {
-	quick_sort (vec->a, vec->len, cmp);
+R_API void r_pvector_sort(RPVector *vec, RPVectorComparator cmp) {
+	r_return_if_fail (vec && cmp);
+	quick_sort (vec->v.a, vec->v.len, cmp);
 }
 
-#if TEST
-#include <assert.h>
-#include <stddef.h>
+R_API int r_pvector_bsearch(RPVector *vec, void *needle, RPVectorComparator cmp) {
+	r_return_val_if_fail (vec && cmp, -1);
+	size_t top = 0;
+	size_t end = vec->v.len;
+	void **ar = vec->v.a;
 
-int my_cmp(const void *a, const void *b) {
-	return strcmp (a, b) < 0;
+	size_t dif;
+	while ((dif = end - top) > 0) {
+		size_t piv = top + dif / 2;
+		int match = cmp (ar[piv], needle);
+		if (!match) {
+			while (piv > top && !cmp (ar[piv - 1], needle)) {
+				piv--;
+			}
+			return piv;
+		}
+
+		if (match < 0) {
+			top = piv + 1;
+		} else {
+			end = piv;
+		}
+	}
+	return -1;
 }
-
-// TODO: move into t/vector.c
-int main () {
-	ptrdiff_t i;
-	void **it;
-	RVector *v = r_vector_new ();
-	assert (*r_vector_push (v, (void *)1337) == (void *)1337);
-	for (i = 0; i < 10; i++) {
-		r_vector_push (v, (void *)i);
-		assert (v->len == i + 2);
-	}
-	assert (r_vector_pop_front (v) == (void *)1337);
-	assert (r_vector_contains (v, (void *)9));
-
-	assert (r_vector_delete_at (v, 9) == (void *)9);
-	assert (!r_vector_contains (v, (void *)9));
-
-	i = 0;
-	r_vector_foreach (v, it) {
-		assert (*it == (void *)i++);
-	}
-
-	r_vector_shrink (v);
-	assert (v->len == 9);
-	RVector *v1 = r_vector_clone (v);
-	r_vector_clear (v, NULL);
-	assert (v->capacity == 0 && v->len == 0);
-	assert (v1->len == 9);
-
-	r_vector_free (v, NULL);
-	r_vector_free (v1, NULL);
-
-	RVector s;
-	r_vector_init (&s);
-	r_vector_reserve (&s, 10);
-	r_vector_clear (&s, NULL);
-
-	r_vector_reserve (&s, 10);
-	r_vector_push (&s, (void *)-1);
-	assert (s.len == 1 && s.capacity == 10);
-	for (i = 0; i < 20; i++) {
-		r_vector_push (&s, (void *)i);
-	}
-	r_vector_reserve (&s, 10);
-	r_vector_clear (&s, NULL);
-
-	{
-		void *a[] = {(void*)0, (void*)2, (void*)4, (void*)6, (void*)8};
-		RVector s = {0};
-		int l;
-		r_vector_insert_range (&s, 0, a + 2, a + 5);
-		r_vector_insert_range (&s, 0, a, a + 2);
-
-#define CMP(x, y) x < y
-		r_vector_lower_bound (&s, (void *)4, l, CMP);
-		assert (s.a[l] == (void *)4);
-		r_vector_lower_bound (&s, (void *)5, l, CMP);
-		assert (s.a[l] == (void *)6);
-		r_vector_lower_bound (&s, (void *)6, l, CMP);
-		assert (s.a[l] == (void *)6);
-		r_vector_lower_bound (&s, (void *)9, l, CMP);
-		assert (l == s.len);
-
-		r_vector_upper_bound (&s, (void *)4, l, CMP);
-		assert (s.a[l] == (void *)6);
-		r_vector_upper_bound (&s, (void *)5, l, CMP);
-		assert (s.a[l] == (void *)6);
-		r_vector_upper_bound (&s, (void *)6, l, CMP);
-		assert (s.a[l] == (void *)8);
-#undef CMP
-
-		r_vector_clear (&s, NULL);
-
-		r_vector_push (&s, strdup ("Charmander"));
-		r_vector_push (&s, strdup ("Squirtle"));
-		r_vector_push (&s, strdup ("Bulbasaur"));
-		r_vector_push (&s, strdup ("Meowth"));
-		r_vector_push (&s, strdup ("Caterpie"));
-		r_vector_sort (&s, my_cmp);
-
-		r_vector_lower_bound (&s, "Meow", l, strcmp);
-		assert (!strcmp (s.a[l], "Meowth"));
-
-		r_vector_clear (&s, free);
-	}
-
-	return 0;
-}
-#endif

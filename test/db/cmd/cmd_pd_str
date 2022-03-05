@@ -1,0 +1,32 @@
+NAME=pd inv fcnsign
+FILE=bins/mach0/mac-ls3
+CMDS=<<EOF
+e asm.cmt.col=0
+e asm.offset=0
+e asm.bytes=0
+e asm.lines=0
+e emu.str=true
+s..5343
+pd 30~(
+EOF
+EXPECT=<<EOF
+     call sym.imp.listxattr ; sym.imp.listxattr(0x0, 0x0, 0x0, 0x0)
+ ; void *reallocf(-1, 0x02000000)
+     call sym.imp.getxattr ; sym.imp.getxattr(-1, 0xc0000010e000000, 0x0, 0x0)
+ ; size_t strlen("")
+EOF
+RUN
+
+NAME=pd movabs string
+FILE=-
+CMDS=<<EOF
+wx 48b9746869735f633030
+pd 1
+wx 48ba306c5f666c34670a
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      48b974686973.  movabs rcx, 0x3030635f73696874 ; 'this_c00'
+            0x00000000      48ba306c5f66.  movabs rdx, 0xa67346c665f6c30 ; '0l_fl4g\n'
+EOF
+RUN

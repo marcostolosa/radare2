@@ -18,13 +18,13 @@ Rebuild() {
 	cd "$1" || exit 1
 	$MAKE clean
 	$MAKE -j8 || exit 1
-	cd -
+	cd - > /dev/null
 }
 
 Build() {
 	cd "$1" || exit 1
 	$MAKE -j8 || exit 1
-	cd -
+	cd - > /dev/null
 }
 
 RebuildIOSDebug() {
@@ -40,10 +40,17 @@ RebuildIOSDebug() {
 	fi
 }
 
+RebuildSpp() {
+	Rebuild shlr/spp
+	Rebuild libr/util
+	Rebuild libr/lang
+}
+
 RebuildJava() {
 	Rebuild shlr/java
-	Rebuild libr/asm
 	Rebuild libr/bin
+	Rebuild libr/asm
+	Rebuild libr/anal
 	Rebuild libr/core
 }
 
@@ -77,6 +84,12 @@ RebuildGdb() {
 	Rebuild libr/debug
 }
 
+RebuildWinkd() {
+	Rebuild shlr/winkd
+	Rebuild libr/io
+	Rebuild libr/debug
+}
+
 RebuildZip() {
 	Rebuild shlr/zip
 	Rebuild libr/io
@@ -84,12 +97,14 @@ RebuildZip() {
 
 RebuildTcc() {
 	Rebuild shlr/tcc
+	Rebuild libr/parse
 }
 
 case "$1" in
 grub|fs)RebuildFs; ;;
 bin)    RebuildBin ; ;;
 gdb)    RebuildGdb ; ;;
+winkd)  RebuildWinkd ; ;;
 sdb)    RebuildSdb ; ;;
 spp)    RebuildSpp ; ;;
 tcc)    RebuildTcc ; ;;

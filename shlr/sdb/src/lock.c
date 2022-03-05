@@ -1,27 +1,24 @@
-/* sdb - MIT - Copyright 2012-2016 - pancake */
+/* sdb - MIT - Copyright 2012-2022 - pancake */
 
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include "sdb.h"
+#if __wasi__ || EMSCRIPTEN
+static int getpid(void) { return 0; }
+#endif
 
-SDB_API const char *sdb_lock_file(const char *f) {
-	static char buf[128];
+SDB_API bool sdb_lock_file(const char *f, char *buf, size_t buf_size) {
 	size_t len;
-	if (!f || !*f) {
-		return NULL;
+	if (!f || !*f || !buf || !buf_size) {
+		return false;
 	}
 	len = strlen (f);
-	if (len + 10 > sizeof buf) {
-		return NULL;
+	if (len + 10 > buf_size) {
+		return false;
 	}
 	memcpy (buf, f, len);
 	strcpy (buf + len, ".lock");
-	return buf;
+	return true;
 }
-
-#define os_getpid() getpid()
 
 SDB_API bool sdb_lock(const char *s) {
 	int fd;
@@ -33,7 +30,7 @@ SDB_API bool sdb_lock(const char *s) {
 	if (fd == -1) {
 		return false;
 	}
-	pid = sdb_itoa (getpid(), pidstr, 10);
+	pid = sdb_itoa (getpid (), pidstr, 10);
 	if (pid) {
 		if ((write (fd, pid, strlen (pid)) < 0)
 			|| (write (fd, "\n", 1) < 0)) {
@@ -53,7 +50,7 @@ SDB_API int sdb_lock_wait(const char *s) {
 #if __SDB_WINDOWS__
 	 	Sleep (500); // hack
 #else
-	// TODO use lockf() here .. flock is not much useful (fd, LOCK_EX);
+		// TODO use lockf() here .. flock is not much useful (fd, LOCK_EX);
 	 	sleep (1); // hack
 #endif
  	}

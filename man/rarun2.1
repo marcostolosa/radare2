@@ -34,6 +34,8 @@ run the program in chroot. requires some previous setup
 unset the whole environment
 .It Ar core
 set no limit the core file size
+.It Ar time
+boolean value (true|false) to show ms in base10 to stderr after program execution
 .It Ar connect
 connect stdin/stdout/stderr to a socket
 .It Ar pty
@@ -58,6 +60,8 @@ set the maximum number of file descriptors
 set the niceness level of the process
 .It Ar preload
 preload a library (not supported on Windows, only linux,osx,bsd)
+.It Ar daemon
+Set to false by default, otherwise it will run the program in background, detached from the terminal.
 .It Ar program
 path to program to be executed
 .It Ar execve
@@ -142,12 +146,12 @@ Debugging a program redirecting io to another terminal
   $ tty ; clear ; sleep 999999
   /dev/ttyS010
   ## in another terminal run r2
-  $ r2 \-e dbg.profile=foo.rr2 -d ls
-  ## or you can use -R option
-  $ r2 \-R foo.rr2 -d ls
+  $ r2 \-r foo.rr2 -d ls
   $ cat foo.rr2
   #!/usr/bin/rarun2
   stdio=/dev/ttys010
+  ## Or you can use -R to set a key=value
+  r2 \-R stdio=/dev/ttys010 -d ls
 .Pp
 You can also use the -- flag to specify program and arguments in a more natural way:
 .Pp
@@ -158,13 +162,7 @@ Run a library function
   $ rarun2 runlib=/lib/libc-2.25.so runlib.fcn=system arg1="ls /"
 .Sh SEE ALSO
 .Pp
-.Xr radare2(1) ,
-.Xr rahash2(1) ,
-.Xr rafind2(1) ,
-.Xr rabin2(1) ,
-.Xr radiff2(1) ,
-.Xr ragg2(1) ,
-.Xr rasm2(1) ,
+.Xr radare2(1)
 .Sh AUTHORS
 .Pp
 Written by pancake <pancake@nopcode.org>

@@ -8,6 +8,7 @@ F+= linux-x86-32
 F+= linux-x86-64
 F+= linux-arm-32
 F+= linux-arm-64
+F+= s110-arm-16
 F+= linux-mips-32
 F+= linux-sparc-32
 F+= darwin-x86-32
@@ -44,12 +45,13 @@ ifneq ($(SILENT),)
 	@echo "SDB $<"
 	@rm -f $@
 	@"${SHELL}" gen.sh < $< | ${SDB} $@ =
-	@test -f $@
 else
 	rm -f $@
 	"${SHELL}" gen.sh < $< | ${SDB} $@ =
-	test -f $@
 endif
+	test -f $@
+	${SDB} -t -C $@
+	$(CC) $(CFLAGS) -c `echo $@ | sed -e s,sdb,c,`
 
 clean:
 	rm -f *.sdb

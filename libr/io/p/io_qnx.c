@@ -1,7 +1,9 @@
-/* radare - LGPL - Copyright 2010-2016 pancake */
+/* radare - GPL - Copyright 2010-2016 pancake */
 
 #include <r_io.h>
 #include <r_lib.h>
+
+#if WITH_GPL
 #include <r_socket.h>
 #include <r_util.h>
 #define IRAPI static inline
@@ -14,7 +16,7 @@ typedef struct {
 static libqnxr_t *desc = NULL;
 static RIODesc *rioqnx = NULL;
 
-static bool __plugin_open (RIO *io, const char *file, bool many) {
+static bool __plugin_open(RIO *io, const char *file, bool many) {
 	return (!strncmp (file, "qnx://", 6));
 }
 
@@ -25,7 +27,7 @@ static ut32 c_size = UT32_MAX;
 static ut8 *c_buff = NULL;
 #define SILLY_CACHE 0
 
-static int debug_qnx_read_at (ut8 *buf, int sz, ut64 addr) {
+static int debug_qnx_read_at(ut8 *buf, int sz, ut64 addr) {
 	ut32 size_max = 500;
 	ut32 packets = sz / size_max;
 	ut32 last = sz % size_max;
@@ -34,7 +36,9 @@ static int debug_qnx_read_at (ut8 *buf, int sz, ut64 addr) {
 		memcpy (buf, c_buff, sz);
 		return sz;
 	}
-	if (sz < 1 || addr >= UT64_MAX) return -1;
+	if (sz < 1 || addr >= UT64_MAX) {
+		return -1;
+	}
 	for (x = 0; x < packets; x++) {
 		qnxr_read_memory (desc, addr + x * size_max, (buf + x * size_max), size_max);
 	}
@@ -50,7 +54,7 @@ static int debug_qnx_read_at (ut8 *buf, int sz, ut64 addr) {
 	return sz;
 }
 
-static int debug_qnx_write_at (const ut8 *buf, int sz, ut64 addr) {
+static int debug_qnx_write_at(const ut8 *buf, int sz, ut64 addr) {
 	ut32 x, size_max = 500;
 	ut32 packets = sz / size_max;
 	ut32 last = sz % size_max;
@@ -74,12 +78,13 @@ static int debug_qnx_write_at (const ut8 *buf, int sz, ut64 addr) {
 	return sz;
 }
 
-static RIODesc *__open (RIO *io, const char *file, int rw, int mode) {
+static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 	RIOQnx *rioq;
 	char host[128], *port, *p;
 
-	if (!__plugin_open (io, file, 0))
+	if (!__plugin_open (io, file, 0)) {
 		return NULL;
+	}
 	if (rioqnx) {
 		// FIX: Don't allocate more than one RIODesc
 		return rioqnx;
@@ -94,7 +99,9 @@ static RIODesc *__open (RIO *io, const char *file, int rw, int mode) {
 	*port = '\0';
 	port++;
 	p = strchr (port, '/');
-	if (p) *p = 0;
+	if (p) {
+		*p = 0;
+	}
 
 	if (r_sandbox_enable (0)) {
 		eprintf ("sandbox: Cannot use network\n");
@@ -113,50 +120,65 @@ static RIODesc *__open (RIO *io, const char *file, int rw, int mode) {
 	return NULL;
 }
 
-static int __write (RIO *io, RIODesc *fd, const ut8 *buf, int count) {
+static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 	ut64 addr = io->off;
-	if (!desc) return -1;
+	if (!desc) {
+		return -1;
+	}
 	return debug_qnx_write_at (buf, count, addr);
 }
 
-static ut64 __lseek (RIO *io, RIODesc *fd, ut64 offset, int whence) {
+static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 	return offset;
 }
 
-static int __read (RIO *io, RIODesc *fd, ut8 *buf, int count) {
+static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	memset (buf, 0xff, count);
 	ut64 addr = io->off;
-	if (!desc) return -1;
+	if (!desc) {
+		return -1;
+	}
 	return debug_qnx_read_at (buf, count, addr);
 }
 
-static int __close (RIODesc *fd) {
+static bool __close(RIODesc *fd) {
 	// TODO
-	return -1;
+	return true;
 }
 
-static char *__system (RIO *io, RIODesc *fd, const char *cmd) {
+static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 	return NULL;
 }
 
 RIOPlugin r_io_plugin_qnx = {
 	.name = "qnx",
-	.license = "LGPL3",
-	.desc = "Attach to QNX pdebug instance, qnx://host:1234",
+	.license = "GPL3",
+	.desc = "Attach to QNX pdebug instance",
+	.uris = "qnx://",
 	.open = __open,
 	.close = __close,
 	.read = __read,
 	.write = __write,
 	.check = __plugin_open,
-	.lseek = __lseek,
+	.seek = __lseek,
 	.system = __system,
 	.isdbg = true
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_IO,
 	.data = &r_io_plugin_qnx,
 	.version = R2_VERSION
 };
 #endif
+
+#else
+
+RIOPlugin r_io_plugin_qnx = {
+	.name = "qnx",
+	.license = "GPL3",
+	.desc = "Attach to QNX pdebug instance (compiled without GPL)",
+};
+#endif
+

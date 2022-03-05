@@ -41,11 +41,11 @@ static int isProcedure(mpc_ast_t *node) {
 	return 0;
 }
 
-static void processNode (mpc_ast_t *node) {
+static void processNode(mpc_ast_t *node) {
 	if (isStatement(node)) {
 		int i, narg = 0;
 		const char *args[32];
-		for (i=0 ; i<node->children_num; i++) {
+		for (i = 0; i < node->children_num; i++) {
 			const char *tag = node->children[i]->tag;
 			const char *val = node->children[i]->contents;
 			if (strcmp (tag, "char")) {
@@ -181,14 +181,14 @@ int main(int argc, char **argv) {
 			" sigbody   : '@' <ident> '(' <number> ')' ';' ; \n"
 			" includes  : (\"#include\" <string>)* ;                           \n"
 			" smallc    : /^/ (<comment>|<asm>|<linecomment>|<sigdef>|<sigbody>|<procedure>|<cprocedure>)* <includes> <decls> /$/ ; \n",
-		Ident, Number, Character, String, Factor, Term, Lexp, Stmt, Exp, 
+		Ident, Number, Character, String, Factor, Term, Lexp, Stmt, Exp,
 		Vartype, Typeident, Decls, Args, Body, Comment, Linecomment, Asm, Procedure, CProcedure,
 		Sigdef, Sigbody, Includes, Smallc, NULL);
 
 	if (err != NULL) {
 		mpc_err_print (err);
 		mpc_err_delete (err);
-		exit(1);
+		return 1;
 	}
 
 #if 1
@@ -230,6 +230,5 @@ int main(int argc, char **argv) {
 			Sigdef, Includes, Smallc);
 
 	return 0;
-
 }
 

@@ -21,14 +21,13 @@ To compile for android-x86
 
 To package:
 
-    mkdir 
+    mkdir
     make install DESTDIR=/usr
 
 Build farm, see `sys/android-shell.sh` and `sys/android-build.sh`
-    
+
     sys/android-shell.sh sys/android-build.sh arm-static
 
 Environment:
 
-    NDK_ARCH=arm|x86
-    STATIC_BUILD=0|1
+    NDK_ARCH=arm|arm64|x86

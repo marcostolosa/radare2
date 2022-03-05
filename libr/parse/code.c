@@ -1,42 +1,54 @@
-/* radare - LGPL - Copyright 2013-2017 - pancake */
+/* radare - LGPL - Copyright 2013-2022 - pancake */
 
 #include "r_util.h"
 #include "r_types.h"
 #include "r_parse.h"
-#include "libr_tcc.h"
+#define ONE_SOURCE 1
+#include "tcc.h"
+#include "c/tccgen.c"
+#include "c/tccpp.c"
+#include "c/libtcc.c"
+
+static R_TH_LOCAL RThreadLock r_tcc_lock = R_THREAD_LOCK_INIT;
+static R_TH_LOCAL TCCState *s1 = NULL;
+extern int tcc_sym_push(TCCState *s1, char *typename, int typesize, int meta);
 
 /* parse C code and return it in key-value form */
 
-static void appendstring(const char *msg, char **s) {
+static void __appendString(const char *msg, char **s) {
 	if (!s) {
 		printf ("%s\n", msg);
 	} else if (*s) {
 		char *p = malloc (strlen (msg) + strlen (*s) + 1);
-		if (!p) return;
-		strcpy (p, *s);
-		free (*s);
-		*s = p;
-		strcpy (p + strlen (p), msg);
+		if (p) {
+			strcpy (p, *s);
+			free (*s);
+			*s = p;
+			strcpy (p + strlen (p), msg);
+		}
 	} else {
 		*s = strdup (msg);
 	}
 }
 
-static int typeload(void *p, const char *k, const char *v) {
+// NOTE: must hold r_tcc_lock
+static bool __typeLoad(void *p, const char *k, const char *v) {
+	r_strf_buffer (128);
 	if (!p) {
-		return -1;
+		return false;
 	}
 	int btype = 0;
 	RAnal *anal = (RAnal*)p;
+	// TCCState *s1 = NULL; // XXX THIS WILL MAKE IT CRASH
 	//r_cons_printf ("tk %s=%s\n", k, v);
 	// TODO: Add unions support
-	if (!strncmp (v, "struct", 6) && strncmp(k, "struct.", 7)) {
+	if (!strncmp (v, "struct", 6) && strncmp (k, "struct.", 7)) {
 		// structure
 		btype = VT_STRUCT;
 		const char *typename = k;
 		int typesize = 0;
 		// TODO: Add typesize here
-		char* query = sdb_fmt ("struct.%s", k);
+		char* query = r_strf ("struct.%s", k);
 		char *members = sdb_get (anal->sdb_types, query, 0);
 		char *next, *ptr = members;
 		if (members) {
@@ -45,7 +57,7 @@ static int typeload(void *p, const char *k, const char *v) {
 				if (!name) {
 					break;
 				}
-				query = sdb_fmt ("struct.%s.%s", k, name);
+				query = r_strf ("struct.%s.%s", k, name);
 				char *subtype = sdb_get (anal->sdb_types, query, 0);
 				if (!subtype) {
 					break;
@@ -59,54 +71,86 @@ static int typeload(void *p, const char *k, const char *v) {
 					}
 					char *subname = tmp;
 					// TODO: Go recurse here
-					query = sdb_fmt ("struct.%s.%s.meta", subtype, subname);
+					query = r_strf ("struct.%s.%s.meta", subtype, subname);
 					btype = sdb_num_get (anal->sdb_types, query, 0);
-					tcc_sym_push (subtype, 0, btype);
+					tcc_sym_push (s1, subtype, 0, btype);
 				}
 				free (subtype);
 				ptr = next;
 			} while (next);
 			free (members);
 		}
-		tcc_sym_push ((char *)typename, typesize, btype);
+		tcc_sym_push (s1, (char *)typename, typesize, btype);
 	}
-	return 0;
+	return true;
 }
 
-R_API char *r_parse_c_file(RAnal *anal, const char *path) {
-	char *str = NULL;
-	TCCState *T = tcc_new (anal->cpu, anal->bits, anal->os);
-	if (!T) return NULL;
-	tcc_set_callback (T, &appendstring, &str);
-	sdb_foreach (anal->sdb_types, typeload, anal);
-	if (tcc_add_file (T, path) == -1) {
-		free (str);
-		str = NULL;
+static void __errorFunc(void *opaque, const char *msg) {
+	__appendString (msg, opaque);
+	char **p = (char **)opaque;
+	if (p && *p) {
+		int n = strlen(*p);
+		char *ptr = malloc (n + 2);
+		if (!ptr) {
+			return;
+		}
+		strcpy (ptr, *p);
+		ptr[n] = '\n';
+		ptr[n + 1] = 0;
+		free (*p);
+		*p = ptr;
 	}
-	tcc_delete (T);
-	return str;
 }
 
-R_API char *r_parse_c_string(RAnal *anal, const char *code) {
+R_API char *r_parse_c_file(RAnal *anal, const char *path, const char *dir, char **error_msg) {
 	char *str = NULL;
+	r_th_lock_enter (&r_tcc_lock);
 	TCCState *T = tcc_new (anal->cpu, anal->bits, anal->os);
-	if (!T) return NULL;
-	tcc_set_callback (T, &appendstring, &str);
-	sdb_foreach (anal->sdb_types, typeload, NULL);
-	tcc_compile_string (T, code);
-	tcc_delete (T);
-	return str;
-}
-
-R_API int r_parse_is_c_file (const char *file) {
-	const char *ext = r_str_lchr (file, '.');
-	if (ext) {
-		ext = ext + 1;
-		if (!strcmp (ext, "cparse")
-		||  !strcmp (ext, "c")
-		||  !strcmp (ext, "h")) {
-			return true;
+	if (!T) {
+		r_th_lock_leave (&r_tcc_lock);
+		return NULL;
+	}
+	s1 = T; // XXX delete global
+	tcc_set_callback (T, &__appendString, &str);
+	tcc_set_error_func (T, (void *)error_msg, __errorFunc);
+	sdb_foreach (anal->sdb_types, __typeLoad, anal); // why is this needed??
+	char *d = strdup (dir);
+	RList *dirs = r_str_split_list (d, ":", 0);
+	RListIter *iter;
+	char *di;
+	bool found = false;
+	r_list_foreach (dirs, iter, di) {
+		if (tcc_add_file (T, path, di) != -1) {
+			found = true;
+			break;
 		}
 	}
-	return false;
+	if (!found) {
+		R_FREE (str);
+	}
+	r_list_free (dirs);
+	free (d);
+	tcc_delete (T);
+	r_th_lock_leave (&r_tcc_lock);
+	return str;
+}
+
+R_API char *r_parse_c_string(RAnal *anal, const char *code, char **error_msg) {
+	char *str = NULL;
+	r_th_lock_enter (&r_tcc_lock);
+	TCCState *T = tcc_new (anal->cpu, anal->bits, anal->os);
+	if (!T) {
+		r_th_lock_leave (&r_tcc_lock);
+		return NULL;
+	}
+	s1 = T; // XXX delete global
+	tcc_set_callback (T, &__appendString, &str);
+	tcc_set_error_func (T, (void *)error_msg, __errorFunc);
+	sdb_foreach (anal->sdb_types, __typeLoad, NULL);
+	if (tcc_compile_string (T, code) != 0) {
+		R_FREE (str);
+	}
+	tcc_delete (T);
+	r_th_lock_leave (&r_tcc_lock);
+	return str;
 }

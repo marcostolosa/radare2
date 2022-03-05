@@ -35,13 +35,15 @@
 #include <grub/mm.h>
 #include <grub/misc.h>
 #include <grub/disk.h>
-#include <grub/dl.h>
 #include <grub/types.h>
 #include <grub/fshelp.h>
 #include <r_types.h>
+#include <r_util/r_assert.h>
 
+#ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
 
 #define REISERFS_SUPER_BLOCK_OFFSET 0x10000
 #define REISERFS_MAGIC_LEN 12
@@ -54,16 +56,6 @@
 
 #undef S_IFLNK
 #define S_IFLNK 0xA000
-
-static grub_dl_t my_mod;
-
-#define assert(boolean) real_assert (boolean, GRUB_FILE, __LINE__)
-static inline void
-real_assert (int boolean, const char *file, const int line)
-{
-  if (! boolean)
-    grub_printf ("Assertion failed at %s:%d\n", file, line);
-}
 
 enum grub_reiserfs_item_type
   {
@@ -247,7 +239,7 @@ struct grub_reiserfs_data
 static enum grub_reiserfs_item_type
 grub_reiserfs_get_key_v2_type (const struct grub_reiserfs_key *key)
 {
-  unsigned long long o = grub_le_to_cpu64 (key->u.v2.offset_type);
+  ut64 o = grub_le_to_cpu64 (key->u.v2.offset_type);
   switch ((int)(o>>60))
     {
     case 0:
@@ -414,7 +406,7 @@ grub_reiserfs_set_key_type (struct grub_reiserfs_key *key,
       = ((key->u.v2.offset_type & grub_cpu_to_le64 (~0ULL >> 4))
          | grub_cpu_to_le64 ((grub_uint64_t) type << 60));
 
-  assert (grub_reiserfs_get_key_type (key) == grub_type);
+  r_warn_if_fail (grub_reiserfs_get_key_type (key) == grub_type);
 }
 
 /* -1 if key 1 if lower than key 2.
@@ -630,14 +622,14 @@ grub_reiserfs_get_item (struct grub_reiserfs_data *data,
 #endif
     }
 
-  assert (grub_errno == GRUB_ERR_NONE);
+  r_warn_if_fail (grub_errno == GRUB_ERR_NONE);
   grub_free (block_header);
   return GRUB_ERR_NONE;
 
  fail:
-  assert (grub_errno != GRUB_ERR_NONE);
+  r_warn_if_fail (grub_errno != GRUB_ERR_NONE);
   grub_free (block_header);
-  assert (grub_errno != GRUB_ERR_NONE);
+  r_warn_if_fail (grub_errno != GRUB_ERR_NONE);
   return grub_errno;
 }
 
@@ -750,7 +742,7 @@ grub_reiserfs_iterate_dir (grub_fshelp_node_t item,
   do
     {
       struct grub_reiserfs_directory_header *directory_headers;
-      struct grub_fshelp_node directory_item;
+      struct grub_fshelp_node directory_item = {0};
       grub_uint16_t entry_count, entry_number;
       struct grub_reiserfs_item_header *item_headers;
 
@@ -974,11 +966,11 @@ grub_reiserfs_iterate_dir (grub_fshelp_node_t item,
   while (block_number);
 
  found:
-  assert (grub_errno == GRUB_ERR_NONE);
+  r_warn_if_fail (grub_errno == GRUB_ERR_NONE);
   grub_free (block_header);
   return ret;
  fail:
-  assert (grub_errno != GRUB_ERR_NONE);
+  r_warn_if_fail (grub_errno != GRUB_ERR_NONE);
   grub_free (block_header);
   return 0;
 }
@@ -997,7 +989,6 @@ grub_reiserfs_open (struct grub_file *file, const char *name)
   grub_uint32_t block_number;
   grub_uint16_t entry_version, block_size, entry_location;
 
-  grub_dl_ref (my_mod);
   data = grub_reiserfs_mount (file->device->disk);
   if (! data)
     goto fail;
@@ -1067,10 +1058,9 @@ grub_reiserfs_open (struct grub_file *file, const char *name)
   return GRUB_ERR_NONE;
 
  fail:
-  assert (grub_errno != GRUB_ERR_NONE);
+  r_warn_if_fail (grub_errno != GRUB_ERR_NONE);
   grub_free (found);
   grub_free (data);
-  grub_dl_unref (my_mod);
   return grub_errno;
 }
 
@@ -1098,10 +1088,10 @@ grub_reiserfs_read (grub_file_t file, char *buf, grub_size_t len)
   current_position = 0;
   final_position = MIN (len + initial_position, file->size);
   grub_dprintf ("reiserfs",
-		"Reading from %lld to %lld (%lld instead of requested %ld)\n",
-		(unsigned long long) initial_position,
-		(unsigned long long) final_position,
-		(unsigned long long) (final_position - initial_position),
+		"Reading from %"PFMT64d" to %"PFMT64d" (%"PFMT64d" instead of requested %ld)\n",
+		(ut64) initial_position,
+		(ut64) final_position,
+		(ut64) (final_position - initial_position),
 		(unsigned long) len);
   while (current_position < final_position)
     {
@@ -1200,9 +1190,9 @@ grub_reiserfs_read (grub_file_t file, char *buf, grub_size_t len)
     }
 
   grub_dprintf ("reiserfs",
-		"Have successfully read %lld bytes (%ld requested)\n",
-		(unsigned long long) (current_position - initial_position),
-		(unsigned long) len);
+		"Have successfully read %"PFMT64d" bytes (%"PFMT64d" requested)\n",
+		(ut64) (current_position - initial_position),
+		(ut64) len);
   return current_position - initial_position;
 
 #if 0
@@ -1265,7 +1255,6 @@ grub_reiserfs_close (grub_file_t file)
 
   grub_free (data);
   grub_free (node);
-  grub_dl_unref (my_mod);
   return GRUB_ERR_NONE;
 }
 
@@ -1304,7 +1293,6 @@ grub_reiserfs_dir (grub_device_t device, const char *path,
   struct grub_reiserfs_key root_key;
   struct grub_reiserfs_dir_closure c;
 
-  grub_dl_ref (my_mod);
   data = grub_reiserfs_mount (device->disk);
   if (! data)
     goto fail;
@@ -1328,12 +1316,10 @@ grub_reiserfs_dir (grub_device_t device, const char *path,
   c.closure = closure;
   grub_reiserfs_iterate_dir (found, iterate, &c);
   grub_free (data);
-  grub_dl_unref (my_mod);
   return GRUB_ERR_NONE;
 
  fail:
   grub_free (data);
-  grub_dl_unref (my_mod);
   return grub_errno;
 }
 
@@ -1360,8 +1346,6 @@ grub_reiserfs_uuid (grub_device_t device, char **uuid)
   struct grub_reiserfs_data *data;
   grub_disk_t disk = device->disk;
 
-  grub_dl_ref (my_mod);
-
   data = grub_reiserfs_mount (disk);
   if (data)
     {
@@ -1377,8 +1361,6 @@ grub_reiserfs_uuid (grub_device_t device, char **uuid)
     }
   else
     *uuid = NULL;
-
-  grub_dl_unref (my_mod);
 
   grub_free (data);
 

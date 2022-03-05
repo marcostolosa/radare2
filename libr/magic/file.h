@@ -3,7 +3,7 @@
  * Copyright (c) Ian F. Darwin 1986-1995.
  * Software written by Ian F. Darwin and others;
  * maintained 1995-present by Christos Zoulas and others.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -13,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *  
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -54,22 +54,18 @@ typedef unsigned int ssize_t;
 typedef unsigned long unichar;
 
 struct stat;
-const char *file_fmttime(unsigned int, int);
-int file_buffer(struct r_magic_set *, int, const char *, const void *,
-    size_t);
+const char *file_fmttime(unsigned int, int, char *);
+int file_buffer(struct r_magic_set *, int, const char *, const void *, size_t);
 int file_fsmagic(struct r_magic_set *, const char *, struct stat *);
 int file_pipe2file(struct r_magic_set *, int, const void *, size_t);
 int file_printf(struct r_magic_set *, const char *, ...);
-int file_vprintf(struct r_magic_set *, const char *, va_list ap); // OPENBSDBUG
 int file_reset(struct r_magic_set *);
-int file_tryelf(struct r_magic_set *, int, const unsigned char *,
-    size_t);
-int file_zmagic(struct r_magic_set *, int, const char *,
-    const unsigned char *, size_t);
+int file_tryelf(struct r_magic_set *, int, const unsigned char *, size_t);
+int file_zmagic(struct r_magic_set *, int, const char *, const ut8*, size_t);
 int file_ascmagic(struct r_magic_set *, const unsigned char *, size_t);
 int file_is_tar(struct r_magic_set *, const unsigned char *, size_t);
 int file_softmagic(struct r_magic_set *, const unsigned char *, size_t, int);
-struct mlist *file_apprentice(struct r_magic_set *, const char *, int);
+struct mlist *file_apprentice(struct r_magic_set *, const char *, size_t, int);
 ut64 file_signextend(RMagic *, struct r_magic *, ut64);
 void file_delmagic(struct r_magic *, int type, size_t entries);
 void file_badread(struct r_magic_set *);
@@ -86,11 +82,6 @@ ssize_t sread(int, void *, size_t, int);
 int file_check_mem(struct r_magic_set *, unsigned int);
 int file_looks_utf8(const unsigned char *, size_t, unichar *, size_t *);
 
-/*
-extern const char *magic_file_names[FILE_NAMES_SIZE];
-extern const size_t file_nnames;
-*/
-
 #ifndef HAVE_VASPRINTF
 int vasprintf(char **ptr, const char *format_string, va_list vargs);
 #endif
@@ -98,12 +89,8 @@ int vasprintf(char **ptr, const char *format_string, va_list vargs);
 int asprintf(char **ptr, const char *format_string, ...);
 #endif
 
-#if defined(HAVE_MMAP) && defined(HAVE_SYS_MMAN_H) && !defined(QUICK)
-#define QUICK
-#endif
-
 #ifndef O_BINARY
-#define O_BINARY	0
+#define O_BINARY 0
 #endif
 
 #endif /* __file_h__ */

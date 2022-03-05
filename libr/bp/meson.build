@@ -1,4 +1,4 @@
-files = [
+r_bp_sources = [
   'bp.c',
   'bp_io.c',
   'bp_plugin.c',
@@ -12,21 +12,36 @@ files = [
   'p/bp_x86.c'
 ]
 
-r_bp = library('r_bp', files,
+r_bp = library('r_bp', r_bp_sources,
   include_directories: [platform_inc],
-  c_args: ['-DCORELIB=1'],
-  link_with: [r_util],
+  c_args: library_cflags,
+  dependencies: [r_util_dep],
   install: true,
   implicit_include_directories: false,
-  soversion: r2libversion
+  install_rpath: rpath_lib,
+  soversion: r2_libversion
 )
 
-pkgconfig_mod.generate(
-  libraries: [r_bp],
+r_bp_dep = declare_dependency(link_with: r_bp,
+                              include_directories: [platform_inc])
+
+r_bp_static = static_library('r_bp_static', r_bp_sources,
+  include_directories: [platform_inc],
+  c_args: library_cflags,
+  dependencies: [r_util_static_dep],
+  install: true,
+  implicit_include_directories: false,
+)
+
+r_bp_static_dep = declare_dependency(link_with: r_bp_static,
+  include_directories: [platform_inc])
+
+pkgconfig_mod.generate(r_bp,
   subdirs: 'libr',
-  version: r2version,
+  version: r2_version,
   name: 'r_bp',
   filebase: 'r_bp',
+  libraries: pkgcfg_sanitize_libs,
   requires: [
     'r_util'
   ],

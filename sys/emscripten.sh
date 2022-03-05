@@ -9,11 +9,14 @@ cd `dirname $PWD/$0` ; cd ..
 OLD_LDFLAGS="${LDFLAGS}"
 unset LDFLAGS
 
-export CC="emcc --ignore-dynamic-linking -Oz"
+export CC="emcc --ignore-dynamic-linking -Os"
 export AR="emar"
 
-CFGFLAGS="./configure --prefix=/usr --with-compiler=emscripten"
-CFGFLAGS="${CFGFLAGS} --disable-debugger --without-pic --with-nonpic"
+CFGFLAGS="--prefix=/usr --with-compiler=emscripten"
+CFGFLAGS="${CFGFLAGS} --host x86_64-unknown-linux --without-gperf"
+CFGFLAGS="${CFGFLAGS} --disable-debugger --with-libr --without-gpl"
+CFGFLAGS="${CFGFLAGS} --without-libuv --without-jemalloc"
+CFGFLAGS="${CFGFLAGS} --without-fork" # no process support in Emscripten
 
 make mrproper
 cp -f plugins.emscripten.cfg plugins.cfg
@@ -21,3 +24,6 @@ cp -f plugins.emscripten.cfg plugins.cfg
 
 ./configure ${CFGFLAGS} --host=emscripten && \
 	make -s -j ${MAKE_JOBS} DEBUG=0
+
+rm -f r2js.zip
+zip r2js.zip binr/*/*.js binr/*/*/*.wasm

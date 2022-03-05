@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2016-2017 - Oscar Salvador */
+/* radare - LGPL - Copyright 2016-2019 - Oscar Salvador */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -7,25 +7,9 @@
 #include <r_io.h>
 #include "bflt/bflt.h"
 
-static void *load_bytes(RBinFile *bf, const ut8 *buf, ut64 sz, ut64 loaddr, Sdb *sdb) {
-	if (!buf || !sz || sz == UT64_MAX) {
-		return NULL;
-	}
-	RBuffer *tbuf = r_buf_new ();
-	if (!tbuf) {
-		return NULL;
-	}
-	r_buf_set_bytes (tbuf, buf, sz);
-	struct r_bin_bflt_obj *res = r_bin_bflt_new_buf (tbuf);
-	r_buf_free (tbuf);
-	return res? res: NULL;
-}
-
-static bool load(RBinFile *bf) {
-	const ut8 *bytes = r_buf_buffer (bf->buf);
-	ut64 sz = r_buf_size (bf->buf);
-	bf->o->bin_obj = load_bytes (bf, bytes, sz, bf->o->loadaddr, bf->sdb);
-	return bf->o->bin_obj? true: false;
+static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
+	*bin_obj = r_bin_bflt_new_buf (buf);
+	return *bin_obj;
 }
 
 static RList *entries(RBinFile *bf) {
@@ -53,8 +37,7 @@ static void __patch_reloc(RBuffer *buf, ut32 addr_to_patch, ut32 data_offset) {
 	r_buf_write_at (buf, addr_to_patch, (void *) val, sizeof (val));
 }
 
-static int search_old_relocation(struct reloc_struct_t *reloc_table,
-                                 ut32 addr_to_patch, int n_reloc) {
+static int search_old_relocation(struct reloc_struct_t *reloc_table, ut32 addr_to_patch, int n_reloc) {
 	int i;
 	for (i = 0; i < n_reloc; i++) {
 		if (addr_to_patch == reloc_table[i].data_offset) {
@@ -72,11 +55,11 @@ static RList *patch_relocs(RBin *b) {
 	if (!b || !b->iob.io || !b->iob.io->desc) {
 		return NULL;
 	}
-	if (!(b->iob.io->cached & R_IO_WRITE)) {
+	if (!(b->iob.io->cached & R_PERM_W)) {
 		eprintf (
 			"Warning: please run r2 with -e io.cache=true to patch "
 			"relocations\n");
-		return list;
+		return NULL;
 	}
 
 	obj = r_bin_cur_object (b);
@@ -127,17 +110,19 @@ static RList *patch_relocs(RBin *b) {
 		}
 		R_FREE (bin->reloc_table);
 	}
-	b->iob.write_at (b->iob.io, bin->b->base, bin->b->buf, bin->b->length);
+	ut64 tmpsz;
+	const ut8 *tmp = r_buf_data (bin->b, &tmpsz);
+	b->iob.write_at (b->iob.io, 0, tmp, tmpsz);
 	return list;
 }
 
-static int get_ngot_entries(struct r_bin_bflt_obj *obj) {
+static ut32 get_ngot_entries(struct r_bin_bflt_obj *obj) {
 	ut32 data_size = obj->hdr->data_end - obj->hdr->data_start;
-	int i = 0, n_got = 0;
+	ut32 i = 0, n_got = 0;
 	if (data_size > obj->size) {
 		return 0;
 	}
-	for (i = 0, n_got = 0; i < data_size; i += 4, n_got++) {
+	for (; i < data_size; i += 4, n_got++) {
 		ut32 entry, offset = obj->hdr->data_start;
 		if (offset + i + sizeof (ut32) > obj->size ||
 		    offset + i + sizeof (ut32) < offset) {
@@ -158,7 +143,7 @@ static int get_ngot_entries(struct r_bin_bflt_obj *obj) {
 static RList *relocs(RBinFile *bf) {
 	struct r_bin_bflt_obj *obj = (struct r_bin_bflt_obj *) bf->o->bin_obj;
 	RList *list = r_list_newf ((RListFree) free);
-	int i, len, n_got, amount;
+	ut32 i, len, n_got, amount;
 	if (!list || !obj) {
 		r_list_free (list);
 		return NULL;
@@ -166,12 +151,11 @@ static RList *relocs(RBinFile *bf) {
 	if (obj->hdr->flags & FLAT_FLAG_GOTPIC) {
 		n_got = get_ngot_entries (obj);
 		if (n_got) {
-			amount = n_got * sizeof (ut32);
-			if (amount < n_got || amount > UT32_MAX) {
+			if (n_got > UT32_MAX / sizeof (struct reloc_struct_t)) {
 				goto out_error;
 			}
-			struct reloc_struct_t *got_table = calloc (
-				1, n_got * sizeof (struct reloc_struct_t));
+			amount = n_got * sizeof (struct reloc_struct_t);
+			struct reloc_struct_t *got_table = calloc (1, amount);
 			if (got_table) {
 				ut32 offset = 0;
 				for (i = 0; i < n_got; offset += 4, i++) {
@@ -195,22 +179,17 @@ static RList *relocs(RBinFile *bf) {
 	}
 
 	if (obj->hdr->reloc_count > 0) {
-		int n_reloc = obj->hdr->reloc_count;
-
-		amount = n_reloc * sizeof (struct reloc_struct_t);
-		if (amount < n_reloc || amount > UT32_MAX) {
+		ut32 n_reloc = obj->hdr->reloc_count;
+		if (n_reloc > UT32_MAX / sizeof (struct reloc_struct_t)) {
 			goto out_error;
 		}
-		struct reloc_struct_t *reloc_table = calloc (1, amount + 1);
+		amount = n_reloc * sizeof (struct reloc_struct_t);
+		struct reloc_struct_t *reloc_table = calloc (1, amount);
 		if (!reloc_table) {
 			goto out_error;
 		}
 		amount = n_reloc * sizeof (ut32);
-		if (amount < n_reloc || amount > UT32_MAX) {
-			free (reloc_table);
-			goto out_error;
-		}
-		ut32 *reloc_pointer_table = calloc (1, amount + 1);
+		ut32 *reloc_pointer_table = calloc (1, amount);
 		if (!reloc_pointer_table) {
 			free (reloc_table);
 			goto out_error;
@@ -298,31 +277,31 @@ static RBinInfo *info(RBinFile *bf) {
 	return info;
 }
 
-static bool check_bytes(const ut8 *buf, ut64 length) {
-	return length > 4 && !memcmp (buf, "bFLT", 4);
+static bool check_buffer(RBinFile *bf, RBuffer *buf) {
+	ut8 tmp[4];
+	int r = r_buf_read_at (buf, 0, tmp, sizeof (tmp));
+	return r == sizeof (tmp) && !memcmp (tmp, "bFLT", 4);
 }
 
-static int destroy(RBinFile *bf) {
-	r_bin_bflt_free ((struct r_bin_bflt_obj *) bf->o->bin_obj);
-	return true;
+static void destroy(RBinFile *bf) {
+	r_bin_bflt_free (bf->o->bin_obj);
 }
 
 RBinPlugin r_bin_plugin_bflt = {
 	.name = "bflt",
 	.desc = "bFLT format r_bin plugin",
 	.license = "LGPL3",
-	.load = &load,
-	.load_bytes = &load_bytes,
+	.load_buffer = &load_buffer,
 	.destroy = &destroy,
-	.check_bytes = &check_bytes,
+	.check_buffer = &check_buffer,
 	.entries = &entries,
 	.info = &info,
 	.relocs = &relocs,
 	.patch_relocs = &patch_relocs,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_BIN,
 	.data = &r_bin_plugin_bflt,
 	.version = R2_VERSION

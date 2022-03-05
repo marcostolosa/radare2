@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2017 - cgvwzq */
+/* radare2 - LGPL - Copyright 2017-2018 - cgvwzq */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -11,7 +11,8 @@
 // version 0x1 (WIP)
 // https://github.com/WebAssembly/design/blob/master/BinaryEncoding.md
 
-#define R_BIN_WASM_MAGIC_BYTES "\x00" "asm"
+#define R_BIN_WASM_MAGIC_BYTES "\x00" \
+			       "asm"
 #define R_BIN_WASM_VERSION 0x1
 #define R_BIN_WASM_STRING_LENGTH 256
 #define R_BIN_WASM_END_OF_CODE 0xb
@@ -34,6 +35,7 @@ typedef enum {
 	R_BIN_WASM_VALUETYPE_i64 = 0x2,
 	R_BIN_WASM_VALUETYPE_f32 = 0x3,
 	R_BIN_WASM_VALUETYPE_f64 = 0x4,
+	R_BIN_WASM_VALUETYPE_v128 = 0x5,
 	R_BIN_WASM_VALUETYPE_ANYFUNC = 0x10,
 	R_BIN_WASM_VALUETYPE_FUNC = 0x20,
 	R_BIN_WASM_VALUETYPE_EMPTY = 0x40,
@@ -47,9 +49,10 @@ typedef enum {
 } r_bin_wasm_external_kind_t;
 
 typedef enum {
+	R_BIN_WASM_NAMETYPE_Module = 0x0,
 	R_BIN_WASM_NAMETYPE_Function = 0x1,
 	R_BIN_WASM_NAMETYPE_Local = 0x2,
-} r_bin_wasm_name_type_t;
+} r_bin_wasm_custom_name_type_t;
 
 struct r_bin_wasm_init_expr_t {
 	// bytecode	terminated in 0xb
@@ -62,11 +65,16 @@ struct r_bin_wasm_resizable_limits_t {
 	ut32 maximum;
 };
 
+typedef struct r_bin_wasm_name_t {
+	ut32 len;
+	ut8 *name;
+} RBinWasmName;
+
 typedef struct r_bin_wasm_section_t {
 	ut8 id;
 	ut32 size;
 	ut32 name_len;
-	char name[R_BIN_WASM_STRING_LENGTH];
+	char *name;
 	ut32 offset;
 	ut32 payload_data;
 	ut32 payload_len;
@@ -161,7 +169,7 @@ typedef struct r_bin_wasm_code_t {
 	ut32 code; // offset
 	ut32 len; // real bytecode length
 	ut8 byte; // 0xb, indicating end of the body
-	char name[R_BIN_WASM_STRING_LENGTH];
+	char *name;
 	char *signature;
 } RBinWasmCodeEntry;
 
@@ -174,10 +182,35 @@ typedef struct r_bin_wasm_data_t {
 
 // TODO: custom sections
 
-typedef struct r_bin_wasm_custom_name_t {
-	r_bin_wasm_name_type_t name_type;
-	ut32 name_payload_length;
-	ut32 name_payload_data;
+
+typedef struct r_bin_wasm_custom_name_function_names_t {
+	ut32 count;
+	RIDStorage *names;
+} RBinWasmCustomNameFunctionNames;
+
+typedef struct r_bin_wasm_custom_name_local_name_t {
+	ut32 index; // function index
+
+	ut32 names_count;
+	RIDStorage *names; // local names
+} RBinWasmCustomNameLocalName;
+
+typedef struct r_bin_wasm_custom_name_local_names_t {
+	ut32 count;
+	RList *locals; // RBinWasmCustomNameLocalName
+} RBinWasmCustomNameLocalNames;
+
+// "name" section entry
+typedef struct r_bin_wasm_custom_name_entry_t {
+	ut8 type;
+	ut32 size;
+
+	ut8 payload_data;
+	union {
+		struct r_bin_wasm_name_t* mod_name;
+		RBinWasmCustomNameFunctionNames *func;
+		RBinWasmCustomNameLocalNames *local;
+	};
 } RBinWasmCustomNameEntry;
 
 typedef struct r_bin_wasm_obj_t {
@@ -199,23 +232,27 @@ typedef struct r_bin_wasm_obj_t {
 	RList *g_codes;
 	RList *g_datas;
 	RBinWasmStartEntry *g_start;
+
+	RList *g_names;
 	// etc...
 
 } RBinWasmObj;
 
-RBinWasmObj *r_bin_wasm_init (RBinFile *bf);
-void r_bin_wasm_destroy (RBinFile *bf);
-RList *r_bin_wasm_get_sections (RBinWasmObj *bin);
-RList *r_bin_wasm_get_types (RBinWasmObj *bin);
-RList *r_bin_wasm_get_imports (RBinWasmObj *bin);
-RList *r_bin_wasm_get_exports (RBinWasmObj *bin);
-RList *r_bin_wasm_get_tables (RBinWasmObj *bin);
-RList *r_bin_wasm_get_memories (RBinWasmObj *bin);
-RList *r_bin_wasm_get_globals (RBinWasmObj *bin);
-RList *r_bin_wasm_get_elements (RBinWasmObj *bin);
-RList *r_bin_wasm_get_codes (RBinWasmObj *bin);
-RList *r_bin_wasm_get_datas (RBinWasmObj *bin);
-ut32 r_bin_wasm_get_entrypoint (RBinWasmObj *bin);
-const char *r_bin_wasm_valuetype_to_string (r_bin_wasm_value_type_t type);
+RBinWasmObj *r_bin_wasm_init(RBinFile *bf, RBuffer *buf);
+void r_bin_wasm_destroy(RBinFile *bf);
+RList *r_bin_wasm_get_sections(RBinWasmObj *bin);
+RList *r_bin_wasm_get_types(RBinWasmObj *bin);
+RList *r_bin_wasm_get_imports(RBinWasmObj *bin);
+RList *r_bin_wasm_get_exports(RBinWasmObj *bin);
+RList *r_bin_wasm_get_tables(RBinWasmObj *bin);
+RList *r_bin_wasm_get_memories(RBinWasmObj *bin);
+RList *r_bin_wasm_get_globals(RBinWasmObj *bin);
+RList *r_bin_wasm_get_elements(RBinWasmObj *bin);
+RList *r_bin_wasm_get_codes(RBinWasmObj *bin);
+RList *r_bin_wasm_get_datas(RBinWasmObj *bin);
+RList *r_bin_wasm_get_custom_names(RBinWasmObj *bin);
+ut32 r_bin_wasm_get_entrypoint(RBinWasmObj *bin);
+const char *r_bin_wasm_get_function_name(RBinWasmObj *bin, ut32 idx);
+const char *r_bin_wasm_valuetype_to_string(r_bin_wasm_value_type_t type);
 
 #endif

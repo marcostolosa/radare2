@@ -1,9 +1,11 @@
-/* radare - LGPL - Copyright 2011-2016 - pancake */
+/* radare - LGPL - Copyright 2011-2020 - pancake */
 
 #include <r_fs.h>
 #include "grubfs.h"
 
-static RFSFile* FSP(_open)(RFSRoot *root, const char *path) {
+#if WITH_GPL
+
+static RFSFile* FSP(_open)(RFSRoot *root, const char *path, bool create) {
 	RFSFile *file = r_fs_file_new (root, path);
 	GrubFS *gfs = grubfs_new (&FSIPTR, &root->iob);
 	file->ptr = gfs;
@@ -20,12 +22,12 @@ static RFSFile* FSP(_open)(RFSRoot *root, const char *path) {
 	return file;
 }
 
-static bool FSP(_read)(RFSFile *file, ut64 addr, int len) {
+static int FSP(_read)(RFSFile *file, ut64 addr, int len) {
 	GrubFS *gfs = file->ptr;
 	grubfs_bind_io (NULL, file->root->delta);
-	gfs->file->fs->read (gfs->file, (char*)file->data, len);
+	int rc = gfs->file->fs->read (gfs->file, (char*)file->data, len);
 	file->off = grub_hack_lastoff; //gfs->file->offset;
-	return false;
+	return rc;
 }
 
 static void FSP(_close)(RFSFile *file) {
@@ -35,7 +37,7 @@ static void FSP(_close)(RFSFile *file) {
 
 static RList *list = NULL;
 
-static int dirhook (const char *filename, const struct grub_dirhook_info *info, void *closure) {
+static int dirhook(const char *filename, const struct grub_dirhook_info *info, void *closure) {
 	RFSFile *fsf = r_fs_file_new (NULL, filename);
 	fsf->type = info->dir? 'd':'f';
 	fsf->time = info->mtime;
@@ -62,7 +64,7 @@ static RList *FSP(_dir)(RFSRoot *root, const char *path, int view) {
 	return list;
 }
 
-static int do_nothing (const char *a, const struct grub_dirhook_info *b, void *c) { return 0; }
+static int do_nothing(const char *a, const struct grub_dirhook_info *b, void *c) { return 0; }
 
 static int FSP(_mount)(RFSRoot *root) {
 	int ret;
@@ -92,3 +94,9 @@ RFSPlugin FSS(r_fs_plugin) = {
 	.mount = FSP(_mount),
 	.umount = FSP(_umount),
 };
+#else
+RFSPlugin FSS(r_fs_plugin) = {
+	.name = FSNAME,
+	.desc = FSDESC,
+};
+#endif

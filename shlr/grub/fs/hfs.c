@@ -25,7 +25,6 @@
 #include <grub/mm.h>
 #include <grub/misc.h>
 #include <grub/disk.h>
-#include <grub/dl.h>
 #include <grub/types.h>
 #include <grub/hfs.h>
 #include <stdlib.h>
@@ -166,8 +165,6 @@ struct grub_hfs_record
   void *data;
   int datalen;
 };
-
-static grub_dl_t my_mod;
 
 static int grub_hfs_find_node (struct grub_hfs_data *, char *,
 			       grub_uint32_t, int, char *, int);
@@ -1060,8 +1057,6 @@ grub_hfs_dir (grub_device_t device, const char *path,
   struct grub_hfs_filerec frec = {0};
   struct grub_hfs_dir_closure c;
 
-  grub_dl_ref (my_mod);
-
   data = grub_hfs_mount (device->disk);
   if (!data)
     goto fail;
@@ -1083,8 +1078,6 @@ grub_hfs_dir (grub_device_t device, const char *path,
  fail:
   grub_free (data);
 
-  grub_dl_unref (my_mod);
-
   return grub_errno;
 }
 
@@ -1094,16 +1087,13 @@ static grub_err_t
 grub_hfs_open (struct grub_file *file, const char *name)
 {
   struct grub_hfs_data *data;
-  struct grub_hfs_filerec frec;
-
-  grub_dl_ref (my_mod);
+  struct grub_hfs_filerec frec = {0};
 
   data = grub_hfs_mount (file->device->disk);
 
   if (grub_hfs_find_dir (data, name, &frec, 0))
     {
       grub_free (data);
-      grub_dl_unref (my_mod);
       return grub_errno;
     }
 
@@ -1111,7 +1101,6 @@ grub_hfs_open (struct grub_file *file, const char *name)
     {
       grub_free (data);
       grub_error (GRUB_ERR_BAD_FILE_TYPE, "not a file");
-      grub_dl_unref (my_mod);
       return grub_errno;
     }
 
@@ -1142,8 +1131,6 @@ grub_hfs_close (grub_file_t file)
 {
   grub_free (file->data);
 
-  grub_dl_unref (my_mod);
-
   return 0;
 }
 
@@ -1170,19 +1157,13 @@ grub_hfs_uuid (grub_device_t device, char **uuid)
 {
   struct grub_hfs_data *data;
 
-  grub_dl_ref (my_mod);
-
   data = grub_hfs_mount (device->disk);
   if (data && data->sblock.num_serial != 0)
     {
-      *uuid = grub_xasprintf ("%016llx",
-			     (unsigned long long)
-			     grub_be_to_cpu64 (data->sblock.num_serial));
+      *uuid = grub_xasprintf ("%016"PFMT64x, (ut64) grub_be_to_cpu64 (data->sblock.num_serial));
     }
   else
     *uuid = NULL;
-
-  grub_dl_unref (my_mod);
 
   grub_free (data);
 

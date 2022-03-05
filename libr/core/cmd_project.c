@@ -1,8 +1,8 @@
-/* radare - LGPL - Copyright 2009-2017 - pancake */
+/* radare - LGPL - Copyright 2009-2021 - pancake */
 
 #include "r_config.h"
 #include "r_core.h"
-#include "r_print.h"
+#include "r_util.h"
 
 static const char *help_msg_P[] = {
 	"Usage:", "P[?osi] [file]", "Project management",
@@ -10,15 +10,15 @@ static const char *help_msg_P[] = {
 	"Pc", " [file]", "show project script to console",
 	"Pd", " [file]", "delete project",
 	"Pi", " [file]", "show project information",
-	"Pn", "[j]", "show project notes (Pnj for json)",
-	"Pn", " [base64]", "set notes text",
+	"Pn", "[j]", "manage notes associated with the project",
 	"Pn", " -", "edit notes with cfg.editor",
 	"Po", " [file]", "open project",
 	"Ps", " [file]", "save project",
 	"PS", " [file]", "save script file",
 	"P-", " [file]", "delete project (alias for Pd)",
-	"NOTE:", "", "See 'e??prj.'",
-	"NOTE:", "", "project are stored in ~/.config/radare2/projects",
+	"NOTE:", "", "The 'e prj.name' evar can save/open/rename/list projects.",
+	"NOTE:", "", "See the other 'e??prj.' evars for more options.",
+	"NOTE:", "", "project are stored in " R_JOIN_2_PATHS ("~", R2_HOME_PROJECTS),
 	NULL
 };
 
@@ -26,6 +26,7 @@ static const char *help_msg_Pn[] = {
 	"Usage:", "Pn[j-?] [...]", "Project Notes",
 	"Pn", "", "show project notes",
 	"Pn", " -", "edit notes with cfg.editor",
+	"Pn", " [base64]", "set notes text",
 	"Pn-", "", "delete notes",
 	"Pn-", "str", "delete lines matching /str/ in notes",
 	"Pn+", "str", "append one line to the notes",
@@ -35,22 +36,16 @@ static const char *help_msg_Pn[] = {
 	NULL
 };
 
-static void cmd_project_init(RCore *core) {
-	DEFINE_CMD_DESCRIPTOR (core, P);
-	DEFINE_CMD_DESCRIPTOR (core, Pn);
-}
-
 static int cmd_project(void *data, const char *input) {
 	RCore *core = (RCore *) data;
-	const char *file, *arg = (input && *input)? input + 1: NULL;
+	const char *file;
 	const char *fileproject = r_config_get (core->config, "prj.name");
-	char *str = NULL;
 
 	if (!input) {
 		return false;
 	}
-	str = strdup (fileproject);
-	arg = strchr (input, ' ');
+	char *str = strdup (fileproject);
+	const char *arg = strchr (input, ' ');
 	if (arg) {
 		arg++;
 	} else {
@@ -63,49 +58,56 @@ static int cmd_project(void *data, const char *input) {
 	}
 	file = arg;
 	switch (input[0]) {
-	case 'c':
+	case 'c': // "Pc"
 		if (input[1] == ' ') {
 			r_core_project_cat (core, input + 2);
 		} else {
 			eprintf ("Usage: Pc [prjname]\n");
 		}
 		break;
-	case 'o':
-		//	if (r_file_is_regular (file))
-		if (input[1] == '&') {
-			r_core_project_open (core, file, true);
-		} else if (input[1]) {
-			r_core_project_open (core, file, false);
+	case 'o': // "Po"
+		if (input[1] == '&') { // "Po&"
+			r_core_cmdf (core, "& Po %s", file);
+		} else if (input[1]) { // "Po"
+			r_core_project_open (core, file);
 		} else {
-			if (file && *file) {
+			if (str && *str) {
 				r_cons_println (file);
 			}
 		}
 		break;
-	case 'd':
-	case '-':
-		r_core_project_delete (core, file);
+	case 'd': // "Pd"
+	case '-': // "P-"
+		if (R_STR_ISNOTEMPTY (file)) {
+			r_core_project_delete (core, file);
+		} else {
+			eprintf ("Usage: Pd [prjname]   # Use P or Pl to list the available projects.\n");
+		}
 		break;
-	case 's':
-		if (!file || !file[0]) { /* if no argument specified use current project */
+	case 's': // "Ps"
+		if (R_STR_ISEMPTY (file)) {
 			file = str;
 		}
-		if (r_core_project_save (core, file)) {
-			r_cons_println (file);
+		if (!R_STR_ISEMPTY (file)) {
+			if (!r_core_project_save (core, file)) {
+				r_cons_eprintf ("Cannot save project.\n");
+			}
+		} else {
+			r_cons_eprintf ("Use: Ps [projectname]\n");
 		}
 		break;
-	case 'S':
+	case 'S': // "PS"
 		if (input[1] == ' ') {
-			r_core_project_save_rdb (core, input + 2, R_CORE_PRJ_ALL);
+			r_core_project_save_script (core, input + 2, R_CORE_PRJ_ALL);
 		} else {
-			eprintf ("Usage: PS [file]\n");
+			r_cons_eprintf ("Usage: PS [file]\n");
 		}
 		break;
 	case 'n': // "Pn"
 		if (input[1] == '?') {
 			r_core_cmd_help (core, help_msg_Pn);
 		} else if (!fileproject || !*fileproject) {
-			eprintf ("No project\n");
+			r_cons_eprintf ("No project\n");
 		} else {
 			switch (input[1]) {
 			case '-': // "Pn-"
@@ -179,12 +181,12 @@ static int cmd_project(void *data, const char *input) {
 				break;
 			case 'j': // "Pnj"
 				if (!input[2]) {
-					int len = 0;
+					size_t len = 0;
 					/* get base64 string */
 					char *str = r_core_project_notes_file (core, fileproject);
 					if (str) {
 						char *data = r_file_slurp (str, &len);
-						char *res = r_base64_encode_dyn (data, len);
+						char *res = r_base64_encode_dyn (data, (int)len);
 						if (res) {
 							r_cons_println (res);
 							free (res);
@@ -224,15 +226,21 @@ static int cmd_project(void *data, const char *input) {
 			}
 		}
 		break;
-	case 'i':
+	case 'i': // "Pi"
 		if (file && *file) {
-			char *prjName = r_core_project_info (core, file);
-			r_cons_println (prjName);
-			free (prjName);
+			char *prj_name = r_core_project_name (core, file);
+			if (!R_STR_ISEMPTY (prj_name)) {
+				r_cons_println (prj_name);
+				free (prj_name);
+			}
+		} else if (r_project_is_loaded (core->prj)) {
+			r_cons_println (core->prj->name);
+			r_cons_println (core->prj->path);
 		}
 		break;
+	case 'l':
 	case 0:
-	case 'j':
+	case 'j': // "Pj"
 		r_core_project_list (core, input[0]);
 		break;
 	default:

@@ -21,6 +21,10 @@
 #ifndef SFTYPES_H
 #define SFTYPES_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 #define NULL ((void*)0)
 
@@ -80,7 +84,7 @@ struct utsname {};
 struct ustat {};
 struct stat {};
 struct sched_param {};
-struct timeval 
+struct timeval
 {
 	long    tv_sec;         /* seconds */
 	long    tv_usec;        /* microseconds */
@@ -1003,7 +1007,7 @@ struct termios {
 
 
 
-#endif /* SFTYPES_H */
+#if 0
 
 /****************** Elf headers ***************/
 /*  From /usr/include/elf.h */
@@ -3562,7 +3566,7 @@ struct bsd_dirent {
            uint16_t       d_reclen;
            uint8_t        d_type;
            uint8_t        d_namlen;
-           char           d_name[MAXNAMLEN + 1]; 
+           char           d_name[MAXNAMLEN + 1];
 };
 
 /* semop system calls takes an array of these. */
@@ -3571,3 +3575,10 @@ struct sembuf {
 	short       sem_op;     /* semaphore operation */
 	short       sem_flg;    /* operation flags */
 };
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* SFTYPES_H */

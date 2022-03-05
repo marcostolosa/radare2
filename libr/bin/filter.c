@@ -1,134 +1,159 @@
-/* radare - LGPL - Copyright 2015 - pancake */
+/* radare - LGPL - Copyright 2015-2021 - pancake */
 
 #include <r_bin.h>
+#include "i/private.h"
 
-static void hashify(char *s, ut64 vaddr) {
-	if (!s) return;
+static char *__hashify(char *s, ut64 vaddr) {
+	r_return_val_if_fail (s, NULL);
+
+	char *os = s;
 	while (*s) {
 		if (!IS_PRINTABLE (*s)) {
 			if (vaddr && vaddr != UT64_MAX) {
-				sprintf (s, "_%" PFMT64d, vaddr);
-			} else {
-				ut32 hash = sdb_hash (s);
-				sprintf (s, "%x", hash);
+				char *ret = r_str_newf ("_%" PFMT64d, vaddr);
+				if (ret) {
+					free (os);
+				}
+				return ret;
 			}
-			return;
+			ut32 hash = sdb_hash (s);
+			char *ret = r_str_newf ("%x", hash);
+			if (ret) {
+				free (os);
+			}
+			return ret;
 		}
 		s++;
 	}
+	return os;
 }
 
-// TODO: optimize this api:
-// - bin plugins should call r_bin_filter_name() before appending
-R_API void r_bin_filter_name(Sdb *db, ut64 vaddr, char *name, int maxlen) {
-	const char *uname;
-	ut32 vhash, hash;
-	int count;
-	if (!db || !name) return;
-	uname = sdb_fmt ("%" PFMT64x ".%s", vaddr, name);
-	vhash = sdb_hash (uname); // vaddr hash - unique
-	hash = sdb_hash (name);   // name hash - if dupped and not in unique hash must insert
-	count = sdb_num_inc (db, sdb_fmt ("%x", hash), 1, 0);
-	if (sdb_exists (db, sdb_fmt ("%x", vhash))) {
-		// TODO: symbol is dupped, so symbol can be removed!
-		return;
+// - name should be allocated on the heap
+R_API char *r_bin_filter_name(RBinFile *bf, HtPU *db, ut64 vaddr, char *name) {
+	r_return_val_if_fail (db && name, NULL);
+
+	char *resname = name;
+	int count = 0;
+
+	HtPUKv *kv = ht_pu_find_kv (db, name, NULL);
+	if (kv) {
+		kv->value++;
+		count = kv->value;
+	} else {
+		count = 1;
+		ht_pu_insert (db, name, 1ULL);
 	}
-	sdb_num_set (db, sdb_fmt ("%x", vhash), 1, 0);
+
+	// check if there's another symbol with the same name and address);
+	char *uname = r_str_newf ("%" PFMT64x ".%s", vaddr, name);
+	bool found = false;
+	ht_pu_find (db, uname, &found);
+	if (found) {
+		// TODO: symbol is dupped, so symbol can be removed!
+		free (uname);
+		return NULL; // r_str_newf ("%s_%d", name, count);
+	}
+	HtPUKv tmp = {
+		.key = uname,
+		.key_len = strlen (uname),
+		.value = count,
+		.value_len = sizeof (ut64)
+	};
+	ht_pu_insert_kv (db, &tmp, false);
 	if (vaddr) {
-		hashify (name, vaddr);
+		char *p = __hashify (resname, vaddr);
+		if (p) {
+			resname = p;
+		}
 	}
 	if (count > 1) {
-		int namelen = strlen (name);
-		if (namelen > maxlen) name[maxlen] = 0;
-		strcat (name, sdb_fmt ("_%d", count - 1));
+		char *p = r_str_appendf (resname, "_%d", count - 1);
+		if (p) {
+			resname = p;
+		}
 		// two symbols at different addresses and same name wtf
-		//	eprintf ("Symbol '%s' dupped!\n", sym->name);
+		// eprintf ("Symbol '%s' dupped!\n", sym->name);
 	}
+	return resname;
 }
 
-R_API void r_bin_filter_sym(Sdb *db, ut64 vaddr, RBinSymbol *sym) {
-	if (!db || !sym) {
-		return;
-	}
-	char *name = sym->name;
-	if (!name) {
-		return;
-	}
-	const char *uname = sdb_fmt ("%" PFMT64x ".%s", vaddr, name);
-	ut32 vhash = sdb_hash (uname); // vaddr hash - unique
-	ut32 hash = sdb_hash (name);   // name hash - if dupped and not in unique hash must insert
-	int count = sdb_num_inc (db, sdb_fmt ("%x", hash), 1, 0);
-	if (sdb_exists (db, sdb_fmt ("%x", vhash))) {
-		// TODO: symbol is dupped, so symbol can be removed!
-		return;
-	}
-	sdb_num_set (db, sdb_fmt ("%x", vhash), 1, 0);
-	if (vaddr) {
-		//hashify (name, vaddr);
-	}
-	sym->dup_count = count - 1;
-}
-
-R_API void r_bin_filter_symbols(RList *list) {
-	RListIter *iter;
-	RBinSymbol *sym;
-	const int maxlen = sizeof (sym->name) - 8;
-	Sdb *db = sdb_new0 ();
-	if (!db) {
-		return;
-	}
-	if (maxlen > 0) {
-		r_list_foreach (list, iter, sym) {
-			if (sym && sym->name) {
-				r_bin_filter_name (db, sym->vaddr, sym->name, maxlen);
+R_API void r_bin_filter_sym(RBinFile *bf, HtPP *ht, ut64 vaddr, RBinSymbol *sym) {
+	r_return_if_fail (ht && sym && sym->name);
+	const char *name = sym->name;
+	// if (!strncmp (sym->name, "imp.", 4)) {
+	// demangle symbol name depending on the language specs if any
+	if (bf && bf->o && bf->o->lang) {
+		const char *lang = r_bin_lang_tostring (bf->o->lang);
+		char *dn = r_bin_demangle (bf, lang, sym->name, sym->vaddr, false);
+		if (dn && *dn) {
+			sym->dname = dn;
+			// XXX this is wrong but is required for this test to pass
+			// pmb:new pancake$ bin/r2r.js db/formats/mangling/swift
+			sym->name = dn;
+			// extract class information from demangled symbol name
+			char *p = strchr (dn, '.');
+			if (p) {
+				if (IS_UPPER (*dn)) {
+					sym->classname = strdup (dn);
+					sym->classname[p - dn] = 0;
+				} else if (IS_UPPER (p[1])) {
+					sym->classname = strdup (p + 1);
+					p = strchr (sym->classname, '.');
+					if (p) {
+						*p = 0;
+					}
+				}
 			}
+		}
+	}
+
+	r_strf_var (uname, 256, "%" PFMT64x ".%c.%s", vaddr, sym->is_imported ? 'i' : 's', name);
+	bool res = ht_pp_insert (ht, uname, sym);
+	if (!res) {
+		return;
+	}
+	sym->dup_count = 0;
+
+	r_strf_var (oname, 256, "o.0.%c.%s", sym->is_imported ? 'i' : 's', name);
+	RBinSymbol *prev_sym = ht_pp_find (ht, oname, NULL);
+	if (!prev_sym) {
+		if (!ht_pp_insert (ht, oname, sym)) {
+			R_LOG_WARN ("Failed to insert dup_count in ht");
+			return;
 		}
 	} else {
-		r_list_foreach (list, iter, sym) {
-			if (sym && sym->name) {
-				r_bin_filter_sym (db, sym->vaddr, sym);
-			}
-		}
+		sym->dup_count = prev_sym->dup_count + 1;
+		ht_pp_update (ht, oname, sym);
 	}
-	sdb_free (db);
 }
 
-R_API void r_bin_filter_sections(RList *list) {
-	RBinSection *sec;
-	const int maxlen = 256;
-	Sdb *db = sdb_new0 ();
+R_API void r_bin_filter_symbols(RBinFile *bf, RList *list) {
+	HtPP *ht = ht_pp_new0 ();
+	if (!ht) {
+		return;
+	}
+
 	RListIter *iter;
-	if (maxlen > 0) {
-		r_list_foreach (list, iter, sec) {
-			r_bin_filter_name (db, sec->vaddr, sec->name, maxlen);
+	RBinSymbol *sym;
+	r_list_foreach (list, iter, sym) {
+		if (sym && sym->name && *sym->name) {
+			r_bin_filter_sym (bf, ht, sym->vaddr, sym);
 		}
-	} else eprintf ("SectionName is not dynamic\n");
-	sdb_free (db);
+	}
+	ht_pp_free (ht);
 }
 
-R_API void r_bin_filter_classes(RList *list) {
-	int namepad_len;
-	char *namepad;
-	Sdb *db = sdb_new0 ();
-	RListIter *iter, *iter2;
-	RBinClass *cls;
-	RBinSymbol *sym;
-	r_list_foreach (list, iter, cls) {
-		if (!cls->name) continue;
-		namepad_len = strlen (cls->name) + 32;
-		namepad = calloc (1, namepad_len + 1);
-		if (namepad) {
-			strcpy (namepad, cls->name);
-			r_bin_filter_name (db, cls->index, namepad, namepad_len);
-			free (cls->name);
-			cls->name = namepad;
-			r_list_foreach (cls->methods, iter2, sym) {
-				if (sym->name)
-					r_bin_filter_sym (db, sym->vaddr, sym);
-			}
-		} else eprintf ("Cannot alloc %d byte(s)\n", namepad_len);
+R_API void r_bin_filter_sections(RBinFile *bf, RList *list) {
+	RBinSection *sec;
+	HtPU *db = ht_pu_new0 ();
+	RListIter *iter;
+	r_list_foreach (list, iter, sec) {
+		char *p = r_bin_filter_name (bf, db, sec->vaddr, sec->name);
+		if (p) {
+			sec->name = p;
+		}
 	}
-	sdb_free (db);
+	ht_pu_free (db);
 }
 
 static bool false_positive(const char *str) {
@@ -145,7 +170,7 @@ static bool false_positive(const char *str) {
 		bo[i] = 0;
 	}
 	for (i = 0; str[i]; i++) {
-		if (IS_DIGIT(str[i])) {
+		if (IS_DIGIT (str[i])) {
 			nm++;
 		} else if (str[i]>='a' && str[i]<='z') {
 			lo++;
@@ -193,11 +218,11 @@ R_API bool r_bin_strpurge(RBin *bin, const char *str, ut64 refaddr) {
 			char *range_sep;
 			ut64 addr, from, to;
 			for (i = 0, ptr = addrs; i < splits; i++, ptr += strlen (ptr) + 1) {
-				bool bang = false;
 				if (!strcmp (ptr, "true") && false_positive (str)) {
 					purge = true;
 					continue;
 				}
+				bool bang = false;
 				if (*ptr == '!') {
 					bang = true;
 					ptr++;
@@ -231,34 +256,47 @@ R_API bool r_bin_strpurge(RBin *bin, const char *str, ut64 refaddr) {
 	return purge;
 }
 
+static int get_char_ratio(char ch, const char *str) {
+	int i;
+	int ch_count = 0;
+	for (i = 0; str[i]; i++) {
+		if (str[i] == ch) {
+			ch_count++;
+		}
+	}
+	return i ? ch_count * 100 / i : 0;
+}
+
 static bool bin_strfilter(RBin *bin, const char *str) {
 	int i;
+	bool got_uppercase, in_esc_seq;
 	switch (bin->strfilter) {
 	case 'U': // only uppercase strings
+		got_uppercase = false;
+		in_esc_seq = false;
 		for (i = 0; str[i]; i++) {
 			char ch = str[i];
-			if (ch == ' ') {
-				continue;
+			if (ch == ' ' ||
+			    (in_esc_seq && (ch == 't' || ch == 'n' || ch == 'r'))) {
+				goto loop_end;
 			}
-			if (ch < '@'|| ch > 'Z') {
+			if (ch < 0 || !IS_PRINTABLE (ch) || IS_LOWER (ch)) {
 				return false;
 			}
-			if (ch < 0 || !IS_PRINTABLE (ch)) {
-				return false;
+			if (IS_UPPER (ch)) {
+				got_uppercase = true;
 			}
+loop_end:
+			in_esc_seq = in_esc_seq ? false : ch == '\\';
 		}
-		if (str[0] && str[1]) {
-			for (i = 2; i<6 && str[i]; i++) {
-				if (str[i] == str[0]) {
-					return false;
-				}
-				if (str[i] == str[1]) {
-					return false;
-				}
-			}
+		if (get_char_ratio (str[0], str) >= 60) {
+			return false;
 		}
-		if (str[0] == str[2]) {
-			return false; // rm false positives
+		if (str[0] && get_char_ratio (str[1], str) >= 60) {
+			return false;
+		}
+		if (!got_uppercase) {
+			return false;
 		}
 		break;
 	case 'a': // only alphanumeric - plain ascii
@@ -271,10 +309,10 @@ static bool bin_strfilter(RBin *bin, const char *str) {
 		break;
 	case 'e': // emails
 		if (str && *str) {
-			if (!strstr (str + 1, "@")) {
+			if (!strchr (str + 1, '@')) {
 				return false;
 			}
-			if (!strstr (str + 1, ".")) {
+			if (!strchr (str + 1, '.')) {
 				return false;
 			}
 		} else {
@@ -283,7 +321,7 @@ static bool bin_strfilter(RBin *bin, const char *str) {
 		break;
 	case 'f': // format-string
 		if (str && *str) {
-			if (!strstr (str + 1, "%")) {
+			if (!strchr (str + 1, '%')) {
 				return false;
 			}
 		} else {
@@ -295,7 +333,7 @@ static bool bin_strfilter(RBin *bin, const char *str) {
 			return false;
 		}
 		break;
-        case 'i': //IPV4
+	case 'i': //IPV4
 		{
 			int segment = 0;
 			int segmentsum = 0;

@@ -2,10 +2,10 @@
 
 #include "io_r2k_linux.h"
 
-#define fset(num, shift) (((num & (((ut64) 1) << shift)) == 0) ? 0 : 1)
+#define fset(num, shift) ((((num) & (((ut64) 1) << (shift))) == 0) ? 0 : 1)
 
 #if __i386__ || __x86_64__
-static void x86_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
+static void x86_ctrl_reg_pretty_print(RIO *io, struct r2k_control_reg ctrl) {
 	io->cb_printf ("CR0: 0x%"PFMT64x"\n", (ut64) ctrl.cr0);
 	io->cb_printf (" [*] PG:    %d\n"
 		       " [*] CD:    %d\n"
@@ -64,12 +64,12 @@ static void x86_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 
 #if __x86_64__
 	io->cb_printf ("CR8: 0x%"PFMT64x"\n", (ut64) ctrl.cr8);
-	io->cb_printf (" [*] TPL:    %d\n", ctrl.cr8 & 0xf);
+	io->cb_printf (" [*] TPL:    %u\n", (ut32)(ctrl.cr8 & 0xf));
 #endif
 }
 
 #elif __arm__
-static void arm_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
+static void arm_ctrl_reg_pretty_print(RIO *io, struct r2k_control_reg ctrl) {
 	io->cb_printf ("TTBR0: 0x%"PFMT64x"\n", (ut64) ctrl.ttbr0);
 	io->cb_printf (" [*] Translation table base 0:  0x%"PFMT64x"\n"
 		       " [*] UNP/SBZ:                   0x%"PFMT64x"\n"
@@ -133,8 +133,8 @@ static void arm_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 
 #elif __arm64__ || __aarch64__
 /*ARM Cortex-A57 and ARM Cortex-A72. This might show some wrong values for other processor.*/
-static void arm64_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
-	io->cb_printf ("SCTLR_EL1: 0x%"PFMT64x"\n", ctrl.sctlr_el1);
+static void arm64_ctrl_reg_pretty_print(RIO *io, struct r2k_control_reg ctrl) {
+	io->cb_printf ("SCTLR_EL1: 0x%"PFMTSZx"\n", ctrl.sctlr_el1);
 	io->cb_printf (" [*] UCI:     %d\n"
 		       " [*] EE:      %d\n"
 		       " [*] E0E:     %d\n"
@@ -161,19 +161,19 @@ static void arm64_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 		       fset (ctrl.sctlr_el1, 2), fset (ctrl.sctlr_el1, 1), fset (ctrl.sctlr_el1, 0));
 	io->cb_printf ("\n");
 
-	io->cb_printf ("TTBR0_EL1: 0x%"PFMT64x"\n", ctrl.ttbr0_el1);
+	io->cb_printf ("TTBR0_EL1: 0x%"PFMTSZx"\n", ctrl.ttbr0_el1);
 	io->cb_printf (" [*] ASID [63:48]:    0x%"PFMT64x"\n"
 		       " [*] BADDR [47:10]:   0x%"PFMT64x"\n",
-		       (ctrl.ttbr0_el1 & 0xffff000000000000) >> 48, (ctrl.ttbr0_el1 & ((((ut64) 1) << (47 + 1)) - (1 << 10))) >> 10);
+		       (ctrl.ttbr0_el1 & 0xffff000000000000LLU) >> 48, (ctrl.ttbr0_el1 & ((((ut64) 1) << (47 + 1)) - (1 << 10))) >> 10);
 	io->cb_printf ("\n");
 
-	io->cb_printf ("TTBR1_EL1: 0x%"PFMT64x"\n", ctrl.ttbr1_el1);
+	io->cb_printf ("TTBR1_EL1: 0x%"PFMTSZx"\n", ctrl.ttbr1_el1);
 	io->cb_printf (" [*] ASID [63:48]:    0x%"PFMT64x"\n"
 		       " [*] BADDR [47:10]:   0x%"PFMT64x"\n",
-		       (ctrl.ttbr1_el1 & 0xffff000000000000) >> 48, (ctrl.ttbr1_el1 & ((((ut64) 1) << (47 + 1)) - (1 << 10))) >> 10);
+		       (ctrl.ttbr1_el1 & 0xffff000000000000LLU) >> 48, (ctrl.ttbr1_el1 & ((((ut64) 1) << (47 + 1)) - (1 << 10))) >> 10);
 	io->cb_printf ("\n");
 
-	io->cb_printf ("TCR_EL1: 0x%"PFMT64x"\n", ctrl.tcr_el1);
+	io->cb_printf ("TCR_EL1: 0x%"PFMTSZx"\n", ctrl.tcr_el1);
 	io->cb_printf (" [*] TBI1:    %d\n"
 		       " [*] TBI0:    %d\n"
 		       " [*] AS:      %d\n"
@@ -192,15 +192,15 @@ static void arm64_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 		       " [*] EPD0:    %d\n"
 		       " [*] T0SZ:    %d\n",
 		       fset (ctrl.tcr_el1, 38), fset (ctrl.tcr_el1, 37), fset (ctrl.tcr_el1, 36),
-		       (ctrl.tcr_el1 & 0x700000000) >> 32, fset (ctrl.tcr_el1, 30), (ctrl.tcr_el1 & 0x30000000) >> 28,
-		       (ctrl.tcr_el1 & 0xc000000) >> 26, (ctrl.tcr_el1 & 0x3000000) >> 24, fset (ctrl.tcr_el1, 23),
-		       fset (ctrl.tcr_el1, 22), (ctrl.tcr_el1 & 0x3f0000) >> 16, fset (ctrl.tcr_el1, 14),
-		       (ctrl.tcr_el1 & 0x3000) >> 12, (ctrl.tcr_el1 & 0xc00) >> 10, (ctrl.tcr_el1 & 0x300) >> 8,
-		       fset (ctrl.tcr_el1, 7), (ctrl.tcr_el1 & 0x3f));
+		       (int)(ctrl.tcr_el1 >> 32) & 0x7, fset (ctrl.tcr_el1, 30), (int)(ctrl.tcr_el1 >> 28) & 0x3,
+		       (int)(ctrl.tcr_el1 >> 26) & 0x3, (int)(ctrl.tcr_el1 >> 24) & 0x3, fset (ctrl.tcr_el1, 23),
+		       fset (ctrl.tcr_el1, 22), (int)(ctrl.tcr_el1 >> 16) & 0x3f, fset (ctrl.tcr_el1, 14),
+		       (int)(ctrl.tcr_el1 >> 12) & 0x3, (int)(ctrl.tcr_el1 >> 10) & 0x3, (int)(ctrl.tcr_el1 >> 8) & 0x3,
+		       fset (ctrl.tcr_el1, 7), (int)ctrl.tcr_el1 & 0x3f);
 }
 #endif
 
-static const char* getargpos (const char *buf, int pos) {
+static const char* getargpos(const char *buf, int pos) {
 	int i;
 	for (i = 0; buf && i < pos; i++) {
 		buf = strchr (buf, ' ');
@@ -212,7 +212,7 @@ static const char* getargpos (const char *buf, int pos) {
 	return buf;
 }
 
-static size_t getvalue (const char *buf, int pos) {
+static size_t getvalue(const char *buf, int pos) {
 	size_t ret;
 	buf = getargpos (buf, pos);
 	if (buf) {
@@ -223,7 +223,7 @@ static size_t getvalue (const char *buf, int pos) {
 	return ret;
 }
 
-static void print_help (RIO *io, char *cmd, int p_usage) {
+static void print_help(RIO *io, char *cmd, int p_usage) {
 	int i = 0;
 	int cmd_len = cmd ? strlen (cmd) : 0;
 	const char* usage = "Usage:   \\[MprRw][lpP] [args...]";
@@ -256,7 +256,7 @@ static void print_help (RIO *io, char *cmd, int p_usage) {
 			io->cb_printf ("%s\n", help_msg[i]);
 		}
 	}
-	printf ("\nOld Commands: (deprecated)\n");
+	io->cb_printf ("\nOld Commands: (deprecated)\n");
 	for (i = 0; i < (sizeof (help_msg_old) / sizeof (char*)); i++) {
 		if (!cmd || !strncmp (cmd, help_msg_old[i]+1, cmd_len)) {
 			io->cb_printf ("%s\n", help_msg_old[i]);
@@ -264,7 +264,7 @@ static void print_help (RIO *io, char *cmd, int p_usage) {
 	}
 }
 
-int ReadMemory (RIO *io, RIODesc *iodesc, int ioctl_n, size_t pid, size_t address, ut8 *buf, int len) {
+int ReadMemory(RIO *io, RIODesc *iodesc, int ioctl_n, size_t pid, size_t address, ut8 *buf, int len) {
 	int ret = -1;
 	int pagesize, newlen;
 	ut64 pageaddr, offset;
@@ -343,7 +343,7 @@ int ReadMemory (RIO *io, RIODesc *iodesc, int ioctl_n, size_t pid, size_t addres
 	return ret;
 }
 
-int WriteMemory (RIO *io, RIODesc *iodesc, int ioctl_n, size_t pid, ut64 address, const ut8 *buf, int len) {
+int WriteMemory(RIO *io, RIODesc *iodesc, int ioctl_n, size_t pid, ut64 address, const ut8 *buf, int len) {
 	int ret = -1;
 
 	if (iodesc && iodesc->data > 0 && buf) {
@@ -428,10 +428,10 @@ int run_old_command(RIO *io, RIODesc *iodesc, const char *buf) {
 			cmd = (char *) malloc (27);
 			if (!cmd) {
 				io->cb_printf ("io_r2k_linux : Malloc failed. Seeking to 0x0\n");
-				io->cb_core_cmd (io->user, "s 0");
+				io->corebind.cmd (io->corebind.core, "s 0");
 			} else {
 				sprintf (cmd, "s 0x%"PFMT64x, io->off);
-				io->cb_core_cmd (io->user, cmd);
+				io->corebind.cmd (io->corebind.core, cmd);
 				free (cmd);
 			}
 		}
@@ -615,7 +615,7 @@ int run_old_command(RIO *io, RIODesc *iodesc, const char *buf) {
 				io->cb_printf ("n_pages: %d (%ld Kbytes)\n", in->n_pages, (in->n_pages * page_size) / 1024);
 				io->cb_printf ("n_phys_addr: %d\n", in->n_phys_addr);
 				for (j = 0; j < in->n_phys_addr; j++) {
-					io->cb_printf ("\tphys_addr: 0x%"PFMT64x"\n", (ut64) in->phys_addr[j]);
+					io->cb_printf ("  phys_addr: 0x%"PFMT64x"\n", (ut64) in->phys_addr[j]);
 				}
 				io->cb_printf ("\n");
 			}
@@ -731,14 +731,16 @@ int run_old_command(RIO *io, RIODesc *iodesc, const char *buf) {
 					    nextstart > 0 && nextstart - 1 < buffsize) {
 						break;
 					}
-					io->cb_printf ("f pid.%d.%s.%d.start=0x%"PFMT64x"\n", proc_data.pid, &(proc_data.vmareastruct[i + 7]), j, (ut64) proc_data.vmareastruct[i]);
-					io->cb_printf ("f pid.%d.%s.%d.end=0x%"PFMT64x"\n", proc_data.pid, &(proc_data.vmareastruct[i + 7]), j, (ut64) proc_data.vmareastruct[i + 1]);
+					io->cb_printf ("f pid.%d.%s.%d.start=0x%"PFMT64x"\n", proc_data.pid, (char*)&(proc_data.vmareastruct[i + 7]), j, (ut64) proc_data.vmareastruct[i]);
+					io->cb_printf ("f pid.%d.%s.%d.end=0x%"PFMT64x"\n", proc_data.pid, (char*)&(proc_data.vmareastruct[i + 7]), j, (ut64) proc_data.vmareastruct[i + 1]);
 					j += 1;
 					i = nextstart;
 				}
+				io->cb_printf ("f pid.%d.task_struct = 0x%08zu\n", proc_data.pid, proc_data.task);
 			} else {
 				io->cb_printf ("pid = %d\nprocess name = %s\n", proc_data.pid, proc_data.comm);
-				for (i = 0; i < buffsize;) {
+				io->cb_printf ("task_struct = 0x%08zu\n", proc_data.task);
+				for (i = 0; i < buffsize && i  + 8 < sizeof (proc_data.vmareastruct) ;) {
 					nextstart = 0;
 					if (i + 7 < buffsize) {
 						nextstart = i + 7 + (strlen ((const char *)&(proc_data.vmareastruct[i + 7])) - 1 + sizeof (size_t)) / sizeof (size_t);
@@ -747,7 +749,7 @@ int run_old_command(RIO *io, RIODesc *iodesc, const char *buf) {
 					    nextstart > 0 && nextstart - 1 < buffsize) {
 						break;
 					}
-					io->cb_printf ("0x%08"PFMT64x" - 0x%08"PFMT64x" %c%c%c%c 0x%08"PFMT64x" %02x:%02x %-8"PFMT64u"",
+					io->cb_printf ("0x%08"PFMT64x" - 0x%08"PFMT64x" %c%c%c%c 0x%08"PFMT64x" %02zu:%02zu %-8"PFMT64u"",
 							(ut64) proc_data.vmareastruct[i], (ut64) proc_data.vmareastruct[i+1],
 							proc_data.vmareastruct[i + 2] & VM_READ ? 'r' : '-',
 							proc_data.vmareastruct[i + 2] & VM_WRITE ? 'w' : '-',
@@ -755,17 +757,16 @@ int run_old_command(RIO *io, RIODesc *iodesc, const char *buf) {
 							proc_data.vmareastruct[i + 2] & VM_MAYSHARE ? 's' : 'p',
 							(ut64) proc_data.vmareastruct[i + 3], proc_data.vmareastruct[i + 4],
 							proc_data.vmareastruct[i + 5], (ut64) proc_data.vmareastruct[i + 6]);
-					io->cb_printf ("\t%s\n", &(proc_data.vmareastruct[i + 7]));
+					io->cb_printf ("  %s\n", (char*)&(proc_data.vmareastruct[i + 7]));
 					i = nextstart;
 				}
-				io->cb_printf ("STACK BASE ADDRESS = 0x%"PFMT64x"\n", (void *) proc_data.stack);
+				io->cb_printf ("STACK BASE ADDRESS = 0x%p\n", (void*)proc_data.stack);
 			}
 		}
 		break;
 	default:
-		{
-			print_help (io, NULL, 1);
-		}
+		print_help (io, NULL, 1);
+		break;
 	}
  end:
 	free (databuf);
@@ -799,7 +800,7 @@ int run_new_command(RIO *io, RIODesc *iodesc, const char *buf) {
 		return 1;
 	}
 	if (r_str_startswith (buf, "dp")) {
-		if (buf[2]== ' ') {
+		if (buf[2] == ' ') {
 			r2k_struct.pid = atoi (buf + 3);
 		} else {
 			io->cb_printf ("%d\n", r2k_struct.pid);

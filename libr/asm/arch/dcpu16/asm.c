@@ -197,9 +197,9 @@ static ut8 decode_parameter(char* param, int* extra_word_needed, ut16* extra_wor
 	
 	/* Must be a label, store a labelref */
 	*extra_word_needed = 1;
-		/* Allocate blank extra word, this will be where the 
+		/* Allocate blank extra word, this will be where the
 		   pointer to the label will be stored at link stage */
-	*extra_word_value = 0; 
+	*extra_word_value = 0;
 	return 0x1f;
 }
 
@@ -207,7 +207,7 @@ int dcpu16_assemble (ut8* out, const char* unoline) {
 	ut16 wordA = 0, wordB = 0;
 	int basic_opcode = 0;
 	int non_basic_opcode = 0;
-	char line[256], *param;
+	char line[256] = {0}, *param;
 	int off = 0;
 	// uberflow!
 	clean_line (line, unoline);

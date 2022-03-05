@@ -2,20 +2,21 @@ include ../../global.mk
 include $(LTOP)/config.mk
 
 NAME=r_magic
-DEPS=r_util
-PCLIBS=@LIBMAGIC@
+R2DEPS=r_util
 CFLAGS+=-I.
-ifeq (${USE_LIB_MAGIC},1)
-LDFLAGS+=-lmagic
-endif
 OBJS=apprentice.o ascmagic.o fsmagic.o funcs.o is_tar.o magic.o softmagic.o
+PCLIBS=@LIBMAGIC@
 
-include $(LTOP)/rules.mk
+alle: all
+
+include deps.mk
+include ../rules.mk
 
 libfile.a:
 	${CC} -c ${CFLAGS} ${SRC}
-	ar q libfile.a *.o
-	ranlib libfile.a
+	${AR} q libfile.a *.o
+	${RANLIB} libfile.a
+
 
 BIN=file${EXT_EXE}
 ${BIN}:

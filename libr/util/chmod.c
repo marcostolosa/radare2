@@ -1,40 +1,41 @@
-/* radare - LGPL - Copyright 2011-2012 - pancake */
+/* radare - LGPL - Copyright 2011-2019 - pancake */
 
 #include <r_util.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/stat.h>
 
 #if __UNIX__
-static int chmodr(const char *, int recursive);
-static int parsemode(const char *);
-static void recurse(const char *path, int rec, int (*fn)(const char *,int));
+static bool chmodr(const char *, int recursive);
+static bool parsemode(const char *);
+static void recurse(const char *path, int rec, bool(*fn)(const char *,int));
 
 static char oper = '=';
 static mode_t mode = 0;
 #endif
 
-R_API int r_file_chmod (const char *file, const char *mod, int recursive) {
+R_API bool r_file_chmod(const char *file, const char *mod, int recursive) {
 #if __UNIX__
 	oper = '=';
 	mode = 0;
-	if (!parsemode (mod))
+	if (!parsemode (mod)) {
 		return false;
+	}
 	return chmodr (file, recursive);
 #else
-	return -1;
+	return false;
 #endif
 }
 
 #if __UNIX__
 /* copied from sbase/chmod.c (suckless.org) */
-int chmodr(const char *path, int rflag) {
+static bool chmodr(const char *path, int rflag) {
 	struct stat st;
 
-	if (stat (path, &st) == -1)
-		return 0;
+	if (stat (path, &st) == -1) {
+		return false;
+	}
 
 	switch (oper) {
 	case '+':
@@ -47,16 +48,19 @@ int chmodr(const char *path, int rflag) {
 		st.st_mode = mode;
 		break;
 	}
+#if !__wasi__
 	if (chmod (path, st.st_mode) == -1) {
 		eprintf ("chmod %s:", path);
 		return false;
 	}
-	if (rflag)
+#endif
+	if (rflag) {
 		recurse (path, rflag, chmodr);
+	}
 	return true;
 }
 
-int parsemode(const char *str) {
+static bool parsemode(const char *str) {
 	char *end;
 	const char *p;
 	int octal;
@@ -64,20 +68,42 @@ int parsemode(const char *str) {
 
 	octal = strtol(str, &end, 8);
 	if (*end == '\0') {
-		if (octal & 04000) mode |= S_ISUID;
-		if (octal & 02000) mode |= S_ISGID;
-		if (octal & 00400) mode |= S_IRUSR;
-		if (octal & 00200) mode |= S_IWUSR;
-		if (octal & 00100) mode |= S_IXUSR;
-		if (octal & 00040) mode |= S_IRGRP;
-		if (octal & 00020) mode |= S_IWGRP;
-		if (octal & 00010) mode |= S_IXGRP;
-		if (octal & 00004) mode |= S_IROTH;
-		if (octal & 00002) mode |= S_IWOTH;
-		if (octal & 00001) mode |= S_IXOTH;
+		if (octal & 04000) {
+			mode |= S_ISUID;
+		}
+		if (octal & 02000) {
+			mode |= S_ISGID;
+		}
+		if (octal & 00400) {
+			mode |= S_IRUSR;
+		}
+		if (octal & 00200) {
+			mode |= S_IWUSR;
+		}
+		if (octal & 00100) {
+			mode |= S_IXUSR;
+		}
+		if (octal & 00040) {
+			mode |= S_IRGRP;
+		}
+		if (octal & 00020) {
+			mode |= S_IWGRP;
+		}
+		if (octal & 00010) {
+			mode |= S_IXGRP;
+		}
+		if (octal & 00004) {
+			mode |= S_IROTH;
+		}
+		if (octal & 00002) {
+			mode |= S_IWOTH;
+		}
+		if (octal & 00001) {
+			mode |= S_IXOTH;
+		}
 		return true;
 	}
-	for(p = str; *p; p++)
+	for (p = str; *p; p++) {
 		switch(*p) {
 		/* masks */
 		case 'u':
@@ -116,45 +142,53 @@ int parsemode(const char *str) {
 			eprintf ("%s: invalid mode\n", str);
 			return false;
 		}
-	if (mask)
+	}
+	if (mask) {
 		mode &= mask;
+	}
 	return true;
 }
 
-char * agetcwd(void) {
-        char *buf = malloc (4096);
-	if (!buf) return NULL;
-        if(!getcwd(buf, 4096))
-                eprintf("getcwd:");
-        return buf;
+static char *agetcwd(void) {
+	char *buf = malloc (4096);
+	if (!buf) {
+		return NULL;
+	}
+	if (!getcwd (buf, 4096)) {
+		eprintf ("getcwd:");
+	}
+	return buf;
 }
 
-static void recurse(const char *path, int rec, int (*fn)(const char *,int)) {
-        char *cwd;
-        struct dirent *d;
-        struct stat st;
-        DIR *dp;
+static void recurse(const char *path, int rec, bool(*fn)(const char *,int)) {
+	char *cwd;
+	struct dirent *d;
+	struct stat st;
+	DIR *dp;
 
-        if (lstat (path, &st) == -1 || !S_ISDIR (st.st_mode))
-                return;
-        else if (!(dp = opendir (path))) {
-                eprintf ("opendir %s:", path);
+	if (lstat (path, &st) == -1 || !S_ISDIR (st.st_mode)) {
+		return;
+	} else if (!(dp = opendir (path))) {
+		eprintf ("opendir %s:", path);
 		return;
 	}
-        cwd = agetcwd();
-        if (chdir (path) == -1) {
-                eprintf ("chdir %s:", path);
+	cwd = agetcwd ();
+	if (chdir (path) == -1) {
+		eprintf ("chdir %s:", path);
 		closedir (dp);
 		free (cwd);
 		return;
 	}
-        while ((d = readdir (dp)))
-                if (strcmp (d->d_name, ".") && strcmp (d->d_name, ".."))
-                        fn (d->d_name, 1);
+	while ((d = readdir (dp))) {
+		if (strcmp (d->d_name, ".") && strcmp (d->d_name, "..")) {
+			fn (d->d_name, 1);
+		}
+	}
 
-        closedir (dp);
-        if (chdir (cwd) == -1)
-                eprintf ("chdir %s:", cwd);
-        free (cwd);
+	closedir (dp);
+	if (chdir (cwd) == -1) {
+		eprintf ("chdir %s:", cwd);
+	}
+	free (cwd);
 }
 #endif

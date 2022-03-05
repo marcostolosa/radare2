@@ -4,8 +4,7 @@
 #include <r_types.h>
 #include <r_lib.h>
 
-static int mal_anal(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len) {
-	memset (op, '\0', sizeof (RAnalOp));
+static int mal_anal(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len, RAnalOpMask mask) {
 	if (len) {
 		switch ((data[0] + addr) % 94) {
 		case 4:
@@ -46,8 +45,8 @@ RAnalPlugin r_anal_plugin_malbolge = {
 	.op = &mal_anal,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_malbolge,
 	.version = R2_VERSION

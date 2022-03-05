@@ -11,9 +11,9 @@ static const char *instrs[] = {
 	[PROP_ADDS]		= "adds",
 	[PROP_ADDSX]	= "addsx",
 	[PROP_ADDX]		= "addx",
-	[PROP_AND]		= "and",
-	[PROP_ANDN]		= "andn",
-	[PROP_CALL]		= "call",
+	[PROP_AND]		= "and", // or TEST
+	[PROP_ANDN]		= "andn", // or TESTN
+	[PROP_CALL]		= "call", // or JMP JMPRET RET
 	[PROP_CMP]		= "cmp",
 	[PROP_CMPS]		= "cmps",
 	[PROP_CMPSUB]	= "cmpsub",
@@ -44,7 +44,6 @@ static const char *instrs[] = {
 	[PROP_RDBYTE]	= "rdbyte",
 	[PROP_RDLONG]	= "rdlong",
 	[PROP_RDWORD]	= "rdword",
-	[PROP_RET]		= "ret",
 	[PROP_REV]		= "rev",
 	[PROP_ROL]		= "rol",
 	[PROP_ROR]		= "ror",
@@ -58,8 +57,6 @@ static const char *instrs[] = {
 	[PROP_SUMNC]	= "sumnc",
 	[PROP_SUMNZ]	= "sumnz",
 	[PROP_SUMZ]		= "sumz",
-	[PROP_TEST]		= "test",
-	[PROP_TESTN]	= "testn",
 	[PROP_TJZ]		= "tjz",
 	[PROP_WAITCNT]	= "waitcnt",
 	[PROP_WAITVID]	= "waitvid",
@@ -96,27 +93,27 @@ static const char *conditions[] = {
 	[PROP_IF_Z_OR_NC]	= "if_z_or_c",
 };
 
-static ut16 get_opcode (ut32 instr) {
+static ut16 get_opcode(ut32 instr) {
 	return instr >> 26;
 }
 
-static ut16 get_opcode_ext (ut32 instr) {
+static ut16 get_opcode_ext(ut32 instr) {
 	return (instr & 0x7) | (instr >> 23);
 }
 
-static ut16 get_src (ut32 instr) {
+static ut16 get_src(ut32 instr) {
 	return instr & 0x1FF;
 }
 
-static ut16 get_dst (ut32 instr) {
+static ut16 get_dst(ut32 instr) {
 	return ((instr >> 9) & 0x1FF) << 2;
 }
 
-static int is_immediate (ut32 instr) {
+static int is_immediate(ut32 instr) {
 	return instr & 0x00400000;
 }
 
-static int decode_ext_cmd (struct propeller_cmd *cmd, ut32 instr) {
+static int decode_ext_cmd(struct propeller_cmd *cmd, ut32 instr) {
 	ut16 opcode;
 
 	opcode = get_opcode_ext (instr);
@@ -141,22 +138,22 @@ static int decode_ext_cmd (struct propeller_cmd *cmd, ut32 instr) {
 	return -1;
 }
 
-static ut8 get_zcri (ut32 instr) {
+static ut8 get_zcri(ut32 instr) {
 	return (instr >> 22) & 0xf;
 }
 
-static ut8 get_con (ut32 instr) {
+static ut8 get_con(ut32 instr) {
 	return (instr >> 18) & 0xf;
 }
 
-static void decode_prefix (struct propeller_cmd *cmd, ut32 instr) {
+static void decode_prefix(struct propeller_cmd *cmd, ut32 instr) {
 	ut8 prefix = (instr >> 18) & 0xF;
 
 	snprintf (cmd->prefix, 15, "%s", conditions[prefix]);
 	cmd->prefix[15] = '\0';
 }
 
-static int decode_jmp (struct propeller_cmd *cmd, ut32 instr) {
+static int decode_jmp(struct propeller_cmd *cmd, ut32 instr) {
 	ut16 opcode;
 	ut8 zcri;
 	int ret = 1;
@@ -189,7 +186,7 @@ static int decode_jmp (struct propeller_cmd *cmd, ut32 instr) {
 							"#0x%x", get_src (instr) << 2);
 				} else {
 					cmd->immed = 0;
-					cmd->src = get_src (instr) << 2; 
+					cmd->src = get_src (instr) << 2;
 					snprintf (cmd->operands, PROP_INSTR_MAXLEN - 1,
 							"0x%x", get_src (instr) << 2);
 				}
@@ -203,7 +200,7 @@ static int decode_jmp (struct propeller_cmd *cmd, ut32 instr) {
 	return ret;
 }
 
-R_API int propeller_decode_command(const ut8 *instr, struct propeller_cmd *cmd)
+int propeller_decode_command(const ut8 *instr, struct propeller_cmd *cmd)
 {
 	int ret = -1;
 	ut32 in;
@@ -280,8 +277,7 @@ R_API int propeller_decode_command(const ut8 *instr, struct propeller_cmd *cmd)
 		case PROP_WAITPNE:
 		case PROP_WAITVID:
 		case PROP_XOR:
-			snprintf (cmd->instr, PROP_INSTR_MAXLEN - 1, "%s",
-					instrs[opcode]);
+			snprintf (cmd->instr, sizeof cmd->instr, "%s", instrs[opcode]);
 
 			if ((opcode == PROP_RDBYTE || opcode == PROP_RDLONG ||
 						opcode == PROP_RDWORD) && (!(get_zcri (in) & 0x2))) {

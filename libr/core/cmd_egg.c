@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2018 - pancake */
+/* radare - LGPL - Copyright 2009-2021 - pancake */
 
 #include "r_cons.h"
 #include "r_core.h"
@@ -11,9 +11,10 @@ static const char *help_msg_g[] = {
 	"gw", "", "Compile and write",
 	"gc", " cmd=/bin/ls", "Set config option for shellcodes and encoders",
 	"gc", "", "List all config options",
-	"gl", "[?]", "List plugins (shellcodes, encoders)",
+	"gL", "[?]", "List plugins (shellcodes, encoders)",
 	"gs", " name args", "Compile syscall name(args)",
 	"gi", " [type]", "Define the shellcode type",
+	"git", " [...]", "Your favourite version control",
 	"gp", " padding", "Define padding for command",
 	"ge", " [encoder] [key]", "Specify an encoder and a key",
 	"gr", "", "Reset r_egg",
@@ -21,10 +22,6 @@ static const char *help_msg_g[] = {
 	"EVAL VARS:", "", "asm.arch, asm.bits, asm.os",
 	NULL
 };
-
-static void cmd_egg_init(RCore *core) {
-	DEFINE_CMD_DESCRIPTOR (core, g);
-}
 
 static void cmd_egg_option(REgg *egg, const char *key, const char *input) {
 	if (!*input) {
@@ -43,9 +40,10 @@ static void cmd_egg_option(REgg *egg, const char *key, const char *input) {
 
 static void showBuffer(RBuffer *b) {
 	int i;
-	if (b && b->length > 0) {
-		for (i = 0; i < b->length; i++) {
-			r_cons_printf ("%02x", b->buf[i]);
+	if (b && r_buf_size (b) > 0) {
+		r_buf_seek (b, 0, R_BUF_SET);
+		for (i = 0; i < r_buf_size (b); i++) {
+			r_cons_printf ("%02x", r_buf_read8 (b));
 		}
 		r_cons_newline ();
 	}
@@ -135,7 +133,7 @@ static int cmd_egg(void *data, const char *input) {
 	char *oa, *p;
 	r_egg_setup (egg,
 		r_config_get (core->config, "asm.arch"),
-		core->assembler->bits, 0,
+		core->rasm->bits, 0,
 		r_config_get (core->config, "asm.os")); // XXX
 	switch (*input) {
 	case 's': // "gs"
@@ -182,7 +180,7 @@ static int cmd_egg(void *data, const char *input) {
 				r_egg_option_set (egg, "egg.padding", input + 2);
 			}
 		} else {
-			eprintf ("Usage: gp [padding]\n");	
+			eprintf ("Usage: gp [padding]\n");
 		}
 		break;
 	case 'e': // "ge"
@@ -200,15 +198,21 @@ static int cmd_egg(void *data, const char *input) {
 				r_egg_option_set (egg, "key", p + 1);
 				r_egg_option_set (egg, "egg.encoder", oa);
 			} else {
-				eprintf ("Usage: ge [encoder] [key]\n");	
+				eprintf ("Usage: ge [encoder] [key]\n");
 			}
 			free (oa);
 		} else {
 			eprintf ("Usage: ge [encoder] [key]\n");
 		}
 		break;
-	case 'i': // "gi" 
-		if (input[1] == ' ') {
+	case 'i': // "gi"
+		if (input[1] == 't') {
+			if (input[2] == '?') {
+				r_sys_cmd ("git --help");
+			} else {
+				r_sys_cmdf ("git%s", input + 2);
+			}
+		} else if (input[1] == ' ') {
 			if (input[0] && input[2]) {
 				r_egg_option_set (egg, "egg.shellcode", input + 2);
 			} else {
@@ -218,6 +222,7 @@ static int cmd_egg(void *data, const char *input) {
 			eprintf ("Usage: gi [shellcode-type]\n");
 		}
 		break;
+	case 'L': // "gL"
 	case 'l': // "gl"
 	{
 		RListIter *iter;
@@ -273,7 +278,7 @@ static int cmd_egg(void *data, const char *input) {
 			} else {
 				char *o = r_egg_option_get (egg, oa);
 				if (o) {
-					r_cons_printf (o);
+					r_cons_print (o);
 					free (o);
 				}
 			}

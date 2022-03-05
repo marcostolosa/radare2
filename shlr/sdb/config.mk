@@ -6,7 +6,7 @@ INCDIR=${PREFIX}/include
 VAPIDIR=${DATADIR}/vala/vapi/
 MANDIR=${DATADIR}/man/man1
 
-SDBVER=1.1.0
+SDBVER=1.8.5
 
 BUILD_MEMCACHE=0
 
@@ -33,13 +33,14 @@ endif
 
 CFLAGS_STD=-std=gnu99 -D_XOPEN_SOURCE=700 -D_POSIX_C_SOURCE=200809L
 #CFLAGS+=-Wno-initializer-overrides
-CFLAGS+=${CFLAGS_STD}
+CFLAGS:=${CFLAGS_STD} $(CFLAGS)
 
 # Hack to fix clang warnings
 ifeq ($(CC),cc)
 CFLAGS+=$(shell gcc -v 2>&1 | grep -q LLVM && echo '-Wno-initializer-overrides')
 endif
 CFLAGS+=-Wall
+CFLAGS+=-fPIC
 CFLAGS+=-Wsign-compare
 # some old gcc doesnt support this
 # CFLAGS+=-Wmissing-field-initializers
@@ -52,7 +53,7 @@ HAVE_VALA=#$(shell valac --version 2> /dev/null)
 # This is hacky
 HOST_CC?=gcc
 RANLIB?=ranlib
-OS?=$(shell uname)
+OS=$(shell uname)
 OSTYPE?=$(shell uname -s)
 ARCH?=$(shell uname -m)
 
@@ -60,6 +61,7 @@ AR?=ar
 CC?=gcc
 EXT_EXE=
 EXT_SO=.so
+EXT_AR=.a
 
 ifneq (,$(findstring MINGW32,${OSTYPE}))
 OS=w32
@@ -77,6 +79,7 @@ LDFLAGS_SHARED?=-shared
 
 ifeq (${OS},w32)
 EXT_EXE=.exe
+EXT_AR=.lib
 EXT_SO=.dll
 LDFLAGS_SHARED=-shared
 endif
@@ -93,16 +96,17 @@ OSTYPE=MINGW32
 endif
 
 ifneq (,$(findstring MINGW,${OSTYPE})$(findstring MSYS,${OSTYPE})$(findstring CYGWIN,${OSTYPE}))
-EXT_SO=dll
+EXT_SO=.dll
+EXT_AR=.a
 SOVER=${EXT_SO}
 CFLAGS+=-DUNICODE -D_UNICODE
 else
-EXT_SO=so
+EXT_SO=.so
 SOVER=${EXT_SO}.${SDBVER}
 endif
 ifeq (${OS},Darwin)
-EXT_SO=dylib
-SOVER=dylib
+EXT_SO=.dylib
+SOVER=.dylib
 LDFLAGS+=-dynamic
 LDFLAGS_SHARED+=-dynamiclib
   ifeq (${ARCH},i386)

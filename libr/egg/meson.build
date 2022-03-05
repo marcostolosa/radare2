@@ -1,4 +1,4 @@
-files = [
+r_egg_sources = [
   'egg.c',
   'egg_Cfile.c',
   'egg_lang.c',
@@ -6,7 +6,6 @@ files = [
   'emit_trace.c',
   'emit_x64.c',
   'emit_x86.c',
-
   #'p/egg_bind.c',
   #'p/egg_cb.c',
   'p/egg_exec.c',
@@ -15,23 +14,50 @@ files = [
   'p/egg_xor.c'
 ]
 
-r_egg = library('r_egg', files,
+r_egg = library('r_egg', r_egg_sources,
   include_directories: [platform_inc],
-  c_args: ['-DCORELIB=1'],
-  link_with: [r_util, r_asm, r_syscall, libr_shlr],
+  c_args: library_cflags,
+  dependencies: [
+    r_util_dep,
+    r_asm_dep,
+    r_syscall_dep,
+    mpc_dep
+  ],
   install: true,
   implicit_include_directories: false,
-  soversion: r2libversion
+  install_rpath: rpath_lib,
+  soversion: r2_libversion
 )
 
-pkgconfig_mod.generate(
-  libraries: [r_egg],
+r_egg_dep = declare_dependency(link_with: r_egg,
+  include_directories: [platform_inc])
+
+r_egg_static = static_library('r_egg_static', r_egg_sources,
+  include_directories: [platform_inc],
+  c_args: library_cflags,
+  dependencies: [
+    r_util_static_dep,
+    r_asm_static_dep,
+    r_syscall_static_dep,
+    mpc_dep
+  ],
+  install: true,
+  implicit_include_directories: false,
+)
+
+r_egg_static_dep = declare_dependency(link_with: r_egg_static,
+  include_directories: [platform_inc])
+
+pkgconfig_mod.generate(r_egg,
   subdirs: 'libr',
-  version: r2version,
+  version: r2_version,
   name: 'r_egg',
   filebase: 'r_egg',
+  libraries: pkgcfg_sanitize_libs,
   requires: [
-    'r_util', 'r_asm', 'r_syscall'
+    'r_util',
+    'r_asm',
+    'r_syscall'
   ],
   description: 'radare foundation libraries'
 )

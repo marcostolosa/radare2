@@ -119,12 +119,22 @@ typedef grub_uint64_t	grub_off_t;
 /* The type for representing a disk block address.  */
 typedef grub_uint64_t	grub_disk_addr_t;
 
+#ifdef __GNUC__
+typedef grub_uint64_t grub_unaligned_uint64_t __attribute__((aligned(1)));
+typedef grub_uint32_t grub_unaligned_uint32_t __attribute__((aligned(1)));
+typedef grub_uint16_t grub_unaligned_uint16_t __attribute__((aligned(1)));
+#else
+typedef grub_uint64_t grub_unaligned_uint64_t;
+typedef grub_uint32_t grub_unaligned_uint32_t;
+typedef grub_uint16_t grub_unaligned_uint16_t;
+#endif
+
 /* Byte-orders.  */
 #ifdef _MSC_VER
 __inline grub_uint16_t grub_swap_bytes16 (grub_uint16_t x)
 {
 	grub_uint16_t _x = (x);
-	(grub_uint16_t)((_x << 8) | (_x >> 8));
+	_x = (grub_uint16_t)((_x << 8) | (_x >> 8));
 	return _x;
 };
 #else
@@ -148,25 +158,25 @@ static inline grub_uint64_t grub_swap_bytes64(grub_uint64_t x)
 #elif _MSC_VER
 __inline grub_uint32_t grub_swap_bytes32(grub_uint32_t x)
 {
-   grub_uint32_t _x = (x); 
-   (grub_uint32_t) ((_x << 24) 
-                    | ((_x & (grub_uint32_t) 0xFF00UL) << 8) 
-                    | ((_x & (grub_uint32_t) 0xFF0000UL) >> 8) 
-                    | (_x >> 24)); 
+   grub_uint32_t _x = (x);
+   _x = (grub_uint32_t) ((_x << 24)
+                    | ((_x & (grub_uint32_t) 0xFF00UL) << 8)
+                    | ((_x & (grub_uint32_t) 0xFF0000UL) >> 8)
+                    | (_x >> 24));
    return _x;
 };
 
 __inline grub_uint64_t  grub_swap_bytes64(grub_uint64_t x)	
-{ 
-   grub_uint64_t _x = (x); 
-   (grub_uint64_t) ((_x << 56) 
-                    | ((_x & (grub_uint64_t) 0xFF00ULL) << 40) 
-                    | ((_x & (grub_uint64_t) 0xFF0000ULL) << 24) 
-                    | ((_x & (grub_uint64_t) 0xFF000000ULL) << 8) 
-                    | ((_x & (grub_uint64_t) 0xFF00000000ULL) >> 8) 
-                    | ((_x & (grub_uint64_t) 0xFF0000000000ULL) >> 24) 
-                    | ((_x & (grub_uint64_t) 0xFF000000000000ULL) >> 40) 
-                    | (_x >> 56)); 
+{
+   grub_uint64_t _x = (x);
+   _x = (grub_uint64_t) ((_x << 56)
+                    | ((_x & (grub_uint64_t) 0xFF00ULL) << 40)
+                    | ((_x & (grub_uint64_t) 0xFF0000ULL) << 24)
+                    | ((_x & (grub_uint64_t) 0xFF000000ULL) << 8)
+                    | ((_x & (grub_uint64_t) 0xFF00000000ULL) >> 8)
+                    | ((_x & (grub_uint64_t) 0xFF0000000000ULL) >> 24)
+                    | ((_x & (grub_uint64_t) 0xFF000000000000ULL) >> 40)
+                    | (_x >> 56));
    return _x;
 };
 #else					/* not gcc 4.3 or newer */

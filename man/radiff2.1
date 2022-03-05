@@ -5,8 +5,9 @@
 .Nd unified binary diffing utility
 .Sh SYNOPSIS
 .Nm radiff2
-.Op Fl AabcCdDhOrspxvz
+.Op Fl AabcCdDhOrspxXvzZ
 .Op Fl t Ar 0-100
+.Op Fl i Ar i,s
 .Op Fl g Ar sym
 .Op Fl S Ar algo
 .Ar file1
@@ -37,12 +38,12 @@ Show disasm instead of hexpairs (honors -a arch and -b bits)
 Graph diff output of given symbol, or between two functions, at given offsets: one for each binary.
 .It Fl h
 Show usage help message.
-.It Fl i
-Compare the list of imports
+.It Fl i Ar i, s
+Compare imports or symbols from given files (radiff2 -ii /bin/ls /bin/cat)
 .It Fl n
 Suppress address names (show only addresses) when code diffing.
 .It Fl O
-Do code diffing with all bytes instead of just the fixed opcode bytes
+Do code diffing with opcode bytes only.
 .It Fl p
 Use physical addressing (io.va=0)
 .It Fl q
@@ -51,10 +52,12 @@ Quiet mode: disable colors and reduce output
 Output in radare commands as a binary patch.
 .It Fl x
 Show two column hexdump diffing.
+.It Fl X
+Show two column hexII diffing.
 .It Fl s
-Calculate text distance from two files.
+Compute edit distance (no substitution, Eugene W. Myers' O(ND) diff algorithm) between two files.
 .It Fl ss
-Same as before but using the Levenstein algorithm (faster but sometimes buggy)
+Compute Levenshtein edit distance (substitution is allowed, O(N^2)) between two files.
 .It Fl S Ar [name, namelen, dist, size, ...]
 Specify which column of the code diffing algo use for diffing
 .It Fl t Ar 0\-100
@@ -69,17 +72,12 @@ Show version information.
 Be verbose sometimes
 .It Fl z
 Perform diff on extracted strings
+.It Fl Z
+Perform diff using zignatures instead of function list (NEW)
 .El
 .Sh SEE ALSO
 .Pp
-.Xr radare2(1) ,
-.Xr rafind2(1) ,
-.Xr rahash2(1) ,
-.Xr rabin2(1) ,
-.Xr rasm2(1) ,
-.Xr ragg2(1) ,
-.Xr rarun2(1) ,
-.Xr rax2(1) ,
+.Xr radare2(1)
 .Sh AUTHORS
 .Pp
 pancake <pancake@nopcode.org>

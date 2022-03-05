@@ -1,30 +1,51 @@
-files = [
+r_lang_sources = [
   'lang.c',
-  'p/c.c',
-  # 'p/cpipe.c',
-  'p/lib.c',
-  'p/pipe.c',
-  'p/rust.c',
-  'p/vala.c'
+  # included in lang.c
+  #'p/c.c',
+  #'p/cpipe.c',
+  #'p/lib.c',
+  #'p/pipe.c',
+  #'p/rust.c',
+  #'p/vala.c'
+  #'p/zig.c',
+  #'p/spp.c',
 ]
 
-r_lang = library('r_lang', files,
-  include_directories: [platform_inc],
-  c_args: ['-DCORELIB=1'],
-  link_with: [r_util, r_cons],
+spp_inc = [platform_inc, include_directories('../../shlr/spp')]
+
+r_lang = library('r_lang', r_lang_sources,
+  include_directories: [platform_inc, spp_inc],
+  c_args: library_cflags,
+  dependencies: [r_util_dep, r_cons_dep],
   install: true,
   implicit_include_directories: false,
-  soversion: r2libversion
+  install_rpath: rpath_lib,
+  soversion: r2_libversion
 )
 
-pkgconfig_mod.generate(
-  libraries: [r_lang],
+r_lang_dep = declare_dependency(link_with: r_lang,
+                                include_directories: [platform_inc])
+
+r_lang_static = static_library('r_lang_static', r_lang_sources,
+  include_directories: [platform_inc, spp_inc],
+  c_args: library_cflags,
+  dependencies: [r_util_static_dep, r_cons_static_dep],
+  install: true,
+  implicit_include_directories: false,
+)
+
+r_lang_static_dep = declare_dependency(link_with: r_lang_static,
+  include_directories: [platform_inc])
+
+pkgconfig_mod.generate(r_lang,
   subdirs: 'libr',
-  version: r2version,
+  version: r2_version,
   name: 'r_lang',
   filebase: 'r_lang',
+  libraries: pkgcfg_sanitize_libs,
   requires: [
-    'r_util', 'r_cons'
+    'r_util',
+    'r_cons'
   ],
   description: 'radare foundation libraries'
 )

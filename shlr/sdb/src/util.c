@@ -1,4 +1,4 @@
-/* sdb - MIT - Copyright 2011-2018 - pancake */
+/* sdb - MIT - Copyright 2011-2022 - pancake */
 
 #include "sdb.h"
 
@@ -14,11 +14,11 @@
 #include <time.h>
 
 struct timezone {
-	int  tz_minuteswest; /* minutes W of Greenwich */
-	int  tz_dsttime;     /* type of dst correction */
+	int tz_minuteswest; /* minutes W of Greenwich */
+	int tz_dsttime;     /* type of dst correction */
 };
 
-int gettimeofday (struct timeval* p, struct timezone * tz) {
+SDB_API int gettimeofday(struct timeval* p, struct timezone * tz) {
 	//ULARGE_INTEGER ul; // As specified on MSDN.
 	ut64 ul = 0;
 	static int tzflag = 0;
@@ -95,22 +95,18 @@ SDB_API ut8 sdb_hash_byte(const char *s) {
 	return h[0] ^ h[1] ^ h[2] ^ h[3];
 }
 
-SDB_API const char *sdb_itoca(ut64 n) {
-	return sdb_itoa (n, sdb_fmt (NULL), 16);
-}
-
 // assert (sizeof (s)>64)
 // if s is null, the returned pointer must be freed!!
-SDB_API char *sdb_itoa(ut64 n, char *s, int base) {
-	static const char* lookup = "0123456789abcdef";
-	char tmpbuf[64], *os = NULL;
+SDB_API char *sdb_itoa(ut64 n, char *os, int base) {
+	static const char *const lookup = "0123456789abcdef";
+	char tmpbuf[64], *s = NULL;
 	const int imax = 62;
 	int i = imax, copy_string = 1;
-	if (s) {
-		*s = 0;
-		os = NULL;
+	if (os) {
+		*os = 0;
+		s = os;
 	} else {
-		os = s = tmpbuf;
+		s = tmpbuf;
 	}
 	if (base < 0) {
 		copy_string = 0;
@@ -120,11 +116,11 @@ SDB_API char *sdb_itoa(ut64 n, char *s, int base) {
 		return NULL;
 	}
 	if (!n) {
-		if (os) {
+		if (!os) {
 			return strdup ("0");
 		}
-		strcpy (s, "0");
-		return s;
+		strcpy (os, "0");
+		return os;
 	}
 	s[imax + 1] = '\0';
 	if (base <= 10) {
@@ -140,16 +136,16 @@ SDB_API char *sdb_itoa(ut64 n, char *s, int base) {
 		}
 		s[i--] = '0';
 	}
-	if (os) {
+	if (!os) {
 		return strdup (s + i + 1);
 	}
 	if (copy_string) {
 		// unnecessary memmove in case we use the return value
 		// return s + i + 1;
-		memmove (s, s + i + 1, strlen (s + i + 1) + 1);
-		return s;
+		memmove (os, s + i + 1, strlen (s + i + 1) + 1);
+		return os;
 	}
-	return s + i + 1;
+	return os + i + 1;
 }
 
 SDB_API ut64 sdb_atoi(const char *s) {
@@ -250,7 +246,9 @@ SDB_API int sdb_alen_ignore_empty(const char *str) {
 		}
 		len++;
 	}
-	if (*p) len++;
+	if (*p) {
+		len++;
+	}
 	return len;
 }
 
@@ -268,15 +266,12 @@ SDB_API char *sdb_anext(char *str, char **next) {
 	return str;
 }
 
-SDB_API const char *sdb_const_anext(const char *str, const char **next) {
-	if (next) {
-		const char *p = strchr (str, SDB_RS);
-		*next = p? p + 1: NULL;
-	}
-	return str;
+SDB_API const char *sdb_const_anext(const char *str) {
+	const char *p = strchr (str, SDB_RS);
+	return p ? p + 1 : NULL;
 }
 
-SDB_API ut64 sdb_now () {
+SDB_API ut64 sdb_now (void) {
 #if USE_MONOTONIC_CLOCK
 	struct timespec ts;
 	if (!clock_gettime (CLOCK_MONOTONIC, &ts)) {
@@ -291,7 +286,7 @@ SDB_API ut64 sdb_now () {
 	return 0LL;
 }
 
-SDB_API ut64 sdb_unow () {
+SDB_API ut64 sdb_unow (void) {
 	ut64 x = 0LL;
 #if USE_MONOTONIC_CLOCK
 	struct timespec ts;

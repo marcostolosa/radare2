@@ -35,7 +35,7 @@
  * ~ + - (unary)  rd_factor
  */
 
-static int do_rd_expr (const char **p, char delimiter, int *valid, int level,
+static int do_rd_expr(const char **p, char delimiter, int *valid, int level,
 		       int *check, int print_errors);
 
 static int
@@ -131,7 +131,7 @@ rd_character (const char **p, int *valid, int print_errors)
 	    }
 	  else
 	    num_digits = 1;
-	  for (b = 0; b < num_digits; ++b)
+	  for (b = 0; b < num_digits; b++)
 	    {
 	      int bit = (*p)[num_digits - 1 - b] - '0';
 	      i += (1 << (b * 3)) * bit;
@@ -189,7 +189,7 @@ check_label (struct label *labels, const char **p, struct label **ret,
   const char *c;
   unsigned s2;
   *p = delspc (*p);
-  for (c = *p; isalnum ((const unsigned char)*c) || *c == '_' || *c == '.'; ++c)
+  for (c = *p; isalnum ((const unsigned char)*c) || *c == '_' || *c == '.'; c++)
     {
     }
   s2 = c - *p;
@@ -462,7 +462,7 @@ rd_factor (const char **p, int *valid, int level, int *check, int print_errors)
 	{
 	  (*p)++;
       int value = rd_value (p, valid, level, check, print_errors);
-      if (value == 0){ 
+      if (value == 0){
         printerr (1, "division by zero\n");
         return -1;
       }

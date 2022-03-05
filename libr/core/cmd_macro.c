@@ -3,30 +3,18 @@
 #include "r_core.h"
 
 static const char *help_msg_lparen[] = {
-	"Usage:", "(foo args,cmd1,cmd2,..)", "Aliases",
-	"(foo args,..,..)", "", "define a macro",
-	"(foo args,..,..)()", "", "define and call a macro",
+	"Usage:", "(foo args;cmd1;cmd2;..)", "Aliases",
+	"(foo args;..;..)", "", "define a macro",
+	"(foo args;..;..)()", "", "define and call a macro",
 	"(-foo)", "", "remove a macro",
 	".(foo)", "", "to call it",
 	"()", "", "break inside macro",
 	"(*", "", "list all defined macros",
 	"", "Argument support:", "",
-	"(foo x y, $0 @ $1)", "", "define fun with args (x - $0, y - $1)",
+	"(foo x y; $0 @ $1)", "", "define fun with args (x - $0; y - $1)",
 	".(foo 128 0x804800)", "", "call it with args",
-	"", "Iterations:", "",
-	".(foo,() $@)", "", "define iterator returning iter index",
-	"x @@ .(foo)", "", "iterate over them",
 	NULL
 };
-
-static void cmd_macro_init(RCore *core) {
-	RCmdDescriptor *d = R_NEW0 (RCmdDescriptor);
-	if (d) {
-		d->cmd = "(";
-		d->help_msg = help_msg_lparen;
-		r_list_append (core->cmd_descriptors, d);
-	}
-}
 
 static int cmd_macro(void *data, const char *input) {
 	char *buf = NULL;
@@ -75,7 +63,7 @@ static int cmd_macro(void *data, const char *input) {
 		if (mustcall) {
 			char *comma = strchr (buf, ' ');
 			if (!comma) {
-				comma = strchr (buf, ',');
+				comma = strchr (buf, ';');
 			}
 			if (comma) {
 				*comma = ' ';

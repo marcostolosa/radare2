@@ -76,7 +76,7 @@
         - if flag & IDASIG__PARSE__MORE_MODULES, goto module, to read another module
 
 
-   More Informations
+   More Information
    -----------------
    Function flags:
    - local functions ((l) with dumpsig) which are static ones.
@@ -99,7 +99,6 @@
 
 #include <r_types.h>
 #include <r_lib.h>
-#include <r_cmd.h>
 #include <r_sign.h>
 #include <signal.h>
 
@@ -282,9 +281,6 @@ static int header_size = 0;
  */
 
 
-// XXX need more infos on compression of version 5 sigs
-// r_inflate doesn't work with them
-
 #define R_FLIRT_NAME_MAX 1024
 
 typedef struct RFlirtTailByte {
@@ -362,7 +358,7 @@ static ut8 read_byte(RBuffer *b) {
 	if (buf_eof || buf_err) {
 		return 0;
 	}
-	if ((length = r_buf_read_at (b, b->cur, &r, 1)) != 1) {
+	if ((length = r_buf_read (b, &r, 1)) != 1) {
 		if (length == -1) {
 			buf_err = true;
 		}
@@ -389,8 +385,8 @@ static ut32 read_word(RBuffer *b) {
 static ut16 read_max_2_bytes(RBuffer *b) {
 	ut16 r = read_byte (b);
 	return (r & 0x80)
-	? ((r & 0x7f) << 8) + read_byte (b)
-	: r;
+		? ((r & 0x7f) << 8) + read_byte (b)
+		: r;
 }
 
 static ut32 read_multiple_bytes(RBuffer *b) {
@@ -435,7 +431,7 @@ static void node_free(RFlirtNode *node) {
 	free (node->variant_bool_array);
 	free (node->pattern_bytes);
 	if (node->module_list) {
-		node->module_list->free = (RListFree) module_free;
+		node->module_list->free = (RListFree)module_free;
 		r_list_free (node->module_list);
 	}
 	if (node->child_list) {
@@ -528,8 +524,7 @@ static void print_node(const RAnal *anal, const RFlirtNode *node, int indent) {
 	}
 }
 
-static int module_match_buffer(const RAnal *anal, const RFlirtModule *module,
-                               ut8 *b, ut64 address, ut32 buf_size) {
+static int module_match_buffer(RAnal *anal, const RFlirtModule *module, ut8 *b, ut64 address, ut32 buf_size) {
 	/* Returns true if module matches b, according to the signatures infos.
 	* Return false otherwise.
 	* The buffer starts from the first byte after the pattern */
@@ -557,7 +552,7 @@ static int module_match_buffer(const RAnal *anal, const RFlirtModule *module,
 		// Once the first module function is found, we need to go through the module->public_functions
 		// list to identify the others. See flirt doc for more information
 
-		next_module_function = r_anal_get_fcn_at ((RAnal *) anal, address + flirt_func->offset, 0);
+		next_module_function = r_anal_get_function_at ((RAnal *) anal, address + flirt_func->offset);
 		if (next_module_function) {
 			char *name;
 			int name_offs = 0;
@@ -576,24 +571,27 @@ static int module_match_buffer(const RAnal *anal, const RFlirtModule *module,
 				next_flirt_func_it = next_flirt_func_it->n;
 			}
 			// resize function if needed
-			next_module_function_size = r_anal_fcn_size (next_module_function);
+			next_module_function_size = r_anal_function_linear_size (next_module_function);
 			if (next_module_function_size < flirt_fcn_size) {
 				RListIter *iter;
 				RListIter *iter_tmp;
 				RAnalFunction *fcn;
 				r_list_foreach_safe (anal->fcns, iter, iter_tmp, fcn) {
-					if (fcn->addr >= next_module_function->addr + next_module_function_size &&
-					fcn->addr < next_module_function->addr + flirt_fcn_size) {
-						r_list_join (next_module_function->bbs, fcn->bbs);
-						r_list_join (next_module_function->locs, fcn->locs);
-						// r_list_join (next_module_function->vars, r_anal_var_all_list (anal, fcn);
+					if (fcn != next_module_function &&
+							fcn->addr >= next_module_function->addr + next_module_function_size &&
+							fcn->addr < next_module_function->addr + flirt_fcn_size) {
+						RListIter *iter_bb;
+						RAnalBlock *block;
+						r_list_foreach (fcn->bbs, iter_bb, block) {
+							r_anal_function_add_block (next_module_function, block);
+						}
 						next_module_function->ninstr += fcn->ninstr;
-						r_anal_fcn_del ((RAnal *) anal, fcn->addr);
+						r_anal_function_delete (fcn);
 					}
 				}
-				r_anal_fcn_resize (anal, next_module_function, flirt_fcn_size);
-				next_module_function_size = r_anal_fcn_size (next_module_function);
-				r_anal_trim_jmprefs (next_module_function);
+				r_anal_function_resize (next_module_function, flirt_fcn_size);
+				next_module_function_size = r_anal_function_linear_size (next_module_function);
+				r_anal_trim_jmprefs ((RAnal *)anal, next_module_function);
 			}
 
 
@@ -619,6 +617,9 @@ static int module_match_buffer(const RAnal *anal, const RFlirtModule *module,
 /* Returns false otherwise. */
 static int node_pattern_match(const RFlirtNode *node, ut8 *b, int buf_size) {
 	int i;
+	if (buf_size < node->length) {
+		return false;
+	}
 	for (i = 0; i < node->length; i++) {
 		if (!node->variant_bool_array[i]) {
 			if (i < node->length && node->pattern_bytes[i] != b[i]) {
@@ -629,7 +630,7 @@ static int node_pattern_match(const RFlirtNode *node, ut8 *b, int buf_size) {
 	return true;
 }
 
-static int node_match_buffer(const RAnal *anal, const RFlirtNode *node, ut8 *b, ut64 address, ut32 buf_size, ut32 buf_idx) {
+static int node_match_buffer(RAnal *anal, const RFlirtNode *node, ut8 *b, ut64 address, ut32 buf_size, ut32 buf_idx) {
 	RListIter *node_child_it, *module_it;
 	RFlirtNode *child;
 	RFlirtModule *module;
@@ -653,46 +654,42 @@ static int node_match_buffer(const RAnal *anal, const RFlirtNode *node, ut8 *b, 
 	return false;
 }
 
-static int node_match_functions(const RAnal *anal, const RFlirtNode *root_node) {
+static int node_match_functions(RAnal *anal, const RFlirtNode *root_node) {
 	/* Tries to find matching functions between the signature infos in root_node
 	* and the analyzed functions in anal
 	* Returns false on error. */
 
-	RListIter *it_func, *node_child_it;
-	ut8 *func_buf = NULL;
-	RAnalFunction *func;
-	RFlirtNode *child;
-	int ret = true;
-
 	if (r_list_length (anal->fcns) == 0) {
-		anal->cb_printf ("There is no analyzed functions. Have you run 'aa'?\n");
+		anal->cb_printf ("There are no analyzed functions. Have you run 'aa'?\n");
 		return true;
 	}
 
-	anal->flb.set_fs (anal->flb.f, "flirt");
+	anal->flb.push_fs (anal->flb.f, "flirt");
+	RListIter *it_func;
+	RAnalFunction *func;
 	r_list_foreach (anal->fcns, it_func, func) {
-		if (func->type != R_ANAL_FCN_TYPE_FCN && func->type != R_ANAL_FCN_TYPE_LOC) { // scan only for unknown functions
+		ut64 func_size = r_anal_function_linear_size (func);
+		ut8 *func_buf = malloc (func_size);
+		if (!func_buf) {
 			continue;
 		}
-
-		int func_size = r_anal_fcn_size (func);
-		func_buf = malloc (func_size);
-		if (!anal->iob.read_at (anal->iob.io, func->addr, func_buf, func_size)) {
-			eprintf ("Couldn't read function\n");
-			ret = false;
-			goto exit;
+		if (!anal->iob.read_at (anal->iob.io, func->addr, func_buf, (int)func_size)) {
+			eprintf ("Couldn't read function %s at 0x%"PFMT64x"\n", func->name, func->addr);
+			free (func_buf);
+			continue;
 		}
+		RListIter *node_child_it;
+		RFlirtNode *child;
 		r_list_foreach (root_node->child_list, node_child_it, child) {
 			if (node_match_buffer (anal, child, func_buf, func->addr, func_size, 0)) {
 				break;
 			}
 		}
-		R_FREE (func_buf);
+		free (func_buf);
 	}
+	anal->flb.pop_fs (anal->flb.f);
 
-exit:
-	free (func_buf);
-	return ret;
+	return true;
 }
 
 static ut8 read_module_tail_bytes(RFlirtModule *module, RBuffer *b) {
@@ -794,7 +791,7 @@ static ut8 read_module_referenced_functions(RFlirtModule *module, RBuffer *b) {
 				goto err_exit;
 			}
 		}
-		if ((int) ref_function_name_length < 0) {
+		if ((int) ref_function_name_length < 0 || ref_function_name_length >= R_FLIRT_NAME_MAX) {
 			goto err_exit;
 		}
 		for (j = 0; j < ref_function_name_length; j++) {
@@ -862,7 +859,8 @@ static ut8 read_module_public_functions(RFlirtModule *module, RBuffer *b, ut8 *f
 			if (current_byte & 0x01 || current_byte & 0x04) { // appears as 'd' or '?' in dumpsig
 #if DEBUG
 				// XXX investigate
-				eprintf ("INVESTIGATE PUBLIC NAME FLAG: %02X @ %04X\n", current_byte, b->cur + header_size);
+				eprintf ("INVESTIGATE PUBLIC NAME FLAG: %02X @ %04X\n", current_byte,
+					r_buf_tell (b) + header_size);
 #endif
 			}
 			current_byte = read_byte (b);
@@ -921,7 +919,8 @@ static ut8 parse_leaf(const RAnal *anal, RBuffer *b, RFlirtNode *node) {
 		}
 #if DEBUG
 		if (crc_length == 0x00 && crc16 != 0x0000) {
-			eprintf ("WARNING non zero crc of zero length @ %04X\n", b->cur + header_size);
+			eprintf ("Warning: non zero crc of zero length @ %04X\n",
+				r_buf_tell (b) + header_size);
 		}
 		eprintf ("crc_len: %02X crc16: %04X\n", crc_length, crc16);
 #endif
@@ -1003,8 +1002,7 @@ static ut8 read_node_variant_mask(RFlirtNode *node, RBuffer *b) {
 			return false;
 		}
 	} else if (node->length <= 0x40) { // it shouldn't be more than 64 bytes
-		node->variant_mask = ((ut64) read_multiple_bytes (b) << 32)
-		+ read_multiple_bytes (b);
+		node->variant_mask = ((ut64)read_multiple_bytes (b) << 32) + read_multiple_bytes (b);
 		if (buf_eof || buf_err) {
 			return false;
 		}
@@ -1029,8 +1027,7 @@ static bool read_node_bytes(RFlirtNode *node, RBuffer *b) {
 		return false;
 	}
 	for (i = 0; i < node->length; i++, current_mask_bit >>= 1) {
-		node->variant_bool_array[i] =
-			(node->variant_mask & current_mask_bit)? true: false;
+		node->variant_bool_array[i] = (bool)(node->variant_mask & current_mask_bit);
 		if (node->variant_mask & current_mask_bit) {
 			node->pattern_bytes[i] = 0x00;
 		} else {
@@ -1220,40 +1217,41 @@ static void print_header(idasig_v5_t *header) {
 #endif
 
 static int parse_header(RBuffer *buf, idasig_v5_t *header) {
-	if (r_buf_read_at (buf, 0, header->magic, sizeof(header->magic)) != sizeof(header->magic)) {
+	r_buf_seek (buf, 0, R_BUF_SET);
+	if (r_buf_read (buf, header->magic, sizeof(header->magic)) != sizeof(header->magic)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, &header->version, sizeof(header->version)) != sizeof(header->version)) {
+	if (r_buf_read (buf, &header->version, sizeof(header->version)) != sizeof(header->version)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, &header->arch, sizeof(header->arch)) != sizeof(header->arch)) {
+	if (r_buf_read (buf, &header->arch, sizeof(header->arch)) != sizeof(header->arch)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->file_types, sizeof(header->file_types)) != sizeof(header->file_types)) {
+	if (r_buf_read (buf, (unsigned char *)&header->file_types, sizeof(header->file_types)) != sizeof(header->file_types)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->os_types, sizeof(header->os_types)) != sizeof(header->os_types)) {
+	if (r_buf_read (buf, (unsigned char *)&header->os_types, sizeof(header->os_types)) != sizeof(header->os_types)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->app_types, sizeof(header->app_types)) != sizeof(header->app_types)) {
+	if (r_buf_read (buf, (unsigned char *)&header->app_types, sizeof(header->app_types)) != sizeof(header->app_types)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->features, sizeof(header->features)) != sizeof(header->features)) {
+	if (r_buf_read (buf, (unsigned char *)&header->features, sizeof(header->features)) != sizeof(header->features)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->old_n_functions, sizeof(header->old_n_functions)) != sizeof(header->old_n_functions)) {
+	if (r_buf_read (buf, (unsigned char *)&header->old_n_functions, sizeof(header->old_n_functions)) != sizeof(header->old_n_functions)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->crc16, sizeof(header->crc16)) != sizeof(header->crc16)) {
+	if (r_buf_read (buf, (unsigned char *)&header->crc16, sizeof(header->crc16)) != sizeof(header->crc16)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, header->ctype, sizeof(header->ctype)) != sizeof(header->ctype)) {
+	if (r_buf_read (buf, header->ctype, sizeof(header->ctype)) != sizeof(header->ctype)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->library_name_len, sizeof(header->library_name_len)) != sizeof(header->library_name_len)) {
+	if (r_buf_read (buf, (unsigned char *)&header->library_name_len, sizeof(header->library_name_len)) != sizeof(header->library_name_len)) {
 		return false;
 	}
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->ctypes_crc16, sizeof(header->ctypes_crc16)) != sizeof(header->ctypes_crc16)) {
+	if (r_buf_read (buf, (unsigned char *)&header->ctypes_crc16, sizeof(header->ctypes_crc16)) != sizeof(header->ctypes_crc16)) {
 		return false;
 	}
 
@@ -1261,8 +1259,7 @@ static int parse_header(RBuffer *buf, idasig_v5_t *header) {
 }
 
 static int parse_v6_v7_header(RBuffer *buf, idasig_v6_v7_t *header) {
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->n_functions, sizeof(header->n_functions))
-	!= sizeof(header->n_functions)) {
+	if (r_buf_read (buf, (unsigned char *)&header->n_functions, sizeof (header->n_functions)) != sizeof (header->n_functions)) {
 		return false;
 	}
 
@@ -1270,7 +1267,7 @@ static int parse_v6_v7_header(RBuffer *buf, idasig_v6_v7_t *header) {
 }
 
 static int parse_v8_v9_header(RBuffer *buf, idasig_v8_v9_t *header) {
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->pattern_size, sizeof(header->pattern_size)) != sizeof(header->pattern_size)) {
+	if (r_buf_read (buf, (unsigned char *)&header->pattern_size, sizeof (header->pattern_size)) != sizeof (header->pattern_size)) {
 		return false;
 	}
 
@@ -1278,7 +1275,7 @@ static int parse_v8_v9_header(RBuffer *buf, idasig_v8_v9_t *header) {
 }
 
 static int parse_v10_header(RBuffer *buf, idasig_v10_t *header) {
-	if (r_buf_read_at (buf, buf->cur, (unsigned char *) &header->unknown, sizeof(header->unknown)) != sizeof(header->unknown)) {
+	if (r_buf_read (buf, (unsigned char *)&header->unknown, sizeof (header->unknown)) != sizeof (header->unknown)) {
 		return false;
 	}
 
@@ -1287,7 +1284,7 @@ static int parse_v10_header(RBuffer *buf, idasig_v10_t *header) {
 
 static RFlirtNode *flirt_parse(const RAnal *anal, RBuffer *flirt_buf) {
 	ut8 *name = NULL;
-	ut8 *buf = NULL, *decompressed_buf = NULL;
+	ut8 *buf = NULL, *dbuf = NULL;
 	RBuffer *r_buf = NULL;
 	int size, decompressed_size;
 	RFlirtNode *node = NULL;
@@ -1331,7 +1328,7 @@ static RFlirtNode *flirt_parse(const RAnal *anal, RBuffer *flirt_buf) {
 				goto exit;
 			}
 
-			if (version >= 9) {
+			if (version >= 10) {
 				if (!(v10 = R_NEW0 (idasig_v10_t))) {
 					goto exit;
 				}
@@ -1347,8 +1344,7 @@ static RFlirtNode *flirt_parse(const RAnal *anal, RBuffer *flirt_buf) {
 		goto exit;
 	}
 
-	if (r_buf_read_at (flirt_buf, flirt_buf->cur, name, header->library_name_len)
-	!= header->library_name_len) {
+	if (r_buf_read (flirt_buf, name, header->library_name_len) != header->library_name_len) {
 		goto exit;
 	}
 
@@ -1357,38 +1353,44 @@ static RFlirtNode *flirt_parse(const RAnal *anal, RBuffer *flirt_buf) {
 	// anal->cb_printf  ("Loading: %s\n", name);
 #if DEBUG
 	print_header (header);
-	header_size = flirt_buf->cur;
+	header_size = r_buf_tell (flirt_buf);
 #endif
 
-	size = r_buf_size (flirt_buf) - flirt_buf->cur;
-	buf = malloc (size);
-	if (r_buf_read_at (flirt_buf, flirt_buf->cur, buf, size) != size) {
+	size = r_buf_size (flirt_buf) - r_buf_tell (flirt_buf);
+	if (!(buf = malloc (size))) {
+		goto exit;
+	}
+	if (r_buf_read (flirt_buf, buf, size) != size) {
 		goto exit;
 	}
 
 	if (header->features & IDASIG__FEATURE__COMPRESSED) {
-		if (version == 5) {
-			eprintf ("Sorry we do not support the signatures version 5 compression.\n");
-			goto exit;
-		}
-		if (!(decompressed_buf = r_inflate (buf, size, NULL, &decompressed_size))) {
-			eprintf ("Decompressing failed.\n");
+		if (version >= 5 && version < 7) {
+			if (!(dbuf = r_inflate_raw (buf, size, NULL, &decompressed_size))) {
+				eprintf ("Decompression failed.\n");
+				goto exit;
+			}
+		} else if (version >= 7) {
+			if (!(dbuf = r_inflate (buf, size, NULL, &decompressed_size))) {
+				eprintf ("Decompression failed.\n");
+				goto exit;
+			}
+		} else {
+			eprintf ("FLIRT signatures version %d is not supported.\n", version);
 			goto exit;
 		}
 
-		free (buf); buf = NULL;
-		buf = decompressed_buf;
+		R_FREE (buf);
+		buf = dbuf;
 		size = decompressed_size;
 	}
 
 	if (!(node = R_NEW0 (RFlirtNode))) {
 		goto exit;
 	}
-	r_buf = r_buf_new ();
-	r_buf->buf = buf;
-	r_buf->length = size;
+	r_buf = r_buf_new_with_pointers (buf, size, false);
 #if DEBUG
-	r_file_dump ("sig_dump", r_buf->buf, r_buf->length);
+	r_file_dump ("sig_dump", buf, size, false);
 #endif
 	if (parse_tree (anal, r_buf, node)) {
 		ret = node;
@@ -1397,9 +1399,6 @@ static RFlirtNode *flirt_parse(const RAnal *anal, RBuffer *flirt_buf) {
 	}
 exit:
 	free (buf);
-	if (r_buf && buf == r_buf->buf) {
-		r_buf->buf = NULL;
-	}
 	r_buf_free (r_buf);
 	free (header);
 	free (v6_v7);
@@ -1414,8 +1413,7 @@ R_API int r_sign_is_flirt(RBuffer *buf) {
 	int ret = false;
 
 	idasig_v5_t *header = R_NEW0 (idasig_v5_t);
-	if (r_buf_read_at (buf, buf->cur, header->magic,\
-		sizeof(header->magic)) != sizeof(header->magic)) {
+	if (r_buf_read (buf, header->magic, sizeof(header->magic)) != sizeof(header->magic)) {
 		goto exit;
 	}
 
@@ -1423,7 +1421,7 @@ R_API int r_sign_is_flirt(RBuffer *buf) {
 		goto exit;
 	}
 
-	if (r_buf_read_at (buf, buf->cur, &header->version, sizeof(header->version)) != sizeof(header->version)) {
+	if (r_buf_read (buf, &header->version, sizeof(header->version)) != sizeof(header->version)) {
 		goto exit;
 	}
 
@@ -1457,7 +1455,7 @@ R_API void r_sign_flirt_dump(const RAnal *anal, const char *flirt_file) {
 	}
 }
 
-R_API void r_sign_flirt_scan(const RAnal *anal, const char *flirt_file) {
+R_API void r_sign_flirt_scan(RAnal *anal, const char *flirt_file) {
 	/*parses a flirt signature file and scan the currently opened file against it.*/
 	RBuffer *flirt_buf;
 	RFlirtNode *node;
@@ -1471,12 +1469,12 @@ R_API void r_sign_flirt_scan(const RAnal *anal, const char *flirt_file) {
 	r_buf_free (flirt_buf);
 	if (node) {
 		if (!node_match_functions (anal, node)) {
-			eprintf ("Error while scanning the file\n");
+			eprintf ("Error while scanning the file %s\n", flirt_file);
 		}
 		node_free (node);
 		return;
 	} else {
-		eprintf ("We encountered an error while parsing the file. Sorry.\n");
+		eprintf ("We encountered an error while parsing the file %s. Sorry.\n", flirt_file);
 		return;
 	}
 }

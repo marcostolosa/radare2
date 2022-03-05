@@ -1,4 +1,4 @@
-/* sdb - MIT - Copyright 2012-2016 - pancake */
+/* sdb - MIT - Copyright 2012-2022 - pancake */
 
 #include <stdarg.h>
 #include "sdb.h"
@@ -8,7 +8,18 @@
 #include "json/api.c"
 #include "json/indent.c"
 
-SDB_API char *sdb_json_get (Sdb *s, const char *k, const char *p, ut32 *cas) {
+SDB_API char *sdb_json_get_str (const char *json, const char *path) {
+	Rangstr rs = json_get (json, path);
+	return rangstr_dup (&rs);
+}
+
+SDB_API bool sdb_json_get_bool(const char *json, const char *path) {
+	Rangstr rs = json_get (json, path);
+	const char *p = rs.p + rs.f;
+	return (rangstr_length (&rs) == 4 && !strncmp (p, "true", 4));
+}
+
+SDB_API char *sdb_json_get(Sdb *s, const char *k, const char *p, ut32 *cas) {
 	Rangstr rs;
 	char *u, *v = sdb_get (s, k, cas);
 	if (!v) {
@@ -40,11 +51,13 @@ SDB_API int sdb_json_num_dec(Sdb *s, const char *k, const char *p, int n, ut32 c
 	return cur - n;
 }
 
-SDB_API int sdb_json_num_get (Sdb *s, const char *k, const char *p, ut32 *cas) {
+SDB_API int sdb_json_num_get(Sdb *s, const char *k, const char *p, ut32 *cas) {
 	char *v = sdb_get (s, k, cas);
 	if (v) {
 		Rangstr rs = json_get (v, p);
-		return rangstr_int (&rs);
+		int ret = rangstr_int (&rs);
+		free (v);
+		return ret;
 	}
 	return 0;
 }
@@ -81,17 +94,17 @@ static bool isstring(const char *s) {
 }
 
 // JSON only supports base16 numbers
-SDB_API int sdb_json_num_set (Sdb *s, const char *k, const char *p, int v, ut32 cas) {
+SDB_API int sdb_json_num_set(Sdb *s, const char *k, const char *p, int v, ut32 cas) {
 	char *_str, str[64];
 	_str = sdb_itoa (v, str, 10);
 	return sdb_json_set (s, k, p, _str, cas);
 }
 
-SDB_API int sdb_json_unset (Sdb *s, const char *k, const char *p, ut32 cas) {
+SDB_API int sdb_json_unset(Sdb *s, const char *k, const char *p, ut32 cas) {
 	return sdb_json_set (s, k, p, NULL, cas);
 }
 
-SDB_API bool sdb_json_set (Sdb *s, const char *k, const char *p, const char *v, ut32 cas) {
+SDB_API bool sdb_json_set(Sdb *s, const char *k, const char *p, const char *v, ut32 cas) {
 	int l, idx, len[3], jslen = 0;
 	char *b, *str = NULL;
 	const char *beg[3];
@@ -107,7 +120,7 @@ SDB_API bool sdb_json_set (Sdb *s, const char *k, const char *p, const char *v, 
 	if (!js) {
 		const int v_len = strlen (v);
 		const int p_len = strlen (p);
-		b = malloc (p_len + v_len + 8);
+		b = (char *)malloc (p_len + v_len + 8);
 		if (b) {
 			int is_str = isstring (v);
 			const char *q = is_str? "\"": "";
@@ -133,7 +146,7 @@ SDB_API bool sdb_json_set (Sdb *s, const char *k, const char *p, const char *v, 
 		// ensured to be positive by sdb_const_get_len
 		// 7 corresponds to the length of '{"":"",'
 		size_t buf_len = jslen + strlen (p) + strlen (v) + 7;
-		char *buf = malloc (buf_len);
+		char *buf = (char *)malloc (buf_len);
 		if (buf) {
 			int curlen, is_str = isstring (v);
 			const char *quote = is_str ? "\"" : "";
@@ -175,7 +188,7 @@ SDB_API bool sdb_json_set (Sdb *s, const char *k, const char *p, const char *v, 
 		if (msz < 1) {
 			return false;
 		}
-		str = malloc (msz);
+		str = (char *)malloc (msz);
 		if (!str) {
 			return false;
 		}
@@ -229,7 +242,7 @@ SDB_API bool sdb_json_set (Sdb *s, const char *k, const char *p, const char *v, 
 			len[2]--;
 		}
 
-		str = malloc (len[0] + len[2] + 1);
+		str = (char *)malloc (len[0] + len[2] + 1);
 		if (!str) {
 			return false;
 		}
@@ -251,7 +264,7 @@ SDB_API const char *sdb_json_format(SdbJsonString *s, const char *fmt, ...) {
 #define JSONSTR_ALLOCATE(y)\
 	if (s->len + y > s->blen) {\
 		s->blen *= 2;\
-		x = realloc (s->buf, s->blen);\
+		x = (char *)realloc (s->buf, s->blen);\
 		if (!x) {\
 			va_end (ap);\
 			return NULL;\
@@ -263,7 +276,7 @@ SDB_API const char *sdb_json_format(SdbJsonString *s, const char *fmt, ...) {
 	}
 	if (!s->buf) {
 		s->blen = 1024;
-		s->buf = malloc (s->blen);
+		s->buf = (char *)malloc (s->blen);
 		if (!s->buf) {
 			return NULL;
 		}
@@ -294,7 +307,7 @@ SDB_API const char *sdb_json_format(SdbJsonString *s, const char *fmt, ...) {
 			case 'l':
 				JSONSTR_ALLOCATE (32);
 				arg_l = va_arg (ap, ut64);
-				snprintf (tmp, sizeof (tmp), "0x%"ULLFMT "x", arg_l);
+				snprintf (tmp, sizeof (tmp), "0x%" PRIx64, arg_l);
 				memcpy (s->buf + s->len, tmp, strlen (tmp));
 				s->len += strlen (tmp);
 				break;

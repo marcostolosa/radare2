@@ -34,7 +34,7 @@
  * Arcadia, CA 91024                                                     *
  *************************************************************************/
  /* initial version released 5/95 */
- /* This file is based upon <> from the Gnu binutils-2.5.2 
+ /* This file is based upon <> from the Gnu binutils-2.5.2
     release, which had the following copyright notice: */
 
 	/* Print SPARC instructions.
@@ -60,7 +60,7 @@
 
 #include "ansidecl.h"
 #include "opcode/lanai.h"
-#include "dis-asm.h"
+#include "disas-asm.h"
 
 static  char *reg_names[] =
 { "r0", "r1", "pc", "ps", "sp", "fp", "r6", "r7",	
@@ -69,11 +69,11 @@ static  char *reg_names[] =
  "r24","r25","r26","r27","r28","r29","r30","r31",
 };
 
-static char *op_names[] = 
+static char *op_names[] =
 { "add", "addc", "sub", "subb", "and", "or", "xor", "sh" };
 
 /* Nonzero if INSN is the opcode for a delayed branch.  */
-static int is_delayed_branch (unsigned long insn);
+static int is_delayed_branch(unsigned long insn);
 
 static int
 is_delayed_branch (insn)
@@ -81,19 +81,19 @@ is_delayed_branch (insn)
 {
   int i;
 
-  for (i = 0; i < NUMOPCODES; ++i)
+  for (i = 0; i < NUMOPCODES; i++)
     {
       CONST struct lanai_opcode *opcode = &lanai_opcodes[i];
-      if ((opcode->match & insn) == opcode->match
-	  && (opcode->lose & insn) == 0)
-	return (opcode->flags & F_BR);
+      if ((opcode->match & insn) == opcode->match && (opcode->lose & insn) == 0) {
+	      return (opcode->flags & F_BR);
+      }
     }
   return 0;
 }
 
 static int opcodes_sorted = 0;
 /* extern void qsort (); */
-static int compare_opcodes (char *a, char *b);
+static int compare_opcodes(char *a, char *b);
 
 /* Print one instruction from MEMADDR on INFO->STREAM.
 
@@ -137,7 +137,7 @@ print_insn_lanai (memaddr, info)
   info->branch_delay_insns = 0;			/* Assume no delay */
   info->target = 0;				/* Assume no target known */
 
-  for (i = 0; i < NUMOPCODES; ++i)
+  for (i = 0; i < NUMOPCODES; i++)
     {
       CONST struct lanai_opcode *opcode = &lanai_opcodes[i];
       if ((opcode->match & insn) == opcode->match
@@ -147,7 +147,7 @@ print_insn_lanai (memaddr, info)
 	     the effect of adding or or'ing the imm13 field to rs1.  */
 	  int imm_added_to_rs1 = 0;
 
-	  /* Do we have an `add' or `or' immediate instruction where rs1 is 
+	  /* Do we have an `add' or `or' immediate instruction where rs1 is
 	     the same as rd?  */
 
 	  if (((!(opcode->match & 0x80000000)			/* RI insn */
@@ -212,8 +212,9 @@ print_insn_lanai (memaddr, info)
 		    break;
 		  case '5': /* Op2 (for RRR) */
 		    (*info->fprintf_func) (stream, "%s", op_names[X_OP2(insn)]);
-		    if(insn&L3_RRR_F)
-		      (*info->fprintf_func) (stream, ".f");
+		    if (insn & L3_RRR_F) {
+			    (*info->fprintf_func) (stream, ".f");
+		    }
 		    break;
 		  case '6': /* Op2 (for RRM) */
 		    (*info->fprintf_func) (stream, "%s", op_names[X_OP2(insn)]);
@@ -237,14 +238,18 @@ print_insn_lanai (memaddr, info)
 			break;
 		  case 'o':
 		    imm = SEX (X_C16(insn), 16);
-		    if (X_RS1 (insn) == 0) goto print_address;
+		    if (X_RS1 (insn) == 0) {
+			    goto print_address;
+		    }
 		    goto print_immediate;
 		  case 's':
 		    imm = SEX (X_C16(insn), 16);
 		    goto print_immediate;
 		  case 'i':
 		    imm = SEX (X_C10(insn), 10);
-		    if (X_RS1 (insn) == 0) goto print_address;
+		    if (X_RS1 (insn) == 0) {
+			    goto print_address;
+		    }
 		    goto print_immediate;
 		  case 'I':
 		    imm = X_C21(insn);
@@ -351,13 +356,13 @@ print_insn_lanai (memaddr, info)
 		      && X_RD (prev_insn) )
 		    {
 		      (*info->fprintf_func) (stream, "\t! ");
-		      info->target 
+		      info->target
 			 = X_C16(     insn) << (L3_RI_H&     insn ? 16 : 0);
 		      if((prev_insn & 0xf07c0000) == 0x50000000 ){
-		        info->target 
+		        info->target
 			  |= X_C16(prev_insn) << (L3_RI_H&prev_insn ? 16 : 0);
 		      }else{
-		        info->target 
+		        info->target
 			  += X_C16(prev_insn) << (L3_RI_H&prev_insn ? 16 : 0);
 		      }
 		      (*info->print_address_func) (info->target, info);
@@ -372,14 +377,15 @@ print_insn_lanai (memaddr, info)
 	  if (opcode->flags & (F_UNBR|F_CONDBR|F_JSR))
 	    {
 		/* FIXME -- check is_annulled flag */
-	      if (opcode->flags & F_UNBR)
-		info->insn_type = dis_branch;
-	      else if (opcode->flags & F_CONDBR)
-		info->insn_type = dis_condbranch;
-	      else if (opcode->flags & F_JSR)
-		info->insn_type = dis_jsr;
-	      else if (opcode->flags & F_BR)
-		info->branch_delay_insns = 1;
+		if (opcode->flags & F_UNBR) {
+			info->insn_type = dis_branch;
+		} else if (opcode->flags & F_CONDBR) {
+			info->insn_type = dis_condbranch;
+		} else if (opcode->flags & F_JSR) {
+			info->insn_type = dis_jsr;
+		} else if (opcode->flags & F_BR) {
+			info->branch_delay_insns = 1;
+		}
 	    }
 
 	  return sizeof (buffer);
@@ -429,8 +435,9 @@ compare_opcodes (a, b)
       int x0 = (match0 & x) != 0;
       int x1 = (match1 & x) != 0;
 
-      if (x0 != x1)
-	return x1 - x0;
+      if (x0 != x1) {
+	      return x1 - x0;
+      }
     }
 
   for (i = 0; i < 32; ++i)
@@ -439,8 +446,9 @@ compare_opcodes (a, b)
       int x0 = (lose0 & x) != 0;
       int x1 = (lose1 & x) != 0;
 
-      if (x0 != x1)
-	return x1 - x0;
+      if (x0 != x1) {
+	      return x1 - x0;
+      }
     }
 
   /* They are functionally equal.  So as long as the opcode table is
@@ -449,9 +457,10 @@ compare_opcodes (a, b)
   /* Our first aesthetic ground is that aliases defer to real insns.  */
   {
     int alias_diff = (op0->flags & F_ALIAS) - (op1->flags & F_ALIAS);
-    if (alias_diff != 0)
-      /* Put the one that isn't an alias first.  */
-      return alias_diff;
+    if (alias_diff != 0) {
+	    /* Put the one that isn't an alias first.  */
+	    return alias_diff;
+    }
   }
 
   /* Except for aliases, two "identical" instructions had
@@ -470,13 +479,14 @@ compare_opcodes (a, b)
 		   op0->name, op1->name);
 	}
     }
-  
+
   /* Fewer arguments are preferred.  */
   {
     int length_diff = strlen (op0->args) - strlen (op1->args);
-    if (length_diff != 0)
-      /* Put the one with fewer arguments first.  */
-      return length_diff;
+    if (length_diff != 0) {
+	    /* Put the one with fewer arguments first.  */
+	    return length_diff;
+    }
   }
 
   /* Put 1+i before i+1.  */
@@ -489,12 +499,14 @@ compare_opcodes (a, b)
 	/* There is a plus in both operands.  Note that a plus
 	   sign cannot be the first character in args,
 	   so the following [-1]'s are valid.  */
-	if (p0[-1] == 'i' && p1[1] == 'i')
-	  /* op0 is i+1 and op1 is 1+i, so op1 goes first.  */
-	  return 1;
-	if (p0[1] == 'i' && p1[-1] == 'i')
-	  /* op0 is 1+i and op1 is i+1, so op0 goes first.  */
-	  return -1;
+	if (p0[-1] == 'i' && p1[1] == 'i') {
+		/* op0 is i+1 and op1 is 1+i, so op1 goes first.  */
+		return 1;
+	}
+	if (p0[1] == 'i' && p1[-1] == 'i') {
+		/* op0 is 1+i and op1 is i+1, so op0 goes first.  */
+		return -1;
+	}
       }
   }
 

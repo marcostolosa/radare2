@@ -1,11 +1,11 @@
-/* radare - LGPL - Copyright 2013-2017 pancake */
+/* radare - LGPL - Copyright 2013-2021 pancake */
 // r2 -Desil ls
 
 #include <r_asm.h>
 #include <r_debug.h>
 
 #if 0
-static int is_io_esil(RDebug *dbg) {
+static bool is_io_esil(RDebug *dbg) {
 	RIODesc *d = dbg->iob.io->desc;
 	if (d && d->plugin && d->plugin->name)
 		if (!strcmp ("esil", d->plugin->name))
@@ -14,18 +14,18 @@ static int is_io_esil(RDebug *dbg) {
 }
 #endif
 
-static int __esil_step_over(RDebug *dbg) {
+static bool __esil_step_over(RDebug *dbg) {
 	eprintf ("TODO: ESIL STEP OVER\n");
 	return true;
 }
 
-static int __esil_step(RDebug *dbg) {
+static bool __esil_step(RDebug *dbg) {
 	int oplen;
 	ut8 buf[64];
 	ut64 pc = 0LL; // getreg("pc")
-	RAnalOp op;
+	RAnalOp op = {0};
 
-	pc = r_debug_reg_sync(dbg, R_REG_TYPE_GPR, false);
+	r_debug_reg_sync(dbg, R_REG_TYPE_GPR, false);
 	pc = r_debug_reg_get (dbg, "PC");
 	eprintf ("PC = 0x%" PFMT64x "\n", pc);
 /// XXX. hack to trick vaddr issue
@@ -33,40 +33,41 @@ static int __esil_step(RDebug *dbg) {
 	//memset (buf, 0, sizeof (buf));
 	dbg->iob.read_at (dbg->iob.io, pc, buf, 64);
 	eprintf ("READ 0x%08"PFMT64x" %02x %02x %02x\n", pc, buf[0], buf[1], buf[2]);
-	oplen = r_anal_op (dbg->anal, &op, pc, buf, sizeof (buf), R_ANAL_OP_MASK_ALL);
+	oplen = r_anal_op (dbg->anal, &op, pc, buf, sizeof (buf), R_ANAL_OP_MASK_ESIL);
 	if (oplen > 0) {
 		if (*R_STRBUF_SAFEGET (&op.esil)) {
 			eprintf ("ESIL: %s\n", R_STRBUF_SAFEGET (&op.esil));
 			r_anal_esil_parse (dbg->anal->esil, R_STRBUF_SAFEGET (&op.esil));
 		}
 	}
+	r_anal_op_fini (&op);
 	eprintf ("TODO: ESIL STEP\n");
 	return true;
 }
 
-static int __esil_init(RDebug *dbg) {
+static bool __esil_init(RDebug *dbg) {
 	dbg->tid = dbg->pid = 1;
 	// aeim
 	// aei
 	return true;
 }
 
-static int __esil_continue(RDebug *dbg, int pid, int tid, int sig) {
+static bool __esil_continue(RDebug *dbg, int pid, int tid, int sig) {
 	eprintf ("TODO continue\n");
 	return true;
 }
 
-static int __esil_continue_syscall(RDebug *dbg, int pid, int num) {
+static bool __esil_continue_syscall(RDebug *dbg, int pid, int num) {
 	eprintf ("TODO: esil continue until syscall\n");
 	return true;
 }
 
-static int __esil_wait(RDebug *dbg, int pid) {
+static RDebugReasonType __esil_wait(RDebug *dbg, int pid) {
 	/* do nothing */
-	return true;
+	return R_DEBUG_REASON_NONE;
 }
 
-static int __esil_attach(RDebug *dbg, int pid) {
+static bool __esil_attach(RDebug *dbg, int pid) {
 	eprintf ("OK attach\n");
 	return true;
 #if 0
@@ -83,7 +84,7 @@ eprintf ("input = %llx\n", o->bfvm->input);
 	return true;
 }
 
-static int __esil_detach(RDebug *dbg, int pid) {
+static bool __esil_detach(RDebug *dbg, int pid) {
 	// reset vm?
 	return true;
 }
@@ -94,6 +95,7 @@ static char *__esil_reg_profile(RDebug *dbg) {
 			"=PC	pc\n"
 			"=SP	esp\n"
 			"=BP	ptr\n"
+			"=A0	rax\n"
 			"gpr	rax	.32	0	0\n"
 			"gpr	pc	.32	0	0\n"
 			"gpr	ptr	.32	4	0\n"
@@ -109,7 +111,7 @@ static char *__esil_reg_profile(RDebug *dbg) {
 	return r_anal_get_reg_profile (dbg->anal);
 }
 
-static int __esil_breakpoint (RBreakpoint *bp, RBreakpointItem *b, bool set) {
+static int __esil_breakpoint(RBreakpoint *bp, RBreakpointItem *b, bool set) {
 	//r_io_system (dbg->iob.io, "db");
 	return false;
 }
@@ -124,7 +126,7 @@ static int __esil_stop(RDebug *dbg) {
 	return true;
 }
 
-static int __reg_read (RDebug *dbg, int type, ut8 *buf, int size) {
+static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 	int sz;
 	/* do nothing */
 	ut8 *bytes = r_reg_get_bytes (dbg->reg, type, &sz);
@@ -148,13 +150,13 @@ RDebugPlugin r_debug_plugin_esil = {
 	.wait = &__esil_wait,
 	.stop = __esil_stop,
 	.kill = __esil_kill,
-	.breakpoint = (RBreakpointCallback)&__esil_breakpoint,
+	.breakpoint = __esil_breakpoint,
 	.reg_profile = __esil_reg_profile,
 	.reg_read = __reg_read,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_DBG,
 	.data = &r_debug_plugin_esil,
 	.version = R2_VERSION

@@ -7,7 +7,7 @@
 #include "r_list.h"
 #include "r_types_base.h"
 
-static RList* parse_list (const char *str) {
+static RList* parse_list(const char *str) {
 	RList *list;
 	char *line, *data, *p, *str_n;
 
@@ -55,7 +55,7 @@ static RList* get_constants(const char *str) {
 	return list;
 }
 
-static bool isFlag (RRegItem *reg) {
+static bool isFlag(RRegItem *reg) {
 	const char *type = r_reg_get_type (reg->type);
 
 	if (!strcmp (type, "flg"))
@@ -64,7 +64,7 @@ static bool isFlag (RRegItem *reg) {
 }
 
 // binary op
-static bool simulate_op (const char *op, ut64 src1, ut64 src2, ut64 old_src1, ut64 old_src2, ut64 *result, int size) {
+static bool simulate_op(const char *op, ut64 src1, ut64 src2, ut64 old_src1, ut64 old_src2, ut64 *result, int size) {
 	ut64 limit;
 	if (size == 64) {
 		limit = UT64_MAX;
@@ -164,13 +164,13 @@ static bool simulate_op (const char *op, ut64 src1, ut64 src2, ut64 old_src1, ut
 }
 
 // fill REGs with known values
-static void fillRegisterValues (RCore *core) {
+static void fillRegisterValues(RCore *core) {
 	RListIter *iter_reg;
 	RList *regs;
 	RRegItem *reg_item;
 	int nr = 10;
 
-	regs = r_reg_get_list (core->dbg->reg, 0);
+	regs = r_reg_get_list (core->dbg->reg, R_REG_TYPE_GPR);
 	if (!regs) {
 		return;
 	}
@@ -185,7 +185,7 @@ static void fillRegisterValues (RCore *core) {
 // split esil string in flags part and main instruction
 // hacky, only tested for x86, TODO: portable version
 // NOTE: esil_main and esil_flg are heap allocated and must be freed by the caller
-static void esil_split_flg (char *esil_str, char **esil_main, char **esil_flg) {
+static void esil_split_flg(char *esil_str, char **esil_main, char **esil_flg) {
 	char *split = strstr (esil_str, "f,=");
 	const int kCommaHits = 2;
 	int hits = 0;
@@ -247,7 +247,7 @@ static char* rop_classify_constant(RCore *core, RList *ropList) {
 		}
 		// init regs with known values
 		fillRegisterValues (core);
-		head = r_reg_get_list (core->dbg->reg, 0);
+		head = r_reg_get_list (core->dbg->reg, R_REG_TYPE_GPR);
 		if (!head) {
 			ct = NULL;
 			goto continue_error;
@@ -268,7 +268,7 @@ static char* rop_classify_constant(RCore *core, RList *ropList) {
 		if (!r_list_find (ops_list, "=", (RListComparator)strcmp)) {
 			goto continue_error;
 		}
-		head = r_reg_get_list (core->dbg->reg, 0);
+		head = r_reg_get_list (core->dbg->reg, R_REG_TYPE_GPR);
 		if (!head) {
 			goto out_error;
 		}
@@ -327,7 +327,7 @@ static char* rop_classify_mov(RCore *core, RList *ropList) {
 	r_list_foreach (ropList, iter_r, esil_str) {
 		// init regs with known values
 		fillRegisterValues (core);
-		head = r_reg_get_list (core->dbg->reg, 0);
+		head = r_reg_get_list (core->dbg->reg, R_REG_TYPE_GPR);
 		if (!head) {
 			goto out_error;
 		}
@@ -350,7 +350,7 @@ static char* rop_classify_mov(RCore *core, RList *ropList) {
 			goto continue_error;
 		}
 
-		head = r_reg_get_list (core->dbg->reg, 0);
+		head = r_reg_get_list (core->dbg->reg, R_REG_TYPE_GPR);
 		if (!head) {
 			goto out_error;
 		}
@@ -426,7 +426,7 @@ static char* rop_classify_arithmetic(RCore *core, RList *ropList) {
 	r_list_foreach (ropList, iter_r, esil_str) {
 		// init regs with known values
 		fillRegisterValues (core);
-		head = r_reg_get_list (core->dbg->reg, 0);
+		head = r_reg_get_list (core->dbg->reg, R_REG_TYPE_GPR);
 		if (!head) {
 			goto out_error;
 		}
@@ -487,7 +487,7 @@ static char* rop_classify_arithmetic(RCore *core, RList *ropList) {
 							    	(RListComparator)strcmp)) {
 							continue;
 						}
-						// dont check flags for arithmetic
+						// don't check flags for arithmetic
 						if (isFlag (item_dst)) {
 							continue;
 						}
@@ -558,7 +558,7 @@ static char* rop_classify_arithmetic_const(RCore *core, RList *ropList) {
 		}
 		// init regs with known values
 		fillRegisterValues (core);
-		head = r_reg_get_list (core->dbg->reg, 0);
+		head = r_reg_get_list (core->dbg->reg, R_REG_TYPE_GPR);
 		if (!head) {
 			arithmetic = NULL;
 			continue;
@@ -608,18 +608,18 @@ static char* rop_classify_arithmetic_const(RCore *core, RList *ropList) {
 						    (RListComparator)strcmp)) {
 						continue;
 					}
-					// dont check flags for arithmetic
+					// don't check flags for arithmetic
 					if (isFlag (item_dst)) {
 						continue;
 					}
 					if (value_dst != diff_dst) {
 						r_list_foreach (constants, iter_const, constant) {
 							ut64 value_ct = r_num_get (NULL, constant);
-							simulate = simulate_op (op, value_src1, value_ct, 
-							  			diff_src1, value_ct, op_result, 
+							simulate = simulate_op (op, value_src1, value_ct,
+							  			diff_src1, value_ct, op_result,
 									 	item_dst->size);
-							simulate_r = simulate_op (op, value_ct, value_src1, 
-							  			value_ct, diff_src1, op_result_r, 
+							simulate_r = simulate_op (op, value_ct, value_src1,
+							  			value_ct, diff_src1, op_result_r,
 										item_dst->size);
 							if (simulate && op_result && value_dst == *op_result) {
 								char *tmp = r_str_newf ("%s <-- %s %s %s;", item_dst->name, item_src1->name, op, constant);
@@ -683,7 +683,7 @@ static int rop_classify_nops(RCore *core, RList *ropList) {
 	return changes;
 }
 
-static void rop_classify (RCore *core, Sdb *db, RList *ropList, const char *key, unsigned int size) {
+static void rop_classify(RCore *core, Sdb *db, RList *ropList, const char *key, unsigned int size) {
 	int nop = 0;  rop_classify_nops (core, ropList);
 	char *mov, *ct, *arithm, *arithm_ct, *str;
 	Sdb *db_nop = sdb_ns (db, "nop", true);
@@ -701,7 +701,7 @@ static void rop_classify (RCore *core, Sdb *db, RList *ropList, const char *key,
 	ct = rop_classify_constant (core, ropList);
 	arithm = rop_classify_arithmetic (core, ropList);
 	arithm_ct = rop_classify_arithmetic_const (core, ropList);
-	str = r_str_newf ("0x%"PFMT64x, size);
+	str = r_str_newf ("0x%u", size);
 
 	if (nop == 1) {
 		char *str_nop = r_str_newf ("%s NOP", str);

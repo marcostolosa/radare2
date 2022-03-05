@@ -1,11 +1,13 @@
-/* radare - LGPL - Copyright 2009-2017 - pancake */
+/* radare - LGPL - Copyright 2009-2021 - pancake */
 
-#include "r_core.h"
-#include "r_util.h"
-#include "r_cons.h"
-#include "sdb/sdb.h"
+#include <r_core.h>
+#include <r_debug.h>
+#include <sdb.h>
 #define TN_KEY_LEN 32
 #define TN_KEY_FMT "%"PFMT64u
+#ifndef SIGKILL
+#define SIGKILL 9
+#endif
 
 #if __linux__ && __GNU_LIBRARY__ && __GLIBC__ && __GLIBC_MINOR__
 #include "r_heap_glibc.h"
@@ -16,26 +18,34 @@
 #include "linux_heap_jemalloc.c"
 #endif
 
+void cmd_anal_reg (RCore *core, const char *str);
+
 static const char *help_msg_d[] = {
 	"Usage:", "d", " # Debug commands",
 	"db", "[?]", "Breakpoints commands",
 	"dbt", "[?]", "Display backtrace based on dbg.btdepth and dbg.btalgo",
 	"dc", "[?]", "Continue execution",
 	"dd", "[?]", "File descriptors (!fd in r1)",
-	"de", "[-sc] [rwx] [rm] [e]", "Debug with ESIL (see de?)",
+	"de", "[-sc] [perm] [rm] [e]", "Debug with ESIL (see de?)",
 	"dg", " <file>", "Generate a core-file (WIP)",
 	"dH", " [handler]", "Transplant process to a new handler",
 	"di", "[?]", "Show debugger backend information (See dh)",
 	"dk", "[?]", "List, send, get, set, signal handlers of child",
-	"dL", " [handler]", "List or set debugger handler",
+	"dL", "[?]", "List or set debugger handler",
 	"dm", "[?]", "Show memory maps",
 	"do", "[?]", "Open process (reload, alias for 'oo')",
-	"doo", "[args]", "Reopen in debugger mode with args (alias for 'ood')",
+	"doo", "[args]", "Reopen in debug mode with args (alias for 'ood')",
+	"doof", "[file]", "Reopen in debug mode from file (alias for 'oodf')",
+	"doc", "", "Close debug session",
 	"dp", "[?]", "List, attach to process or thread id",
 	"dr", "[?]", "Cpu registers",
 	"ds", "[?]", "Step, over, source line",
-	"dt", "[?]", "Display instruction traces (dtr=reset)",
+	"dt", "[?]", "Display instruction traces",
 	"dw", " <pid>", "Block prompt until pid dies",
+#if __WINDOWS__
+	"dW", "", "List process windows",
+	"dWi", "", "Identify window under cursor",
+#endif
 	"dx", "[?]", "Inject and run code on target process (See gs)",
 	NULL
 };
@@ -43,8 +53,10 @@ static const char *help_msg_d[] = {
 static const char *help_msg_db[] = {
 	"Usage: db", "", " # Breakpoints commands",
 	"db", "", "List breakpoints",
+	"db*", "", "List breakpoints in r commands",
 	"db", " sym.main", "Add breakpoint into sym.main",
 	"db", " <addr>", "Add breakpoint",
+	"dbH", " <addr>", "Add hardware breakpoint",
 	"db-", " <addr>", "Remove breakpoint",
 	"db-*", "", "Remove all the breakpoints",
 	"db.", "", "Show breakpoint info in current offset",
@@ -61,19 +73,27 @@ static const char *help_msg_db[] = {
 	"dbn", " [<name>]", "Show or set name for current breakpoint",
 	//
 	"dbi", "", "List breakpoint indexes",
-	"dbic", " <index> <cmd>", "Run command at breakpoint index",
-	"dbie", " <index>", "Enable breakpoint by index",
-	"dbid", " <index>", "Disable breakpoint by index",
-	"dbis", " <index>", "Swap Nth breakpoint",
-	"dbite", " <index>", "Enable breakpoint Trace by index",
-	"dbitd", " <index>", "Disable breakpoint Trace by index",
-	"dbits", " <index>", "Swap Nth breakpoint trace",
+	"dbi", " <addr>", "Show breakpoint index in givengiven  offset",
+	"dbi.", "", "Show breakpoint index in current offset",
+	"dbi-", " <idx>", "Remove breakpoint by index",
+	"dbix", " <idx> [expr]", "Set expression for bp at given index",
+	"dbic", " <idx> <cmd>", "Run command at breakpoint index",
+	"dbie", " <idx>", "Enable breakpoint by index",
+	"dbid", " <idx>", "Disable breakpoint by index",
+	"dbis", " <idx>", "Swap Nth breakpoint",
+	"dbite", " <idx>", "Enable breakpoint Trace by index",
+	"dbitd", " <idx>", "Disable breakpoint Trace by index",
+	"dbits", " <idx>", "Swap Nth breakpoint trace",
 	//
 	"dbh", " x86", "Set/list breakpoint plugin handlers",
 	"dbh-", " <name>", "Remove breakpoint plugin handler",
 	"dbt", "[?]", "Show backtrace. See dbt? for more details",
-	"dbw", " <addr> <rw>", "Add watchpoint",
-	"drx", " number addr len rwx", "Modify hardware breakpoint",
+	"dbx", " [expr]", "Set expression for bp in current offset",
+	"dbw", " <addr> <r/w/rw>", "Add watchpoint",
+#if __WINDOWS__
+	"dbW", " <WM_DEFINE> [?|handle|name]", "Set cond. breakpoint on a window message handler",
+#endif
+	"drx", " number addr len perm", "Modify hardware breakpoint",
 	"drx-", "number", "Clear hardware breakpoint",
 	NULL
 };
@@ -92,6 +112,11 @@ static const char *help_msg_dbt[] = {
 	NULL
 };
 
+static const char *help_msg_dbw[] = {
+	"Usage: dbw", "<addr> <r/w/rw>"," # Add watchpoint",
+	NULL
+};
+
 static const char *help_msg_dc[] = {
 	"Usage: dc", "", "Execution continuation commands",
 	"dc", "", "Continue execution of all children",
@@ -101,12 +126,11 @@ static const char *help_msg_dc[] = {
 	"dcb", "", "Continue back until breakpoint",
 	"dcc", "", "Continue until call (use step into)",
 	"dccu", "", "Continue until unknown call (call reg)",
-#if __WINDOWS__ && !__CYGWIN__
+#if __WINDOWS__
 	"dce", "", "Continue execution (pass exception to program)",
 #endif
 	"dcf", "", "Continue until fork (TODO)",
 	"dck", " <signal> <pid>", "Continue sending signal to process",
-	"dco", " <num>", "Step over <num> instructions",
 	"dcp", "", "Continue until program code (mapped io section)",
 	"dcr", "", "Continue until ret (uses step over)",
 	"dcs", "[?] <num>", "Continue until syscall",
@@ -149,10 +173,10 @@ static const char *help_msg_dd[] = {
 };
 
 static const char *help_msg_de[] = {
-	"Usage:", "de", "[-sc] [rwx] [rm] [expr]",
+	"Usage:", "de", "[-sc] [perm] [rm] [expr]",
 	"de", "", "List esil watchpoints",
 	"de-*", "", "Delete all esil watchpoints",
-	"de", " [rwx] [rm] [addr|reg|from..to]", "Stop on condition",
+	"de", " [perm] [rm] [addr|reg|from..to]", "Stop on condition",
 	"dec", "", "Continue execution until matching expression",
 	"des", "[?] [N]", "Step-in N instructions with esildebug",
 	"desu", " [addr]", "Esildebug until specific address",
@@ -170,7 +194,10 @@ static const char *help_msg_di[] = {
 	"Usage: di", "", "Debugger target information",
 	"di", "", "Show debugger target information",
 	"di*", "", "Same as above, but in r2 commands",
+	"dir", "", "Alias for 'ls'",
+	"diq", "", "Same as above, but in one line",
 	"dij", "", "Same as above, but in JSON format",
+	"dif", " [$a] [$b]", "Compare two files (or $alias files)",
 	NULL
 };
 
@@ -207,15 +234,17 @@ static const char *help_msg_dm[] = {
 	"dmi", " [addr|libname] [symname]", "List symbols of target lib",
 	"dmi*", " [addr|libname] [symname]", "List symbols of target lib in radare commands",
 	"dmi.", "", "List closest symbol to the current address",
+	"dmis", " [libname]", "Same as .dmi* - import all symbols from given lib as flags",
 	"dmiv", "", "Show address of given symbol for given lib",
 	"dmj", "", "List memmaps in JSON format",
-	"dml", " <file>", "Load contents of file into the current map region (see Sl)",
+	"dml", " <file>", "Load contents of file into the current map region",
 	"dmm", "[?][j*]", "List modules (libraries, binaries loaded in memory)",
-	"dmp", "[?] <address> <size> <perms>", "Change page at <address> with <size>, protection <perms> (rwx)",
+	"dmp", "[?] <address> <size> <perms>", "Change page at <address> with <size>, protection <perms> (perm)",
 	"dms", "[?] <id> <mapaddr>", "Take memory snapshot",
 	"dms-", " <id> <mapaddr>", "Restore memory snapshot",
 	"dmS", " [addr|libname] [sectname]", "List sections of target lib",
 	"dmS*", " [addr|libname] [sectname]", "List sections of target lib in radare commands",
+	"dmL", " address size", "Allocate <size> bytes at <address> and promote to huge page",
 	//"dm, " rw- esp 9K", "set 9KB of the stack as read+write (no exec)",
 	"TODO:", "", "map files in process memory. (dmf file @ [addr])",
 	NULL
@@ -223,7 +252,8 @@ static const char *help_msg_dm[] = {
 
 static const char *help_msg_dmi[] = {
 	"Usage: dmi", "", " # List/Load Symbols",
-	"dmi", "[libname] [symname]", "List symbols of target lib",
+	"dmi", "[j|q|*] [libname] [symname]", "List symbols of target lib",
+	"dmia", "[j|q|*] [libname]", "List all info of target lib",
 	"dmi*", "", "List symbols of target lib in radare commands",
 	"dmi.", "", "List closest symbol to the current address",
 	"dmiv", "", "Show address of given symbol for given lib",
@@ -239,6 +269,12 @@ static const char *help_msg_dmm[] = {
 	NULL
 };
 
+static const char *help_msg_dxe[] = {
+	"Usage:", "dxe", " egg-program # see ragg2 and the 'g' command for more details",
+	"dxe", " sym.imp.puts(\"foo\")", "Call puts with a string argument",
+	NULL
+};
+
 static const char *help_msg_dmp[] = {
 	"Usage:", "dmp", " Change page permissions",
 	"dmp", " [addr] [size] [perms]", "Change permissions",
@@ -246,29 +282,15 @@ static const char *help_msg_dmp[] = {
 	NULL
 };
 
-static const char *help_msg_dms[] = {
-	"Usage:", "dms", " # Memory map snapshots",
-	"dms", "", "List memory snapshots",
-	"dmsj", "", "List snapshots in JSON",
-	"dms*", "", "List snapshots in r2 commands",
-	"dms", " addr", "Take snapshot with given id of map at address",
-	"dms", "-id", "Delete memory snapshot",
-	"dmsA", " id", "Apply memory snapshot",
-	"dmsC", " id comment", "Add comment for given snapshot",
-	"dmsd", " id", "Hexdiff given snapshot. See `ccc`.",
-	"dmsw", "", "Snapshot of the writable maps",
-	"dmsa", "", "Full snapshot of all `dm` maps",
-	"dmsf", " [file] @ addr", "Read snapshot from disk",
-	"dmst", " [file] @ addr", "Dump snapshot to disk",
-	// TODO: dmsj - for json
-	NULL
-};
-
 static const char *help_msg_do[] = {
 	"Usage:", "do", " # Debug (re)open commands",
 	"do", "", "Open process (reload, alias for 'oo')",
 	"dor", " [rarun2]", "Comma separated list of k=v rarun2 profile options (e dbg.profile)",
-	"doo", " [args]", "Reopen in debugger mode with args (alias for 'ood')",
+	"doe", "", "Show rarun2 startup profile",
+	"doe!", "", "Edit rarun2 startup profile with $EDITOR",
+	"doo", " [args]", "Reopen in debug mode with args (alias for 'ood')",
+	"doof", " [args]", "Reopen in debug mode from file (alias for 'oodf')",
+	"doc", "", "Close debug session",
 	NULL
 };
 
@@ -276,7 +298,9 @@ static const char *help_msg_dp[] = {
 	"Usage:", "dp", " # Process commands",
 	"dp", "", "List current pid and children",
 	"dp", " <pid>", "List children of pid",
-	"dp*", "", "List all attachable pids",
+	"dpj", " <pid>", "List children of pid in JSON format",
+	"dpl", "", "List all attachable pids",
+	"dplj", "", "List all attachable pids in JSON format",
 	"dp-", " <pid>", "Detach select pid",
 	"dp=", "<pid>", "Select pid",
 	"dpa", " <pid>", "Attach and select pid",
@@ -288,7 +312,9 @@ static const char *help_msg_dp[] = {
 	"dpn", "", "Create new process (fork)",
 	"dptn", "", "Create new thread (clone)",
 	"dpt", "", "List threads of current pid",
+	"dptj", "", "List threads of current pid in JSON format",
 	"dpt", " <pid>", "List threads of process",
+	"dptj", " <pid>", "List threads of process in JSON format",
 	"dpt=", "<thread>", "Attach to thread",
 	NULL
 };
@@ -297,37 +323,32 @@ static const char *help_msg_dr[] = {
 	"Usage: dr", "", "Registers commands",
 	"dr", "", "Show 'gpr' registers",
 	"dr", " <register>=<val>", "Set register value",
+	"dr.", " >$snapshot", "Capture current register values in r2 alias file",
+	"dr,", " [table-query]", "Enumerate registers in table format",
 	"dr8", "[1|2|4|8] [type]", "Display hexdump of gpr arena (WIP)",
 	"dr=", "", "Show registers in columns",
 	"dr?", "<register>", "Show value of given register",
+	"dr??", "", "Same as dr?`drp~=[0]+` # list all reg roles alias names and values",
+	"dra", "[?]", "Manage register arenas. see ara?",
 	"drb", "[1|2|4|8] [type]", "Display hexdump of gpr arena (WIP)",
 	"drc", " [name]", "Related to conditional flag registers",
-	"drC", "", "Show register profile comments",
+	"drC", " [register]", "Show register comments",
 	"drd", "", "Show only different registers",
 	"drf", "", "Show fpu registers (80 bit long double)",
+	"dri", "", "Show inverse registers dump (sorted by value)",
 	"drl", "[j]", "List all register names",
-	"drm", "", "Show multimedia packed registers",
-	"drm", " mmx0 0 32 = 12", "Set the first 32 bit word of the mmx reg to 12",
-	"drn", " <pc>", "Get regname for pc,sp,bp,a0-3,zf,cf,of,sg",
+	"drm", "[?]", "Show multimedia packed registers",
+	//	"drm", " xmm0 0 32 = 12", "Set the first 32 bit word of the xmm0 reg to 12", // Do not advertise - broken
 	"dro", "", "Show previous (old) values of registers",
-	"drp", "", "Display current register profile",
-	"drp", "[?] <file>", "Load register metadata file",
-	"drpi", "", "Display current internal representation of the register profile",
-	"drps", "", "Fake register profile size",
-	"drpj", "", "Show the current register profile (JSON)",
+	"drp", "[?] ", "Display current register profile",
 	"drr", "", "Show registers references (telescoping)",
+	"drrj", "", "Show registers references (telescoping) in JSON format",
 	// TODO: 'drs' to swap register arenas and display old register valuez
 	"drs", "[?]", "Stack register states",
-	"drt", " 16", "Show 16 bit registers",
-	"drt", " 32", "Show 32 bit registers",
-	"drt", " 80", "Show 80 bit registers (long double)",
-	"drt", " all", "Show all registers",
-	"drt", " flg", "Show flag registers",
+	"drS", "", "Show the size of the register profile",
 	"drt", "[?]", "Show all register types",
 	"drw"," <hexnum>", "Set contents of the register arena",
-	"drx", "[?]", "Show all debug registers",
-	"drx", " idx addr len rwx", "Modify hardware breakpoint",
-	"drx-", "number", "Clear hardware breakpoint",
+	"drx", "[?]", "Show debug registers",
 	".dr", "*", "Include common register values in flags",
 	".dr", "-", "Unflag all registers",
 	NULL
@@ -338,6 +359,7 @@ static const char *help_msg_drp[] = {
 	"drp", "", "Show the current register profile",
 	"drp", " [regprofile-file]", "Set the current register profile",
 	"drp", " [gdb] [regprofile-file]", "Parse gdb register profile and dump an r2 profile string",
+	"drpc", "", "Show register profile comments",
 	"drpi", "", "Show internal representation of the register profile",
 	"drp.", "", "Show the current fake size",
 	"drpj", "", "Show the current register profile (JSON)",
@@ -355,11 +377,15 @@ static const char *help_msg_drs[] = {
 
 static const char *help_msg_drt[] = {
 	"Usage:", "drt", " [type] [size]    # debug register types",
-	"drt", "[*j]", "List all available register types",
-	"drt", "[*j] [size]", "Show all regs in the profile of size",
-	"drt", "[*j] [type]", "Show all regs in the profile of this type",
-	"drt", "[*j] [type] [size]", "Same as above for type and size",
-	"drt", "[*j] [type] [size]", "Same as above for type and size",
+	"drt", "", "List all available register types",
+	"drt", " [size]", "Show all regs in the profile of size",
+	"drt", " 16", "Show 16 bit registers",
+	"drt", " [type]", "Show all regs in the profile of this type",
+	"drt", " all", "Show all registers",
+	"drt", " fpu", "Show fpu registers",
+	"drt", " [type] [size]", "Same as above for type and size",
+	"drt", " [type] [size]", "Same as above for type and size",
+	"drt*", "", "List flags in r commands",
 	NULL
 };
 
@@ -368,6 +394,29 @@ static const char *help_msg_drx[] = {
 	"drx", "", "List all (x86?) hardware breakpoints",
 	"drx", " <number> <address> <length> <perms>", "Modify hardware breakpoint",
 	"drx-", "<number>", "Clear hardware breakpoint",
+	NULL
+};
+
+
+static const char *help_msg_drm[] = {
+	"Usage: drm", " [reg] [idx] [wordsize] [= value]", "Show multimedia packed registers",
+	"drm", "", "Show XMM registers",
+	"drm", " xmm0", "Show all packings of xmm0",
+	"drm", " xmm0 0 32 = 12", "Set the first 32 bit word of the xmm0 reg to 12",
+	"drmb", " [reg]", "Show registers as bytes",
+	"drmw", " [reg]", "Show registers as words",
+	"drmd", " [reg]", "Show registers as doublewords",
+	"drmq", " [reg]", "Show registers as quadwords",
+	"drmq", " xmm0~[0]", "Show first quadword of xmm0",
+	"drmf", " [reg]", "Show registers as 32-bit floating point",
+	"drml", " [reg]", "Show registers as 64-bit floating point",
+	"drmyb", " [reg]", "Show YMM registers as bytes",
+	"drmyw", " [reg]", "Show YMM registers as words",
+	"drmyd", " [reg]", "Show YMM registers as doublewords",
+	"drmyq", " [reg]", "Show YMM registers as quadwords",
+	"drmq", " ymm0~[3]", "Show fourth quadword of ymm0",
+	"drmyf", " [reg]", "Show YMM registers as 32-bit floating point",
+	"drmyl", " [reg]", "Show YMM registers as 64-bit floating point",
 	NULL
 };
 
@@ -390,7 +439,8 @@ static const char *help_msg_ds[] = {
 static const char *help_msg_dsu[] = {
 	"Usage: dsu", "", "Step until commands",
 	"dsu", " <address>", "Step until <address>",
-	"dsui", "[r] <instr>", "Step until an instruction that matches <instr>, use dsuir for regex match",
+	"dsui", " <instr>", "Step until an instruction disasm matches",
+	"dsuir", " <regex>", "like dsui, but using a regexp",
 	"dsuo", " <optype> [<optype> ...]", "Step until an instr matches one of the <optype>s.",
 	"dsue", " <esil>", "Step until <esil> expression matches",
 	"dsuf", " <flag>", "Step until pc == <flag> matching name",
@@ -405,15 +455,14 @@ static const char *help_msg_dt[] = {
 	"dt*", "", "List all traced opcode offsets",
 	"dt+"," [addr] [times]", "Add trace for address N times",
 	"dt-", "", "Reset traces (instruction/calls)",
-	"dtD", "", "Show dwarf trace (at*|rsc dwarf-traces $FILE)",
+	"dt=", "", "Show ascii-art color bars with the debug trace ranges",
 	"dta", " 0x804020 ...", "Only trace given addresses",
 	"dtc[?][addr]|([from] [to] [addr])", "", "Trace call/ret",
-	"dtd", "", "List all traced disassembled",
+	"dtd", "[qi] [nth-start]", "List all traced disassembled (quiet, instructions)",
 	"dte", "[?]", "Show esil trace logs",
 	"dtg", "", "Graph call/ret trace",
 	"dtg*", "", "Graph in agn/age commands. use .dtg*;aggi for visual",
 	"dtgi", "", "Interactive debug trace",
-	"dtr", "", "Show traces as range commands (ar+)",
 	"dts", "[?]", "Trace sessions",
 	"dtt", " [tag]", "Select trace tag (no arg unsets)",
 	NULL
@@ -431,12 +480,11 @@ static const char *help_msg_dte[] = {
 
 static const char *help_msg_dts[] = {
 	"Usage:", "dts[*]", "",
-	"dts", "", "List all trace sessions",
-	"dts+", "", "Add trace session",
-	"dts-", "id", "Delete trace session",
-	"dtsf", " [file] ", "Read trace sessions from disk",
-	"dtst", " [file] ", "Save trace sessions to disk",
-	"dtsC", " id comment", "Add comment for given trace session",
+	"dts+", "", "Start trace session",
+	"dts-", "", "Stop trace session",
+	"dtst", " [dir] ", "Save trace sessions to disk",
+	"dtsf", " [dir] ", "Read trace sessions from disk",
+	"dtsm", "", "List current memory map and hash",
 	NULL
 };
 
@@ -444,12 +492,22 @@ static const char *help_msg_dx[] = {
 	"Usage: dx", "", " # Code injection commands",
 	"dx", " <opcode>...", "Inject opcodes",
 	"dxa", " nop", "Assemble code and inject",
+	"dxc", " addr arg1 arg2 arg3", "Compile egg expression and inject it",
 	"dxe", " egg-expr", "Compile egg expression and inject it",
 	"dxr", " <opcode>...", "Inject opcodes and restore state",
 	"dxs", " write 1, 0x8048, 12", "Syscall injection (see gs)",
 	"\nExamples:", "", "",
 	"dx", " 9090", "Inject two x86 nop",
 	"\"dxa mov eax,6;mov ebx,0;int 0x80\"", "", "Inject and restore state",
+	NULL
+};
+
+static const char *help_msg_dL[] = {
+	"Usage: dL", "", " # List or set debugger handler",
+	"dL", "", "List debugger handlers",
+	"dLq", "", "List debugger handlers in quiet mode",
+	"dLj", "", "List debugger handlers in json mode",
+	"dL", " <handler>", "Set debugger handler",
 	NULL
 };
 
@@ -463,38 +521,6 @@ struct trace_node {
 	int refs;
 };
 
-static void cmd_debug_init(RCore *core) {
-	DEFINE_CMD_DESCRIPTOR (core, d);
-	DEFINE_CMD_DESCRIPTOR (core, db);
-	DEFINE_CMD_DESCRIPTOR (core, dbt);
-	DEFINE_CMD_DESCRIPTOR (core, dc);
-	DEFINE_CMD_DESCRIPTOR (core, dcs);
-	DEFINE_CMD_DESCRIPTOR (core, dcu);
-	DEFINE_CMD_DESCRIPTOR (core, dd);
-	DEFINE_CMD_DESCRIPTOR (core, de);
-	DEFINE_CMD_DESCRIPTOR (core, des);
-	DEFINE_CMD_DESCRIPTOR (core, di);
-	DEFINE_CMD_DESCRIPTOR (core, dk);
-	DEFINE_CMD_DESCRIPTOR (core, dko);
-	DEFINE_CMD_DESCRIPTOR (core, dm);
-	DEFINE_CMD_DESCRIPTOR (core, dmi);
-	DEFINE_CMD_DESCRIPTOR (core, dmm);
-	DEFINE_CMD_DESCRIPTOR (core, dmp);
-	DEFINE_CMD_DESCRIPTOR (core, dms);
-	DEFINE_CMD_DESCRIPTOR (core, do);
-	DEFINE_CMD_DESCRIPTOR (core, dp);
-	DEFINE_CMD_DESCRIPTOR (core, dr);
-	DEFINE_CMD_DESCRIPTOR (core, drp);
-	DEFINE_CMD_DESCRIPTOR (core, drs);
-	DEFINE_CMD_DESCRIPTOR (core, drt);
-	DEFINE_CMD_DESCRIPTOR (core, drx);
-	DEFINE_CMD_DESCRIPTOR (core, ds);
-	DEFINE_CMD_DESCRIPTOR (core, dt);
-	DEFINE_CMD_DESCRIPTOR (core, dte);
-	DEFINE_CMD_DESCRIPTOR (core, dts);
-	DEFINE_CMD_DESCRIPTOR (core, dx);
-}
-
 // XXX those tmp files are never removed and we shuoldnt use files for this
 static void setRarunProfileString(RCore *core, const char *str) {
 	char *file = r_file_temp ("rarun2");
@@ -506,7 +532,7 @@ static void setRarunProfileString(RCore *core, const char *str) {
 	free (file);
 }
 
-static void cmd_debug_cont_syscall (RCore *core, const char *_str) {
+static void cmd_debug_cont_syscall(RCore *core, const char *_str) {
 	// TODO : handle more than one stopping syscall
 	int i, *syscalls = NULL;
 	int count = 0;
@@ -553,6 +579,9 @@ static int showreg(RCore *core, const char *str) {
 	if (role != -1) {
 		rname = r_reg_get_name (core->dbg->reg, role);
 	}
+	if (!rname) {
+		return 0;
+	}
 	r = r_reg_get (core->dbg->reg, rname , -1);
 	if (r) {
 		ut64 off;
@@ -568,6 +597,10 @@ static int showreg(RCore *core, const char *str) {
 				break;
 			case 128:
 				r_cons_printf ("0x%016"PFMT64x"%016"PFMT64x"\n", value.v128.High, value.v128.Low);
+				break;
+			case 256:
+				r_cons_printf ("0x%016"PFMT64x"%016"PFMT64x"%016"PFMT64x"%016"PFMT64x"\n",
+					   value.v256.High.High, value.v256.High.Low, value.v256.Low.High, value.v256.Low.Low);
 				break;
 			default:
 				r_cons_printf ("Error while retrieving reg '%s' of %i bits\n", str +1, r->size);
@@ -587,7 +620,7 @@ static int showreg(RCore *core, const char *str) {
 	return size;
 }
 
-static RGraphNode *get_graphtrace_node (RGraph *g, Sdb *nodes, struct trace_node *tn) {
+static RGraphNode *get_graphtrace_node(RGraph *g, Sdb *nodes, struct trace_node *tn) {
 	RGraphNode *gn;
 	char tn_key[TN_KEY_LEN];
 
@@ -600,13 +633,13 @@ static RGraphNode *get_graphtrace_node (RGraph *g, Sdb *nodes, struct trace_node
 	return gn;
 }
 
-static void dot_trace_create_node (RTreeNode *n, RTreeVisitor *vis) {
+static void dot_trace_create_node(RTreeNode *n, RTreeVisitor *vis) {
 	struct dot_trace_ght *data = (struct dot_trace_ght *)vis->data;
 	struct trace_node *tn = n->data;
 	if (tn) get_graphtrace_node (data->graph, data->graphnodes, tn);
 }
 
-static void dot_trace_discover_child (RTreeNode *n, RTreeVisitor *vis) {
+static void dot_trace_discover_child(RTreeNode *n, RTreeVisitor *vis) {
 	struct dot_trace_ght *data = (struct dot_trace_ght *)vis->data;
 	RGraph *g = data->graph;
 	Sdb *gnodes = data->graphnodes;
@@ -694,7 +727,7 @@ static void dot_trace_traverse(RCore *core, RTree *t, int fmt) {
 static int step_until(RCore *core, ut64 addr) {
 	ut64 off = r_debug_reg_get (core->dbg, "PC");
 	if (!off) {
-		eprintf ("Cannot 'drn pc'\n");
+		eprintf ("Cannot 'drn PC'\n");
 		return false;
 	}
 	if (!addr) {
@@ -746,13 +779,22 @@ static int step_until_esil(RCore *core, const char *esilstr) {
 	return true;
 }
 
+static bool is_repeatable_inst(RCore *core, ut64 addr) {
+	// we have read the bytes already
+	RAnalOp *op = r_core_op_anal (core, addr, R_ANAL_OP_MASK_ALL);
+	bool ret = op && ((op->prefix & R_ANAL_OP_PREFIX_REP) || (op->prefix & R_ANAL_OP_PREFIX_REPNE));
+	r_anal_op_free (op);
+	return ret;
+}
+
 static int step_until_inst(RCore *core, const char *instr, bool regex) {
 	RAsmOp asmop;
 	ut8 buf[32];
 	ut64 pc;
 	int ret;
+	bool is_x86 = r_str_startswith (r_config_get (core->config, "asm.arch"), "x86");
 
-	instr = r_str_trim_ro (instr);
+	instr = r_str_trim_head_ro (instr);
 	if (!core || !instr|| !core->dbg) {
 		eprintf ("Wrong state\n");
 		return false;
@@ -765,23 +807,29 @@ static int step_until_inst(RCore *core, const char *instr, bool regex) {
 		if (r_debug_is_dead (core->dbg)) {
 			break;
 		}
-		r_debug_step (core->dbg, 1);
+		pc = r_debug_reg_get (core->dbg, "PC");
+		if (is_x86 && is_repeatable_inst (core, pc)) {
+			r_debug_step_over (core->dbg, 1);
+		} else {
+			r_debug_step (core->dbg, 1);
+		}
+		pc = r_debug_reg_get (core->dbg, "PC");
 		r_debug_reg_sync (core->dbg, R_REG_TYPE_ALL, false);
 		/* TODO: disassemble instruction and strstr */
-		pc = r_debug_reg_get (core->dbg, "PC");
-		r_asm_set_pc (core->assembler, pc);
+		r_asm_set_pc (core->rasm, pc);
 		// TODO: speedup if instructions are in the same block as the previous
 		r_io_read_at (core->io, pc, buf, sizeof (buf));
-		ret = r_asm_disassemble (core->assembler, &asmop, buf, sizeof (buf));
-		eprintf ("0x%08"PFMT64x" %d %s\n", pc, ret, asmop.buf_asm);
+		ret = r_asm_disassemble (core->rasm, &asmop, buf, sizeof (buf));
+		eprintf ("0x%08"PFMT64x" %d %s\n", pc, ret, r_asm_op_get_asm (&asmop)); // asmop.buf_asm);
 		if (ret > 0) {
+			const char *buf_asm = r_asm_op_get_asm (&asmop);
 			if (regex) {
-				if (r_regex_match (instr, "e", asmop.buf_asm)) {
+				if (r_regex_match (instr, "e", buf_asm)) {
 					eprintf ("Stop.\n");
 					break;
 				}
 			} else {
-				if (strstr (asmop.buf_asm, instr)) {
+				if (strstr (buf_asm, instr)) {
 					eprintf ("Stop.\n");
 					break;
 				}
@@ -800,22 +848,21 @@ static int step_until_optype(RCore *core, const char *_optypes) {
 
 	RList *optypes_list = NULL;
 	RListIter *iter;
-	char *optype;
-	char *optypes = strdup (r_str_trim_head ((char *) _optypes));
+	char *optype, *optypes = strdup (r_str_trim_head_ro ((char *) _optypes));
 
 	if (!core || !core->dbg) {
-		eprint ("Wrong state");
+		eprintf ("Wrong state\n");
 		res = false;
 		goto end;
 	}
-
 	if (!optypes || !*optypes) {
-		eprint ("Missing optypes. Usage example: 'dsuo ucall ujmp'");
+		eprintf ("Missing optypes. Usage example: 'dsuo ucall ujmp'\n");
 		res = false;
 		goto end;
 	}
 
-	optypes_list = r_str_split_list (optypes, " ");
+	bool debugMode = r_config_get_i (core->config, "cfg.debug");
+	optypes_list = r_str_split_list (optypes, " ", 0);
 
 	r_cons_break_push (NULL, NULL);
 	for (;;) {
@@ -823,27 +870,32 @@ static int step_until_optype(RCore *core, const char *_optypes) {
 			core->break_loop = true;
 			break;
 		}
-		if (r_debug_is_dead (core->dbg)) {
-			core->break_loop = true;
-			break;
+		if (debugMode) {
+			if (r_debug_is_dead (core->dbg)) {
+				core->break_loop = true;
+				break;
+			}
+			r_debug_step (core->dbg, 1);
+			pc = r_debug_reg_get (core->dbg, core->dbg->reg->name[R_REG_NAME_PC]);
+			// 'Copy' from r_debug_step_soft
+			if (!core->dbg->iob.read_at) {
+				eprintf ("ERROR\n");
+				res = false;
+				goto cleanup_after_push;
+			}
+			if (!core->dbg->iob.read_at (core->dbg->iob.io, pc, buf, sizeof (buf))) {
+				eprintf ("ERROR\n");
+				res = false;
+				goto cleanup_after_push;
+			}
+		} else {
+			r_core_esil_step (core, UT64_MAX, NULL, NULL, false);
+			pc = r_reg_getv (core->anal->reg, "PC");
 		}
-		r_debug_step (core->dbg, 1);
+		r_io_read_at (core->io, pc, buf, sizeof (buf));
 
-		pc = r_debug_reg_get (core->dbg, core->dbg->reg->name[R_REG_NAME_PC]);
-
-		// 'Copy' from r_debug_step_soft
-		if (!core->dbg->iob.read_at) {
-			eprint("ERROR\n");
-			res = false;
-			goto cleanup_after_push;
-		}
-		if (!core->dbg->iob.read_at (core->dbg->iob.io, pc, buf, sizeof (buf))) {
-			eprint("ERROR\n");
-			res = false;
-			goto cleanup_after_push;
-		}
-		if (!r_anal_op (core->dbg->anal, &op, pc, buf, sizeof (buf), R_ANAL_OP_MASK_ALL)) {
-			eprint("ERROR\n");
+		if (!r_anal_op (core->dbg->anal, &op, pc, buf, sizeof (buf), R_ANAL_OP_MASK_BASIC)) {
+			eprintf ("Error: r_anal_op failed\n");
 			res = false;
 			goto cleanup_after_push;
 		}
@@ -873,7 +925,7 @@ static int step_until_flag(RCore *core, const char *instr) {
 	RFlagItem *f;
 	ut64 pc;
 
-	instr = r_str_trim_ro (instr);
+	instr = r_str_trim_head_ro (instr);
 	if (!core || !instr || !core->dbg) {
 		eprintf ("Wrong state\n");
 		return false;
@@ -905,7 +957,7 @@ beach:
 
 /* until end of frame */
 static int step_until_eof(RCore *core) {
-	int maxLoops = 1024;
+	int maxLoops = 200000;
 	ut64 off, now = r_debug_reg_get (core->dbg, "SP");
 	r_cons_break_push (NULL, NULL);
 	do {
@@ -928,7 +980,7 @@ static int step_line(RCore *core, int times) {
 	char *tmp_ptr = NULL;
 	ut64 off = r_debug_reg_get (core->dbg, "PC");
 	if (off == 0LL) {
-		eprintf ("Cannot 'drn pc'\n");
+		eprintf ("Cannot 'drn PC'\n");
 		return false;
 	}
 	file[0] = 0;
@@ -997,11 +1049,11 @@ static void cmd_debug_pid(RCore *core, const char *input) {
 		/* XXX: but we want fine-grained access to process resources */
 		pid = atoi (input + 2);
 		if (pid > 0) {
-			ptr = r_str_trim_ro (input + 2);
+			ptr = r_str_trim_head_ro (input + 2);
 			ptr = strchr (ptr, ' ');
 			sig = ptr? atoi (ptr + 1): 0;
 			eprintf ("Sending signal '%d' to pid '%d'\n", sig, pid);
-			r_debug_kill (core->dbg, 0, false, sig);
+			r_debug_kill (core->dbg, pid, false, sig);
 		} else eprintf ("cmd_debug_pid: Invalid arguments (%s)\n", input);
 		break;
 	case 'n': // "dpn"
@@ -1010,10 +1062,17 @@ static void cmd_debug_pid(RCore *core, const char *input) {
 	case 't': // "dpt"
 		switch (input[2]) {
 		case '\0': // "dpt"
-			r_debug_thread_list (core->dbg, core->dbg->pid);
+			r_debug_thread_list (core->dbg, core->dbg->pid, 0);
+			break;
+		case 'j': // "dptj"
+			if (input[3] != ' ') { // "dptj"
+				r_debug_thread_list (core->dbg, core->dbg->pid, 'j');
+			} else { // "dptj "
+				r_debug_thread_list (core->dbg, atoi (input + 3), 'j');
+			}
 			break;
 		case ' ': // "dpt "
-			r_debug_thread_list (core->dbg, atoi (input + 2));
+			r_debug_thread_list (core->dbg, atoi (input + 2), 0);
 			break;
 		case '=': // "dpt="
 			r_debug_select (core->dbg, core->dbg->pid,
@@ -1033,20 +1092,20 @@ static void cmd_debug_pid(RCore *core, const char *input) {
 			r_debug_attach (core->dbg, (int) r_num_math (
 						core->num, input + 2));
 		} else {
-			if (core->file && core->io) {
+			if (core->io && core->io->desc) {
 				r_debug_attach (core->dbg,
-						r_io_fd_get_pid (core->io, core->file->fd));
+						r_io_fd_get_pid (core->io, core->io->desc->fd));
 			}
 		}
 		r_debug_select (core->dbg, core->dbg->pid, core->dbg->tid);
 		r_config_set_i (core->config, "dbg.swstep",
 				(core->dbg->h && !core->dbg->h->canstep));
-		r_core_cmdf (core, "=!pid %d", core->dbg->pid);
+		r_core_cmdf (core, ":pid %d", core->dbg->pid);
 		break;
 	case 'f': // "dpf"
-		if (core->file && core->io) {
-			r_debug_select (core->dbg, r_io_fd_get_pid (core->io, core->file->fd),
-					r_io_fd_get_tid (core->io, core->file->fd));
+		if (core->io && core->io->desc) {
+			r_debug_select (core->dbg, r_io_fd_get_pid (core->io, core->io->desc->fd),
+					r_io_fd_get_tid (core->io, core->io->desc->fd));
 		}
 		break;
 	case '=': // "dp="
@@ -1054,11 +1113,26 @@ static void cmd_debug_pid(RCore *core, const char *input) {
 				(int) r_num_math (core->num, input + 2), core->dbg->tid);
 		core->dbg->main_pid = r_num_math (core->num, input + 2);
 		break;
-	case '*': // "dp*"
-		r_debug_pid_list (core->dbg, 0, 0);
+	case 'l': // "dpl"
+		switch (input[2]) {
+		case '\0': // "dpl"
+			r_debug_pid_list (core->dbg, 0, 0);
+			break;
+		case 'j': // "dplj"
+			r_debug_pid_list (core->dbg, 0, 'j');
+			break;
+		}
 		break;
 	case 'j': // "dpj"
-		r_debug_pid_list (core->dbg, core->dbg->pid, 'j');
+		switch (input[2]) {
+		case '\0': // "dpj"
+			r_debug_pid_list (core->dbg, core->dbg->pid, 'j');
+			break;
+		case ' ': // "dpj "
+			r_debug_pid_list (core->dbg,
+					(int) R_MAX (0, (int)r_num_math (core->num, input + 2)), 'j');
+			break;
+		}
 		break;
 	case 'e': // "dpe"
 		{
@@ -1109,129 +1183,11 @@ static void cmd_debug_backtrace(RCore *core, const char *input) {
 			oaddr = addr;
 			/* XXX Bottleneck..we need to reuse the bytes read by traptrace */
 			// XXX Do asm.arch should define the max size of opcode?
-			r_core_read_at (core, addr, buf, 32); // XXX longer opcodes?
-			r_anal_op (core->anal, &analop, addr, buf, sizeof (buf), R_ANAL_OP_MASK_ALL);
+			r_io_read_at (core->io, addr, buf, 32); // XXX longer opcodes?
+			r_anal_op (core->anal, &analop, addr, buf, sizeof (buf), R_ANAL_OP_MASK_BASIC);
 		} while (r_bp_traptrace_at (core->dbg->bp, addr, analop.size));
 		r_bp_traptrace_enable (core->dbg->bp, false);
 	}
-}
-
-static int __r_debug_snap_diff(RCore *core, int idx) {
-	ut32 count = 0;
-	RDebug *dbg = core->dbg;
-	ut32 oflags = core->print->flags;
-	int col = core->cons->columns>123;
-	RDebugSnap *snap;
-	RListIter *iter;
-	core->print->flags |= R_PRINT_FLAGS_DIFFOUT;
-	r_list_foreach (dbg->snaps, iter, snap) {
-		if (count == idx) {
-			ut8 *b = malloc (snap->size);
-			if (!b) {
-				eprintf ("Cannot allocate snapshot\n");
-				continue;
-			}
-			dbg->iob.read_at (dbg->iob.io, snap->addr, b , snap->size);
-			r_print_hexdiff (core->print,
-					snap->addr, snap->data,
-					snap->addr, b,
-					snap->size, col);
-			free (b);
-		}
-		count ++;
-	}
-	core->print->flags = oflags;
-	return 0;
-}
-
-static int cmd_debug_map_snapshot(RCore *core, const char *input) {
-	switch (*input) {
-	case 'f':
-		{
-			char *file;
-			RDebugSnap *snap;
-			if (input[1] == ' ') {
-				file = strdup (input + 2);
-			} else {
-				file = r_str_newf ("0x%08"PFMT64x".dump", core->offset);
-			}
-			snap = r_debug_snap_get (core->dbg, core->offset);
-			if (!snap) {
-				r_debug_snap (core->dbg, core->offset);
-				snap = r_debug_snap_get (core->dbg, core->offset);
-			}
-			if (snap) {
-				int fsz = 0;
-				char *data = r_file_slurp (file, &fsz);
-				if (data) {
-					if (fsz >= snap->size) {
-						memcpy (snap->data, data, snap->size);
-					} else {
-						eprintf ("This file is smaller than the snapshot size\n");
-					}
-					free (data);
-				} else eprintf ("Cannot slurp '%s'\n", file);
-			} else {
-				eprintf ("Unable to find a snapshot for 0x%08"PFMT64x"\n", core->offset);
-			}
-			free (file);
-		}
-		break;
-	case 't':
-		{
-			char *file;
-			RDebugSnap *snap;
-			if (input[1] == ' ') {
-				file = strdup (input + 2);
-			} else {
-				file = r_str_newf ("0x%08"PFMT64x".dump", core->offset);
-			}
-			snap = r_debug_snap_get (core->dbg, core->offset);
-			if (snap) {
-				if (!r_file_dump (file, snap->data, snap->size, 0)) {
-					eprintf ("Cannot slurp '%s'\n", file);
-				}
-			} else {
-				eprintf ("Unable to find a snapshot for 0x%08"PFMT64x"\n", core->offset);
-			}
-			free (file);
-		}
-		break;
-	case '?':
-		r_core_cmd_help (core, help_msg_dms);
-		break;
-	case '-':
-		if (input[1]=='*') {
-			r_debug_snap_delete (core->dbg, -1);
-		} else {
-			r_debug_snap_delete (core->dbg, r_num_math (core->num, input + 1));
-		}
-		break;
-	case ' ':
-		r_debug_snap (core->dbg, r_num_math (core->num, input + 1));
-		break;
-	case 'A':
-		r_debug_snap_set_idx (core->dbg, atoi (input + 1));
-		break;
-	case 'C':
-		r_debug_snap_comment (core->dbg, atoi (input + 1), strchr (input, ' '));
-		break;
-	case 'd':
-		__r_debug_snap_diff (core, atoi (input + 1));
-		break;
-	case 'a':
-		r_debug_snap_all (core->dbg, 0);
-		break;
-	case 'w':
-		r_debug_snap_all (core->dbg, R_IO_RW);
-		break;
-	case 0:
-	case 'j':
-	case '*':
-		r_debug_snap_list (core->dbg, -1, input[0]);
-		break;
-	}
-	return 0;
 }
 
 static int grab_bits(RCore *core, const char *arg, int *pcbits2) {
@@ -1240,7 +1196,13 @@ static int grab_bits(RCore *core, const char *arg, int *pcbits2) {
 		*pcbits2 = 0;
 	}
 	if (pcbits < 1) {
-		if (!strcmp (r_config_get (core->config, "asm.arch"), "avr")) {
+		int rpbits = r_reg_default_bits (core->anal->reg);
+		if (rpbits) {
+			pcbits = rpbits;
+			if (pcbits2) {
+				*pcbits2 = 32;
+			}
+		} else if (!strcmp (r_config_get (core->config, "asm.arch"), "avr")) {
 			pcbits = 8;
 			if (pcbits2) {
 				*pcbits2 = 32;
@@ -1249,7 +1211,7 @@ static int grab_bits(RCore *core, const char *arg, int *pcbits2) {
 			const char *pcname = r_reg_get_name (core->anal->reg, R_REG_NAME_PC);
 			RRegItem *reg = r_reg_get (core->anal->reg, pcname, 0);
 			if (reg) {
-				if (core->assembler->bits != reg->size)
+				if (core->rasm->bits != reg->size)
 					pcbits = reg->size;
 			}
 		}
@@ -1264,7 +1226,7 @@ static int dump_maps(RCore *core, int perm, const char *filename) {
 	r_debug_map_sync (core->dbg); // update process memory maps
 	ut64 addr = core->offset;
 	int do_dump = false;
-	int ret = r_list_empty(core->dbg->maps)? false: true;
+	int ret = !r_list_empty (core->dbg->maps);
 	r_list_foreach (core->dbg->maps, iter, map) {
 		do_dump = false;
 		if (perm == -1) {
@@ -1321,31 +1283,36 @@ show_help:
 		r_core_cmd_help (core, help_msg_dmm);
 		return;
 	}
+	PJ *pj = NULL;
 	if (mode == 'j') {
-		r_cons_print ("[");
+		pj = r_core_pj_new (core);
+		if (!pj) {
+			return;
+		}
+		pj_a (pj);
 	}
 	// TODO: honor mode
 	list = r_debug_modules_list (core->dbg);
 	r_list_foreach (list, iter, map) {
 		switch (mode) {
 		case 0:
-			r_cons_printf ("0x%08"PFMT64x" %s\n", map->addr, map->file);
+			r_cons_printf ("0x%08"PFMT64x" 0x%08"PFMT64x"  %s\n", map->addr, map->addr_end, map->file);
 			break;
 		case '.':
 			if (addr >= map->addr && addr < map->addr_end) {
-				r_cons_printf ("0x%08"PFMT64x" %s\n", map->addr, map->file);
+				r_cons_printf ("0x%08"PFMT64x" 0x%08"PFMT64x"  %s\n", map->addr, map->addr_end, map->file);
 				goto beach;
 			}
 			break;
 		case 'j':
 			{
 				/* Escape backslashes (e.g. for Windows). */
-				char *escaped_path = r_str_escape (map->file);
-				char *escaped_name = r_str_escape (map->name);
-				r_cons_printf ("{\"address\":%"PFMT64d",\"name\":\"%s\",\"file\":\"%s\"}%s",
-					map->addr, escaped_name, escaped_path, iter->n?",":"");
-				free (escaped_path);
-				free (escaped_name);
+				pj_o (pj);
+				pj_kn (pj, "addr", map->addr);
+				pj_kn (pj, "addr_end", map->addr_end);
+				pj_ks (pj, "file", map->file);
+				pj_ks (pj, "name", map->name);
+				pj_end (pj);
 			}
 			break;
 		case ':':
@@ -1358,13 +1325,14 @@ show_help:
 				r_name_filter (filtered_name, 0);
 				r_cons_printf ("f mod.%s = 0x%08"PFMT64x"\n",
 					filtered_name, map->addr);
-				r_cons_printf (".!rabin2 -rsB 0x%08"PFMT64x" \"%s\"\n",
-					map->addr, escaped_path);
+				r_cons_printf ("oba 0x%08"PFMT64x" %s\n", map->addr, escaped_path);
+				// r_cons_printf (".!rabin2 -rsB 0x%08"PFMT64x" \"%s\"\n", map->addr, escaped_path);
 				free (escaped_path);
 				free (filtered_name);
 			}
 			break;
 		default:
+			pj_free (pj);
 			r_list_free (list);
 			goto show_help;
 			/* not reached */
@@ -1372,60 +1340,22 @@ show_help:
 	}
 beach:
 	if (mode == 'j') {
-		r_cons_print ("]\n");
+		pj_end (pj);
+		r_cons_println (pj_string (pj));
 	}
+	pj_free (pj);
 	r_list_free (list);
 }
 
 #if __linux__ && __GNU_LIBRARY__ && __GLIBC__ && __GLIBC_MINOR__
 
-static int cmd_dbg_map_heap_glibc_32 (RCore *core, const char *input);
-static int cmd_dbg_map_heap_glibc_64 (RCore *core, const char *input);
-
-static void get_hash_debug_file(const char *path, char *hash, int hash_len) {
-	RListIter *iter;
-	RBinSection *s;
-	RCore *core = r_core_new ();
-	RList * sects = NULL;
-	char buf[20] = R_EMPTY;
-	int offset, err, i, j = 0;
-
-	if (!core) {
-		return;
-	}
-	r_bin_load (core->bin, path, 0, 0, 0, -1, false);
-	sects = r_bin_get_sections (core->bin);
-	if (!sects) {
-		goto out_error;
-	}
-	r_list_foreach (sects, iter, s) {
-		if (strstr (s->name, ".note.gnu.build-id")) {
-			err = r_io_read_at (core->io, s->vaddr + 16, (ut8 *) buf, 20);
-			if (!err) {
-				eprintf ("Unable to read from memory\n");
-				goto out_error;
-			}
-			break;
-		}
-	}
-	for (i = 0; i < 20; i++) {
-		if (i <= 1) {
-			hash[i + 2 * j++] = (ut8) '/';
-		}
-		offset = j + 2 * i;
-		snprintf (hash + offset, hash_len - offset, "%02x", (ut8) buf[i]);
-	}
-	offset = j + 2 * i;
-	snprintf (hash + offset, hash_len - offset - strlen (".debug"), ".debug");
-out_error:
-	r_core_free (core);
-}
-
-static int str_start_with(const char *ptr, const char *str) {
-	return !strncmp (ptr, str, (size_t)strlen (str));
-}
-
+static int cmd_dbg_map_heap_glibc_32(RCore *core, const char *input);
+static int cmd_dbg_map_heap_glibc_64(RCore *core, const char *input);
 #endif // __linux__ && __GNU_LIBRARY__ && __GLIBC__ && __GLIBC_MINOR__
+#if __WINDOWS__
+static int cmd_debug_map_heap_win(RCore *core, const char *input);
+#endif // __WINDOWS__
+
 
 static ut64 addroflib(RCore *core, const char *libname) {
 	RListIter *iter;
@@ -1437,12 +1367,12 @@ static ut64 addroflib(RCore *core, const char *libname) {
 	// RList *list = r_debug_native_modules_get (core->dbg);
 	RList *list = r_debug_modules_list (core->dbg);
 	r_list_foreach (list, iter, map) {
-		if (strstr (map->name, libname)) {
+		if (strstr (r_file_basename(map->name), libname)) {
 			return map->addr;
 		}
 	}
 	r_list_foreach (core->dbg->maps, iter, map) {
-		if (strstr (map->name, libname)) {
+		if (strstr (r_file_basename(map->name), libname)) {
 			return map->addr;
 		}
 	}
@@ -1472,7 +1402,7 @@ static int r_debug_heap(RCore *core, const char *input) {
 	const char *m = r_config_get (core->config, "dbg.malloc");
 	if (m && !strcmp ("glibc", m)) {
 #if __linux__ && __GNU_LIBRARY__ && __GLIBC__ && __GLIBC_MINOR__
-		if (core->assembler->bits == 64) {
+		if (core->rasm->bits == 64) {
 			cmd_dbg_map_heap_glibc_64 (core, input + 1);
 		} else {
 			cmd_dbg_map_heap_glibc_32 (core, input + 1);
@@ -1482,17 +1412,64 @@ static int r_debug_heap(RCore *core, const char *input) {
 #endif
 #if HAVE_JEMALLOC
 	} else if (m && !strcmp ("jemalloc", m)) {
-		if (core->assembler->bits == 64) {
+		if (core->rasm->bits == 64) {
 			cmd_dbg_map_jemalloc_64 (core, input + 1);
 		} else {
 			cmd_dbg_map_jemalloc_32 (core, input + 1);
 		}
 #endif
 	} else {
+#if __WINDOWS__
+		cmd_debug_map_heap_win (core, input + 1);
+#else
 		eprintf ("MALLOC algorithm not supported\n");
 		return false;
+#endif
 	}
 	return true;
+}
+
+static bool get_bin_info(RCore *core, const char *file, ut64 baseaddr, PJ *pj, int mode, bool symbols_only, RCoreBinFilter *filter) {
+#if __APPLE__
+	switch (mode) {
+	case R_MODE_SET:
+		r_core_cmdf (core, ".dmi* 0x%08"PFMT64x" %s", baseaddr, file);
+		break;
+	case R_MODE_RADARE:
+		r_core_cmdf (core, "!!rabin2 -rsEB 0x%08"PFMT64x" %s", baseaddr, file);
+		break;
+	default:
+		r_core_cmdf (core, "!!rabin2 -E -B 0x%08"PFMT64x" %s", baseaddr, file);
+		break;
+	}
+	return true;
+#else
+	int fd;
+	if ((fd = r_io_fd_open (core->io, file, R_PERM_R, 0)) == -1) {
+		return false;
+	}
+	RBinFileOptions opt = { 0 };
+	opt.fd = fd;
+	opt.sz = r_io_fd_size (core->io, fd);
+	opt.baseaddr = baseaddr;
+	RBinFile *obf = r_bin_cur (core->bin);
+	if (!r_bin_open_io (core->bin, &opt)) {
+		r_io_fd_close (core->io, fd);
+		return false;
+	}
+	int action = R_CORE_BIN_ACC_ALL & ~R_CORE_BIN_ACC_INFO;
+	if (symbols_only || filter->name) {
+		action = R_CORE_BIN_ACC_SYMBOLS;
+	} else if (mode == R_MODE_SET || mode == R_MODE_RADARE) {
+		action &= ~R_CORE_BIN_ACC_ENTRIES & ~R_CORE_BIN_ACC_MAIN;
+	}
+	r_core_bin_info (core, action, pj, mode, 1, filter, NULL);
+	RBinFile *bf = r_bin_cur (core->bin);
+	r_bin_file_delete (core->bin, bf->id);
+	r_bin_file_set_cur_binfile (core->bin, obf);
+	r_io_fd_close (core->io, fd);
+	return true;
+#endif
 }
 
 static int cmd_debug_map(RCore *core, const char *input) {
@@ -1501,16 +1478,8 @@ static int cmd_debug_map(RCore *core, const char *input) {
 	ut64 addr = core->offset;
 
 	switch (input[0]) {
-	case 's': // "dms"
-		cmd_debug_map_snapshot (core, input + 1);
-		break;
 	case '.': // "dm."
-		r_list_foreach (core->dbg->maps, iter, map) {
-			if (addr >= map->addr && addr < map->addr_end) {
-				r_cons_println (map->name);
-				break;
-			}
-		}
+		r_debug_map_list (core->dbg, addr, input);
 		break;
 	case 'm': // "dmm"
 		if (!strcmp (input + 1, ".*")) {
@@ -1564,7 +1533,7 @@ static int cmd_debug_map(RCore *core, const char *input) {
 	case 'd': // "dmd"
 		switch (input[1]) {
 		case 'a': return dump_maps (core, 0, NULL);
-		case 'w': return dump_maps (core, R_IO_RW, NULL);
+		case 'w': return dump_maps (core, R_PERM_RW, NULL);
 		case ' ': return dump_maps (core, -1, input + 2);
 		case 0: return dump_maps (core, -1, NULL);
 		case '?':
@@ -1581,7 +1550,7 @@ static int cmd_debug_map(RCore *core, const char *input) {
 		r_debug_map_sync (core->dbg); // update process memory maps
 		r_list_foreach (core->dbg->maps, iter, map) {
 			if (addr >= map->addr && addr < map->addr_end) {
-				int sz;
+				size_t sz;
 				char *buf = r_file_slurp (input + 2, &sz);
 				//TODO: use mmap here. we need a portable implementation
 				if (!buf) {
@@ -1590,10 +1559,10 @@ static int cmd_debug_map(RCore *core, const char *input) {
 				}
 				r_io_write_at (core->io, map->addr, (const ut8*)buf, sz);
 				if (sz != map->size)
-					eprintf	("File size differs from region size (%d vs %"PFMT64d")\n",
-							sz, map->size);
-				eprintf ("Loaded %d byte(s) into the map region at 0x%08"PFMT64x"\n",
-						sz, map->addr);
+					eprintf	("File size differs from region size (%"PFMT64u" vs %"PFMT64d")\n",
+								(ut64)sz, map->size);
+				eprintf ("Loaded %"PFMT64u" byte(s) into the map region at 0x%08"PFMT64x"\n",
+						 (ut64)sz, map->addr);
 				free (buf);
 				return true;
 			}
@@ -1605,38 +1574,71 @@ static int cmd_debug_map(RCore *core, const char *input) {
 		case '\0': // "dmi" alias of "dmm"
 			r_core_cmd (core, "dmm", 0);
 			break;
+		case 's': // "dmis"
+			r_core_cmdf (core, ".dmi* %s", input + 2);
+			break;
 		case ' ': // "dmi "
 		case '*': // "dmi*"
 		case 'v': // "dmiv"
+		case 'j': // "dmij"
+		case 'q': // "dmiq"
+		case 'a': // "dmia"
 			{
-				const char *libname = NULL, *symname = NULL, *mode = "", *a0;
+				const char *libname = NULL, *symname = NULL, *a0;
+				int mode;
 				ut64 baddr = 0LL;
 				char *ptr;
-				int i;
-				if (input[1]=='*') {
-					mode = "-r ";
+				int i = 1;
+				bool symbols_only = true;
+				if (input[1] == 'a') {
+					symbols_only = false;
+					input++;
 				}
-				ptr = strdup (r_str_trim_ro (input + 2));
+				PJ *pj = NULL;
+				switch (input[1]) {
+				case 's':
+					mode = R_MODE_SET;
+					break;
+				case '*':
+					mode = R_MODE_RADARE;
+					break;
+				case 'j':
+					mode = R_MODE_JSON;
+					pj = r_core_pj_new (core);
+					if (!pj) {
+						return false;
+					}
+					break;
+				case 'q':
+					mode = input[2] == 'q' ? input++, R_MODE_SIMPLEST : R_MODE_SIMPLE;
+					break;
+				default:
+					mode = R_MODE_PRINT;
+					break;
+				}
+				ptr = r_str_trim_dup (input + 2);
 				if (!ptr || !*ptr) {
 					r_core_cmd (core, "dmm", 0);
 					free (ptr);
 					break;
 				}
-				i = r_str_word_set0 (ptr);
+				if (symbols_only) {
+					i = r_str_word_set0 (ptr);
+				}
 				switch (i) {
 				case 2:
 					symname = r_str_word_get0 (ptr, 1);
-					// fall thru
+					// fall through
 				case 1:
 					a0 = r_str_word_get0 (ptr, 0);
-					addr = r_num_math (core->num, a0);
+					addr = r_num_get (core->num, a0);
 					if (!addr || addr == UT64_MAX) {
 						libname = r_str_word_get0 (ptr, 0);
 					}
 					break;
 				}
 				if (libname && !addr) {
-					addr = addroflib (core, libname);
+					addr = addroflib (core, r_file_basename (libname));
 					if (addr == UT64_MAX) {
 						eprintf ("Unknown library, or not found in dm\n");
 					}
@@ -1649,29 +1651,49 @@ static int cmd_debug_map(RCore *core, const char *input) {
 					baddr = map->addr;
 
 					if (libname) {
-						char *cmd, *res;
 						const char *file = map->file? map->file: map->name;
-						if (symname) {
-							cmd = r_str_newf ("rabin2 %s-B 0x%08"PFMT64x" -s %s | grep %s", mode, baddr, file, symname);
-						} else {
-							cmd = r_str_newf ("rabin2 %s-B 0x%08"PFMT64x" -s %s", mode, baddr, file);
+						char *newfile = NULL;
+						if (!r_file_exists (file)) {
+							newfile = r_file_temp ("memlib");
+							if (newfile) {
+								file = newfile;
+								r_core_cmdf (core, "wtf %s 0x%" PFMT64x " @ 0x%" PFMT64x " 2> %s",
+										file, map->size, baddr, R_SYS_DEVNULL);
+							}
 						}
-						// eprintf ("CMD (%s)\n", cmd);
-						res = r_sys_cmd_str (cmd, NULL, NULL);
-						r_cons_println (res);
-						free (res);
-						free (cmd);
+						get_bin_info (core, file, baddr, pj, mode, symbols_only, &filter);
+						if (newfile) {
+							if (!r_file_rm (newfile)) {
+								eprintf ("Error when removing %s\n", newfile);
+							}
+							free (newfile);
+						}
 					} else {
 						r_bin_set_baddr (core->bin, map->addr);
-						r_core_bin_info (core, R_CORE_BIN_ACC_SYMBOLS, (input[1]=='*'), true, &filter, NULL);
+						r_core_bin_info (core, R_CORE_BIN_ACC_SYMBOLS, pj, input[1] == '*', true, &filter, NULL);
 						r_bin_set_baddr (core->bin, baddr);
 					}
+				}
+				if (mode == R_MODE_JSON) {
+					r_cons_println (pj_string (pj));
+					pj_free (pj);
 				}
 				free (ptr);
 			}
 			break;
 		case '.': // "dmi."
-			{
+			if (r_config_get_b (core->config, "cfg.debug")) {
+				ut64 addr = core->offset;
+				r_list_foreach (core->dbg->maps, iter, map) {
+					if (!map->shared) {
+						continue;
+					}
+					if (addr >= map->addr && addr < map->addr_end) {
+						r_cons_printf ("%s\n", map->name);
+				//		break;
+					}
+				}
+			} else {
 				map = get_closest_map (core, addr);
 				if (map) {
 					ut64 closest_addr = UT64_MAX;
@@ -1697,7 +1719,7 @@ static int cmd_debug_map(RCore *core, const char *input) {
 						filter.name = (char *) closest_symbol->name;
 
 						r_bin_set_baddr (core->bin, map->addr);
-						r_core_bin_info (core, R_CORE_BIN_ACC_SYMBOLS, false, true, &filter, NULL);
+						r_core_bin_info (core, R_CORE_BIN_ACC_SYMBOLS, NULL, false, true, &filter, NULL);
 					}
 				}
 			}
@@ -1715,10 +1737,10 @@ static int cmd_debug_map(RCore *core, const char *input) {
 			int i;
 
 			if (input[1]=='*') {
-				ptr = strdup (r_str_trim_head ((char*)input + 2));
+				ptr = strdup (r_str_trim_head_ro ((char*)input + 2));
 				mode = "-r ";
 			} else {
-				ptr = strdup (r_str_trim_head ((char*)input + 1));
+				ptr = strdup (r_str_trim_head_ro ((char*)input + 1));
 			}
 			i = r_str_word_set0 (ptr);
 
@@ -1780,7 +1802,7 @@ static int cmd_debug_map(RCore *core, const char *input) {
 				*p++ = 0;
 				addr = r_num_math (core->num, input + 1);
 				size = r_num_math (core->num, p);
-				r_debug_map_alloc (core->dbg, addr, size);
+				r_debug_map_alloc (core->dbg, addr, size, false);
 			} else {
 				eprintf ("Usage: dm addr size\n");
 				return false;
@@ -1802,18 +1824,32 @@ static int cmd_debug_map(RCore *core, const char *input) {
 		}
 		eprintf ("The address doesn't match with any map.\n");
 		break;
+	case 'L': // "dmL"
+		{
+			int size;
+			char *p = strchr (input + 2, ' ');
+			if (p) {
+				*p++ = 0;
+				addr = r_num_math (core->num, input + 1);
+				size = r_num_math (core->num, p);
+				r_debug_map_alloc (core->dbg, addr, size, true);
+			} else {
+				eprintf ("Usage: dmL addr size\n");
+				return false;
+			}
+		}
+		break;
 	case '\0': // "dm"
 	case '*': // "dm*"
 	case 'j': // "dmj"
 	case 'q': // "dmq"
 		r_debug_map_sync (core->dbg); // update process memory maps
-		r_debug_map_list (core->dbg, core->offset, input[0]);
+		r_debug_map_list (core->dbg, core->offset, input);
 		break;
 	case '=': // "dm="
 		r_debug_map_sync (core->dbg);
-		r_debug_map_list_visual (core->dbg, core->offset,
-				r_config_get_i (core->config, "scr.color"),
-				r_cons_get_size (NULL));
+		r_debug_map_list_visual (core->dbg, core->offset, input,
+				r_config_get_i (core->config, "scr.color"));
 		break;
 	case 'h': // "dmh"
 		(void)r_debug_heap (core, input);
@@ -1824,67 +1860,162 @@ static int cmd_debug_map(RCore *core, const char *input) {
 
 #if __linux__ && __GNU_LIBRARY__ && __GLIBC__ && __GLIBC_MINOR__
 #include "linux_heap_glibc.c"
+#elif __WINDOWS__
+#include "windows_heap.c"
 #endif
 
-R_API void r_core_debug_rr(RCore *core, RReg *reg) {
-	char *use_color, *color = "";
-	int use_colors = r_config_get_i (core->config, "scr.color");
-	int delta = 0;
-	ut64 diff, value;
-	int bits = core->assembler->bits;
+HEAPTYPE(ut64);
+
+static int regcmp(const void *a, const void *b) {
+	const ut64 *A = (const ut64*)a;
+	const ut64 *B = (const ut64*)b;
+	if (*A > *B) {
+		return 1;
+	}
+	if (*A == *B) {
+		return 0;
+	}
+	return -1;
+}
+
+static bool regcb(void *u, const ut64 k, const void *v) {
+	RList *sorted = (RList*) u;
+	ut64 *n = ut64_new (k);
+	r_list_add_sorted (sorted, n, regcmp);
+	return true;
+}
+
+R_API void r_core_debug_ri(RCore *core, RReg *reg, int mode) {
 	RList *list = r_reg_get_list (reg, R_REG_TYPE_GPR);
 	RListIter *iter;
 	RRegItem *r;
+	HtUP *db = ht_up_new0 ();
+
+	r_list_foreach (list, iter, r) {
+		if (r->size != core->rasm->bits) {
+			continue;
+		}
+		ut64 value = r_reg_get_value (reg, r);
+		RList *list = ht_up_find (db, value, NULL);
+		if (!list) {
+			list = r_list_newf (NULL);
+			ht_up_update (db, value, list);
+		}
+		r_list_append (list, r->name);
+	}
+
+	RList *sorted = r_list_newf (free);
+	ht_up_foreach (db, regcb, sorted);
+	ut64 *addr;
+	r_list_foreach (sorted, iter, addr) {
+		int rwx = 0;
+		RDebugMap *map = r_debug_map_get (core->dbg, *addr);
+		if (map) {
+			rwx = map->perm;
+		}
+		r_cons_printf (" %s  ", r_str_rwx_i (rwx));
+
+		r_cons_printf ("0x%08"PFMT64x" ", *addr);
+		RList *list = ht_up_find (db, *addr, NULL);
+		if (list) {
+			RListIter *iter;
+			const char *r;
+			r_cons_strcat (Color_YELLOW);
+			r_list_foreach (list, iter, r) {
+				r_cons_printf (" %s", r);
+			}
+			r_cons_strcat (Color_RESET);
+			char *rrstr = r_core_anal_hasrefs (core, *addr, true);
+			if (rrstr && *rrstr && strchr (rrstr, 'R')) {
+				r_cons_printf ("    ;%s"Color_RESET, rrstr);
+			}
+			r_cons_newline ();
+		}
+	}
+	r_list_free (sorted);
+	ht_up_free (db);
+}
+
+R_API void r_core_debug_rr(RCore *core, RReg *reg, int mode) {
+	char *color = "";
+	char *colorend = "";
+	int had_colors = r_config_get_i (core->config, "scr.color");
+	bool use_colors = had_colors != 0;
+	int delta = 0;
+	ut64 diff, value;
+	int bits = core->rasm->bits;
+	//XXX: support other RRegisterType
+	RList *list = r_reg_get_list (reg, R_REG_TYPE_GPR);
+	RListIter *iter;
+	RRegItem *r;
+	RTable *t = r_core_table (core, "regs");
+
+	if (mode == 'j') {
+		r_config_set_i (core->config, "scr.color", false);
+		use_colors = 0;
+	}
+
 	if (use_colors) {
 #undef ConsP
-#define ConsP(x) (core->cons && core->cons->pal.x)? core->cons->pal.x
-		use_color = ConsP(creg): Color_BWHITE;
-	} else {
-		use_color = NULL;
+#define ConsP(x) (core->cons && core->cons->context->pal.x) ? core->cons->context->pal.x
+		color = ConsP(creg): Color_BWHITE;
+		colorend = Color_RESET;
 	}
-	r_debug_map_sync (core->dbg);
+
+	r_table_set_columnsf (t, "ssss", "role", "reg", "value", "refstr");
 	r_list_foreach (list, iter, r) {
-		char *rrstr, *tmp = NULL;
 		if (r->size != bits) {
 			continue;
 		}
+
 		value = r_reg_get_value (core->dbg->reg, r);
-		rrstr = r_core_anal_hasrefs (core, value, true);
 		delta = 0;
 		int regSize = r->size;
+		//XXX: support larger regSize
 		if (regSize < 80) {
 			r_reg_arena_swap (core->dbg->reg, false);
 			diff = r_reg_get_value (core->dbg->reg, r);
 			r_reg_arena_swap (core->dbg->reg, false);
 			delta = value-diff;
 		}
-		if(delta && use_color){
-			color = use_color;
-		} else {
-			color = "";
-		}
-		if (bits == 64) {
-			if (r->flags) {
-				tmp = r_reg_get_bvalue (reg, r);
-				r_cons_printf ("%s%6s %018s%s", color, r->name, tmp, Color_RESET);
-			} else {
-				r_cons_printf ("%s%6s 0x%016"PFMT64x"%s", color, r->name, value, Color_RESET);
-			}
-		} else {
-			if (r->flags) {
-				tmp = r_reg_get_bvalue (reg, r);
-				r_cons_printf ("%6s %010s", r->name, tmp);
-			} else {
-				r_cons_printf ("%6s 0x%08"PFMT64x, r->name, value);
+
+		const char *role = "";
+		int i;
+		for (i = 0; i < R_REG_NAME_LAST; i++) {
+			const char *t = r_reg_get_name (reg, i);
+			if (t && !strcmp (t, r->name)) {
+				role = r_reg_get_role (i);
 			}
 		}
-		if (r->flags) {
-			free (tmp);
+
+		char *namestr = NULL;
+		char *valuestr = NULL;
+		if (delta && use_colors) {
+			namestr = r_str_newf ("%s%s%s", color, r->name, colorend);
+			valuestr = r_str_newf ("%s%"PFMT64x"%s", color, value, colorend);
+		} else {
+			namestr = r_str_new (r->name);
+			valuestr = r_str_newf ("%"PFMT64x, value);
 		}
-		if (rrstr) {
-			r_cons_printf (" %s\n", rrstr);
-			free (rrstr);
+
+		char *rrstr = r_core_anal_hasrefs (core, value, true);
+		if (!rrstr) {
+			rrstr = strdup ("");
 		}
+
+		r_table_add_rowf (t, "ssss", role, namestr, valuestr, rrstr);
+		free (namestr);
+		free (valuestr);
+		free (rrstr);
+	}
+
+	char *s = (mode == 'j')? r_table_tojson (t): r_table_tostring (t);
+	r_cons_print (s);
+	free (s);
+	r_table_free (t);
+
+	if (had_colors) {
+		r_config_set_i (core->config, "scr.color", had_colors);
 	}
 }
 
@@ -1894,12 +2025,17 @@ static void show_drpi(RCore *core) {
 	RRegItem *ri;
 	r_cons_printf ("Aliases (Reg->name)\n");
 	for (i = 0; i < R_REG_NAME_LAST; i++) {
-		r_cons_printf ("%d %s %s\n", i, r_reg_get_role (i), core->anal->reg->name[i]);
+		const char *v = r_str_get_fail (core->anal->reg->name[i], "?");
+		r_cons_printf ("%d %s %s\n", i, r_reg_get_role (i), v);
 	}
 	for (i = 0; i < R_REG_TYPE_LAST; i++) {
 		const char *nmi = r_reg_get_type (i);
 		r_cons_printf ("regset %d (%s)\n", i, nmi);
 		RRegSet *rs = &core->anal->reg->regset[i];
+		if (!rs || !rs->arena) {
+			r_cons_printf ("* arena %s no\n", r_reg_get_type (i));
+			continue;
+		}
 		r_cons_printf ("* arena %s size %d\n", r_reg_get_type (i), rs->arena->size);
 		r_list_foreach (rs->regs, iter, ri) {
 			const char *tpe = r_reg_get_type (ri->type);
@@ -1913,38 +2049,54 @@ static void show_drpi(RCore *core) {
 	}
 }
 
-static void cmd_reg_profile (RCore *core, char from, const char *str) { // "arp" and "drp"
+static void cmd_reg_profile(RCore *core, char from, const char *str) { // "arp" and "drp"
 	const char *ptr;
+	RReg *r = r_config_get_i (core->config, "cfg.debug")? core->dbg->reg: core->anal->reg;
 	switch (str[1]) {
-	case '\0': // "drp"
-		if (core->dbg->reg->reg_profile_str) {
-			r_cons_println (core->dbg->reg->reg_profile_str);
+	case '\0': // "drp" "arp"
+		if (r->reg_profile_str) {
+			r_cons_println (r->reg_profile_str);
 		} else {
 			eprintf ("No register profile defined. Try 'dr.'\n");
 		}
 		break;
-	case ' ': // "drp "
-		ptr = str + 2;
-		while (isspace (*ptr)) {
-			ptr++;
+	case 'c': // "drpc" "arpc"
+		if (core->dbg->reg->reg_profile_cmt) {
+			r_cons_println (r->reg_profile_cmt);
 		}
-		if (r_str_startswith (ptr, "gdb ")) {
-			r_reg_parse_gdb_profile (ptr + 4);
-			break;
+		break;
+	case 'g': // "drpg" "arpg"
+		ptr = r_str_trim_head_ro (str + 2);
+		if (!R_STR_ISEMPTY (ptr)) {
+			char *r2profile = r_reg_parse_gdb_profile (ptr);
+			if (r2profile) {
+				r_cons_println (r2profile);
+				core->num->value = 0;
+				free (r2profile);
+			} else {
+				core->num->value = 1;
+				eprintf ("Warning: Cannot parse gdb profile.\n");
+			}
+		} else {
+			eprintf ("Usage: arpg [gdb-reg-profile]\n");
 		}
-		r_reg_set_profile (core->dbg->reg, str+2);
+		break;
+	case ' ': // "drp " "arp "
+		ptr = r_str_trim_head_ro (str + 2);
+		r_reg_set_profile (r, ptr);
+		r_debug_plugin_set_reg_profile (core->dbg, ptr);
 		break;
 	case '.': { // "drp."
-		RRegSet *rs = r_reg_regset_get (core->dbg->reg, R_REG_TYPE_GPR);
+		RRegSet *rs = r_reg_regset_get (r, R_REG_TYPE_GPR);
 		if (rs) {
 			eprintf ("size = %d\n", rs->arena->size);
 		}
+		}
 		break;
-	}
-	case 'i': // "drpi"
+	case 'i': // "drpi" "arpi"
 		show_drpi (core);
 		break;
-	case 's': // "drps"
+	case 's': // "drps" "arps"
 		if (str[2] == ' ') {
 			ut64 n = r_num_math (core->num, str+2);
 			// TODO: move this thing into the r_reg API
@@ -1969,49 +2121,57 @@ static void cmd_reg_profile (RCore *core, char from, const char *str) { // "arp"
 			RRegSet *rs = r_reg_regset_get (core->dbg->reg, R_REG_TYPE_GPR);
 			if (rs) {
 				r_cons_printf ("%d\n", rs->arena->size);
-			} else eprintf ("Cannot find GPR register arena.\n");
+			} else {
+				eprintf ("Cannot find GPR register arena.\n");
+			}
 		}
 		break;
-	case 'j': // "drpj"
+	case 'j': // "drpj" "arpj"
 		{
 			// "drpj" .. dup from "arpj"
 			RListIter *iter;
 			RRegItem *r;
 			int i;
-			int first = 1;
-			r_cons_printf ("{\"alias_info\":[");
+			PJ *pj = r_core_pj_new (core);
+			if (!pj) {
+				return;
+			}
+			pj_o (pj);
+			pj_k (pj, "alias_info");
+			pj_a (pj);
 			for (i = 0; i < R_REG_NAME_LAST; i++) {
 				if (core->dbg->reg->name[i]) {
-					if (!first) r_cons_printf (",");
-					r_cons_printf ("{\"role\":%d,", i);
-					r_cons_printf ("\"role_str\":\"%s\",",
-							r_reg_get_role (i));
-					r_cons_printf ("\"reg\":\"%s\"}",
-							core->dbg->reg->name[i]);
-					first = 0;
+					pj_o (pj);
+					pj_kn (pj, "role", i);
+					pj_ks (pj, "role_str", r_reg_get_role (i));
+					pj_ks (pj, "reg", core->dbg->reg->name[i]);
+					pj_end (pj);
 				}
 			}
-			r_cons_printf ("],\"reg_info\":[");
-			first = 1;
+			pj_end (pj);
+			pj_k (pj, "reg_info");
+			pj_a (pj);
 			for (i = 0; i < R_REG_TYPE_LAST; i++) {
 				r_list_foreach (core->dbg->reg->regset[i].regs, iter, r) {
-					if (!first) r_cons_printf (",");
-					r_cons_printf ("{\"type\":%d,", r->type);
-					r_cons_printf ("\"type_str\":\"%s\",",
-							r_reg_get_type (r->type));
-					r_cons_printf ("\"name\":\"%s\",", r->name);
-					r_cons_printf ("\"size\":%d,", r->size);
-					r_cons_printf ("\"offset\":%d}", r->offset);
-					first = 0;
+					pj_o (pj);
+					pj_kn (pj, "type", r->type);
+					pj_ks (pj, "type_str", r_reg_get_type (r->type));
+					pj_ks (pj, "name", r->name);
+					pj_kn (pj, "size", r->size);
+					pj_kn (pj, "offset", r->offset);
+					pj_end (pj);
 				}
 			}
-			r_cons_printf ("]}");
+			pj_end (pj); // "]"
+			pj_end (pj); // "}"
+			r_cons_printf ("%s", pj_string (pj));
+			pj_free (pj);
 		}
 		break;
-	case '?': // "drp?"
+	case '?': // "drp?" "arp?"
 	default:
 		{
-			const char *from_a[] = { "arp", "arpi", "arp.", "arpj", "arps" };
+			const char *from_a[] = { "arp", "arpi", "arpg", "arp.", "arpj", "arps" };
 			// TODO #7967 help refactor
 			const char **help_msg = help_msg_drp;
 			if (from == 'a') {
@@ -2065,11 +2225,98 @@ static int showreg(RCore *core, const char *str, bool use_color) {
 }
 #endif
 
+// helpers for packed registers
+#define NUM_PACK_TYPES 6
+#define NUM_INT_PACK_TYPES 4
+int pack_sizes[NUM_PACK_TYPES] = { 8, 16, 32, 64, 32, 64 };
+char *pack_format[NUM_PACK_TYPES] = { "%s0x%02" PFMT64x, "%s0x%04" PFMT64x, "%s0x%08" PFMT64x,
+									  "%s0x%016" PFMT64x, "%s%lf" , "%s%lf" };
+#define pack_print(i, reg, pack_type_index) r_cons_printf (pack_format[pack_type_index], i != 0 ? " " : "", reg);
+
+static void cmd_debug_reg_print_packed_reg(RCore *core, RRegItem *item, char explicit_size, char* pack_show)	{
+	int pi, i;
+	for (pi = 0; pi < NUM_PACK_TYPES; pi++) {
+		if (!explicit_size || pack_show[pi]) {
+			for (i = 0; i < item->packed_size / pack_sizes[pi]; i++) {
+				ut64 res = r_reg_get_pack(core->dbg->reg, item, i, pack_sizes[pi]);
+				if( pi > NUM_INT_PACK_TYPES-1)	{ // are we printing int or double?
+					if (pack_sizes[pi] == 64)	{
+						double dres;
+						memcpy ((void*)&dres, (void*)&res, 8);
+						pack_print (i, dres, pi);
+					} else if (pack_sizes[pi] == 32) {
+						float fres;
+						memcpy ((void*)&fres, (void*)&res, 4);
+						pack_print (i, fres, pi);
+					}
+				} else {
+					pack_print (i, res, pi);
+				}
+			}
+			r_cons_newline ();
+		}
+	}
+}
+
+static char *__table_format_string(RTable *t, int fmt) {
+	switch (fmt) {
+	case 'j': return r_table_tojson (t);
+	case 's': return r_table_tostring (t);
+	}
+	return r_table_tofancystring (t);
+}
+
+static void __tableRegList(RCore *core, RReg *reg, const char *str) {
+	int i;
+	RRegItem *e;
+	RTable *t = r_core_table (core, "regprofile");
+	RTableColumnType *typeString = r_table_type ("string");
+	RTableColumnType *typeNumber = r_table_type ("number");
+	RTableColumnType *typeBoolean = r_table_type ("boolean");
+	r_table_add_column (t, typeNumber, "offset", 0);
+	r_table_add_column (t, typeNumber, "size", 0);
+	r_table_add_column (t, typeNumber, "psize", 0);
+	r_table_add_column (t, typeNumber, "index", 0);
+	r_table_add_column (t, typeNumber, "arena", 0);
+	r_table_add_column (t, typeBoolean, "float", 0);
+	r_table_add_column (t, typeString, "name", 0);
+	r_table_add_column (t, typeString, "flags", 0);
+	r_table_add_column (t, typeString, "comment", 0);
+	for (i = 0; i < R_REG_TYPE_LAST; i++) {
+		RList *list = r_reg_get_list (reg, i);
+		RListIter *iter;
+		r_list_foreach (list, iter, e) {
+			r_strf_var (s_off, 32, "%d", e->offset);
+			r_strf_var (s_siz, 32, "%d", e->size);
+			r_strf_var (s_psz, 32, "%d", e->packed_size);
+			r_strf_var (s_idx, 32, "%d", e->index);
+			r_strf_var (s_iii, 32, "%d", i);
+			r_table_add_row (t,
+					s_off, s_siz, s_psz, s_idx, s_iii,
+					r_str_bool (e->is_float),
+					r_str_get (e->name),
+					r_str_get (e->flags),
+					r_str_get (e->comment),
+					NULL
+					);
+		}
+	}
+	const char fmt = *str++;
+	const char *q = str;
+	if (r_table_query (t, q)) {
+		char *s = __table_format_string (t, fmt);
+		r_cons_printf ("%s\n", s);
+		free (s);
+	}
+	r_table_free (t);
+}
+
 static void cmd_debug_reg(RCore *core, const char *str) {
 	char *arg;
 	struct r_reg_item_t *r;
 	const char *name, *use_color;
-	int size, i, type = R_REG_TYPE_GPR;
+	size_t i;
+	int size, type = R_REG_TYPE_GPR;
 	int bits = (core->dbg->bits & R_SYS_BITS_64)? 64: 32;
 	int use_colors = r_config_get_i (core->config, "scr.color");
 	int newbits = atoi ((str&&*str)? str + 1: "");
@@ -2078,7 +2325,7 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 	}
 	if (use_colors) {
 #undef ConsP
-#define ConsP(x) (core->cons && core->cons->pal.x)? core->cons->pal.x
+#define ConsP(x) (core->cons && core->cons->context->pal.x)? core->cons->context->pal.x
 		use_color = ConsP(creg): Color_BWHITE;
 	} else {
 		use_color = NULL;
@@ -2088,63 +2335,112 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 	}
 	switch (str[0]) {
 	case 'C': // "drC"
-		if (core->dbg->reg->reg_profile_cmt) {
-			r_cons_println (core->dbg->reg->reg_profile_cmt);
+		{
+			const bool json_out = str[1] == 'j';
+			name = r_str_trim_head_ro (json_out ? str + 3 : str + 2);
+			if (name) {
+				r = r_reg_get (core->dbg->reg, name , -1);
+				if (r) {
+					if (json_out) {
+						PJ *pj = r_core_pj_new (core);
+						if (!pj) {
+							return;
+						}
+						pj_o (pj);
+						if (r->comment) {
+							pj_ks (pj, r->name, r->comment);
+						} else {
+							pj_knull (pj, r->name);
+						}
+						pj_end (pj);
+						const char *s = pj_string (pj);
+						r_cons_println (s);
+						pj_free (pj);
+					} else {
+						if (r->comment) {
+							r_cons_printf ("%s\n", r->comment);
+						} else {
+							eprintf ("Register %s doesn't have any comments\n", name);
+						}
+					}
+				} else {
+					eprintf ("Register %s not found\n", name);
+				}
+			} else {
+				eprintf ("usage: drC [register]\n");
+			}
 		}
 		break;
 	case '-': // "dr-"
-		r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, '-', 0);
+		r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, NULL, '-', 0);
 		break;
 	case '?': // "dr?"
 		if (str[1]) {
-			const char *p = str+1;
-			ut64 off;
-			while (IS_WHITESPACE (*p)) {
-				p++;
+			RListIter *iter;
+			char *all = (char *)r_str_trim_head_ro (str + 1);
+			if (!strcmp (all, "?")) { // "dr??"
+				all = r_core_cmd_str (core, "drp~=[0]");
+				all = r_str_replace (all, "\n", " ", 1);
+			} else {
+				all = strdup (all);
 			}
+			char *arg;
+			RList *args = r_str_split_list (all, " ", 0);
 			r_debug_reg_sync (core->dbg, R_REG_TYPE_ALL, false); //R_REG_TYPE_GPR, false);
-			off = r_debug_reg_get (core->dbg, p);
-			//		r = r_reg_get (core->dbg->reg, str+1, 0);
-			//		if (r == NULL) eprintf ("Unknown register (%s)\n", str+1);
-			r_cons_printf ("0x%08"PFMT64x"\n", off);
-			core->num->value = off;
-			//r_reg_get_value (core->dbg->reg, r));
+			int count = r_list_length (args);
+			r_list_foreach (args, iter, arg) {
+				r = r_reg_get (core->dbg->reg, arg, -1);
+				if (!r) {
+					continue;
+				}
+				ut64 off = r_debug_reg_get (core->dbg, arg);
+				if (count == 1) {
+					r_cons_printf ("0x%08"PFMT64x"\n", off);
+				} else {
+					int type = r_reg_get_name_idx (arg);
+					const char *r = arg;
+					if (type != -1) {
+						r = r_reg_get_name (core->dbg->reg, type);
+					}
+					r_cons_printf ("%3s %3s 0x%08"PFMT64x"\n", arg, r, off);
+				}
+				core->num->value = off;
+			}
+			free (all);
+			r_list_free (args);
 		} else {
 			r_core_cmd_help (core, help_msg_dr);
 		}
 		break;
 	case 'l': // "drl[j]"
 		{
-			bool json_out = false;
-			switch (str[1]) {
-			case 'j':
-				json_out = true;
-				/* fall trhu */
-			case 0:
-				{
-					RRegSet *rs = r_reg_regset_get (core->dbg->reg, R_REG_TYPE_GPR);
-					if (rs) {
-						RRegItem *r;
-						RListIter *iter;
-						i = 0;
-						if (json_out) {
-							r_cons_printf ("[");
-						}
-						r_list_foreach (rs->regs, iter, r) {
-							if (json_out) {
-								r_cons_printf ("%s\"%s\"",
-									(i ? "," : ""),
-									r->name);
-								i++;
-							} else {
-								r_cons_println (r->name);
-							}
-						}
-						if (json_out) {
-							r_cons_printf ("]");
-						}
+			const bool json_out = str[1] == 'j';
+			RRegSet *rs = r_reg_regset_get (core->dbg->reg, R_REG_TYPE_GPR);
+			if (rs) {
+				RRegItem *r;
+				RListIter *iter;
+				i = 0;
+				PJ *pj = NULL;
+				if (json_out) {
+					pj = r_core_pj_new (core);
+					if (!pj) {
+						return;
 					}
-					break;
+					pj_a (pj);
+				}
+				r_list_foreach (rs->regs, iter, r) {
+					if (json_out) {
+						pj_s (pj, r->name);
+						i++;
+					} else {
+						r_cons_println (r->name);
+					}
+				}
+				if (json_out) {
+					pj_end (pj);
+					const char *s = pj_string (pj);
+					r_cons_println (s);
+					pj_free (pj);
 				}
 			}
 		}
@@ -2155,7 +2451,7 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 			int len, type = R_REG_TYPE_GPR;
 			arg = strchr (str, ' ');
 			if (arg) {
-				char *string = r_str_trim (strdup (arg + 1));
+				char *string = r_str_trim_dup (arg + 1);
 				if (string) {
 					type = r_reg_type_by_name (string);
 					if (type == -1 && string[0] != 'a') {
@@ -2182,7 +2478,7 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 					r_print_hexdump (core->print, 0ll, buf, len, 64, 8, 1);
 					break;
 				default:
-					if (core->assembler->bits == 64) {
+					if (core->rasm->bits == 64) {
 						r_print_hexdump (core->print, 0ll, buf, len, 64, 8, 1);
 					} else {
 						r_print_hexdump (core->print, 0ll, buf, len, 32, 4, 1);
@@ -2195,10 +2491,47 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 		break;
 	case 'c': // "drc"
 		// todo: set flag values with drc zf=1
-		{
+		if (str[1] == 'q') { // "drcq"
+			RRegFlags *rf = r_reg_cond_retrieve (core->dbg->reg, NULL);
+			if (rf) {
+				r_cons_printf ("s:%d z:%d c:%d o:%d p:%d\n",
+						rf->s, rf->z, rf->c, rf->o, rf->p);
+				free (rf);
+			}
+			break;
+		}
+		if (str[1] == '=') { // "drc="
+			RRegFlags *rf = r_reg_cond_retrieve (core->dbg->reg, NULL);
+			if (rf) {
+				r_cons_printf ("s:%d z:%d c:%d o:%d p:%d\n",
+						rf->s, rf->z, rf->c, rf->o, rf->p);
+				free (rf);
+			}
+		} else if (strchr (str, '=')) {
+			char *a = strdup (r_str_trim_head_ro (str + 1));
+			char *eq = strchr (a, '=');
+			if (eq) {
+				*eq++ = 0;
+				char *k = a;
+				r_str_trim (a);
+				bool v = !strcmp (eq, "true") || atoi (eq);
+				int type = r_reg_cond_from_string (k);
+				if (type != -1) {
+					RRegFlags *rf = r_reg_cond_retrieve (core->dbg->reg, NULL);
+					if (rf) {
+						r_reg_cond_bits_set (core->dbg->reg, type, rf, v);
+						r_reg_cond_apply (core->dbg->reg, rf);
+						r_debug_reg_sync (core->dbg, R_REG_TYPE_ALL, true);
+						free (rf);
+					}
+				} else {
+					eprintf ("Unknown condition register\n");
+				}
+			}
+			free (a);
+		} else {
 			RRegItem *r;
-			const char *name = str+1;
-			while (*name==' ') name++;
+			const char *name = r_str_trim_head_ro (str + 1);
 			if (*name && name[1]) {
 				r = r_reg_cond_get (core->dbg->reg, name);
 				if (r) {
@@ -2217,8 +2550,6 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 			} else {
 				RRegFlags *rf = r_reg_cond_retrieve (core->dbg->reg, NULL);
 				if (rf) {
-					r_cons_printf ("| s:%d z:%d c:%d o:%d p:%d\n",
-							rf->s, rf->z, rf->c, rf->o, rf->p);
 					if (*name=='=') {
 						for (i=0; i<R_REG_COND_LAST; i++) {
 							r_cons_printf ("%s:%d ",
@@ -2251,7 +2582,7 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 			break;
 		case ' ': {
 				  char *s = strdup (str+2);
-				  char sl, n, rwx;
+				  char sl, n, perm;
 				  int len;
 				  ut64 off;
 
@@ -2261,18 +2592,18 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 					  n = (char)r_num_math (core->num, arg(0));
 					  off = r_num_math (core->num, arg(1));
 					  len = (int)r_num_math (core->num, arg(2));
-					  rwx = (char)r_str_rwx (arg (3));
+					  perm = (char)r_str_rwx (arg (3));
 					  if (len == -1) {
 						  r_debug_reg_sync (core->dbg, R_REG_TYPE_DRX, false);
 						  r_debug_drx_set (core->dbg, n, 0, 0, 0, 0);
 						  r_debug_reg_sync (core->dbg, R_REG_TYPE_DRX, true);
 					  } else {
 						  r_debug_reg_sync (core->dbg, R_REG_TYPE_DRX, false);
-						  r_debug_drx_set (core->dbg, n, off, len, rwx, 0);
+						  r_debug_drx_set (core->dbg, n, off, len, perm, 0);
 						  r_debug_reg_sync (core->dbg, R_REG_TYPE_DRX, true);
 					  }
 				  } else {
-					eprintf ("|usage: drx n [address] [length] [rwx]\n");
+					eprintf ("|usage: drx n [address] [length] [perm]\n");
 				  }
 				  free (s);
 			  } break;
@@ -2304,55 +2635,152 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 		break;
 	case 'm': // "drm"
 		if (str[1]=='?') {
-			eprintf ("usage: drm [reg] [idx] [wordsize] [= value]\n");
-		} else if (str[1]==' ') {
-			int word = 0;
+			r_core_cmd_help (core, help_msg_drm);
+		} else if (str[1] == ' ' || str[1] == 'b' || str[1] == 'd' || str[1] == 'w' || str[1] == 'q' || str[1] == 'l'
+				   || str[1] == 'f' || (str[1] == 'y' && str[2] != '\x00')) {
+			char explicit_index = 0;
+			char explicit_size = 0;
+			char explicit_name = 0;
+			char pack_show[NUM_PACK_TYPES] = { 0, 0, 0, 0, 0, 0};
+			int index = 0;
 			int size = 0; // auto
-			char *q, *p, *name = strdup (str+2);
-			char *eq = strchr (name, '=');
-			if (eq) {
-				*eq++ = 0;
-			}
-			p = strchr (name, ' ');
-			if (p) {
-				*p++ = 0;
-				q = strchr (p, ' ');
-				if (q) {
-					*q++ = 0;
-					size = r_num_math (core->num, q);
+			char *q, *p, *name;
+			char *eq = NULL;
+			RRegisterType reg_type = R_REG_TYPE_XMM;
+			if ((str[1] == ' ' && str[2] != '\x00') || (str[1] == 'y' && str[2] == ' ' && str[3] != '\x00')) {
+				if (str[1] == 'y') { // support `drmy ymm0` and `drm ymm0`
+					str = str + 1;
 				}
-				word = r_num_math (core->num, p);
-			}
-			RRegItem *item = r_reg_get (core->dbg->reg, name, -1);
-			if (item) {
+				name = strdup (str + 2);
+				explicit_name = 1;
+				eq = strchr (name, '=');
 				if (eq) {
-					ut64 val = r_num_math (core->num, eq);
-					r_reg_set_pack (core->dbg->reg, item, word, size, val);
-					r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, true);
-					r_debug_reg_sync (core->dbg, R_REG_TYPE_MMX, true);
-				} else {
-					r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false);
-					r_debug_reg_sync (core->dbg, R_REG_TYPE_MMX, false);
-					ut64 res = r_reg_get_pack (core->dbg->reg, item, word, size);
-					r_cons_printf ("0x%08"PFMT64x"\n", res);
+					*eq++ = 0;
+				}
+				p = strchr (name, ' ');
+				if (p) {
+					*p++ = 0;
+					q = strchr (p, ' ');
+					if (p[0] != '*') {
+						// do not show whole register
+						explicit_index = 1;
+						index = r_num_math (core->num, p);
+					}
+					if (q) {
+						*q++ = 0;
+						size = r_num_math (core->num, q);
+						for (i = 0; i < NUM_PACK_TYPES; i++) {
+							if (size == pack_sizes[i]) {
+								explicit_size = 1;
+								pack_show[i] = 1;
+							}
+						}
+						if (!explicit_size) {
+							eprintf ("Unsupported wordsize %d\n", size);
+							break;
+						}
+					}
 				}
 			} else {
-				eprintf ("cannot find multimedia register '%s'\n", name);
+				explicit_size = 1;
+				if (str[1] == 'y') {
+					reg_type = R_REG_TYPE_YMM;
+					str = str + 1;
+				}
+				if (str[2] == ' ' && str[3] != '\x00') {
+					name = strdup (str + 3);
+					explicit_name = 1;
+				}
+				switch (str[1])	{
+				case 'b': // "drmb"
+					size = pack_sizes[0];
+					pack_show[0] = 1;
+					break;
+				case 'w': // "drmw"
+					size = pack_sizes[1];
+					pack_show[1] = 1;
+					break;
+				case 'd': // "drmd"
+					size = pack_sizes[2];
+					pack_show[2] = 1;
+					break;
+				case 'q': // "drmq"
+					size = pack_sizes[3];
+					pack_show[3] = 1;
+					break;
+				case 'f': // "drmf"
+					size = pack_sizes[4];
+					pack_show[4] = 1;
+					break;
+				case 'l': // "drml"
+					size = pack_sizes[5];
+					pack_show[5] = 1;
+					break;
+				default:
+					eprintf ("Unkown comamnd");
+					return;
+				}
 			}
-			free (name);
-		} else {
-			r_debug_reg_sync (core->dbg, -R_REG_TYPE_MMX, false);
+			if (explicit_name) {
+				RRegItem *item = r_reg_get (core->dbg->reg, name, -1);
+				if (item) {
+					if (eq) {
+						// TODO: support setting YMM registers
+						if (reg_type == R_REG_TYPE_YMM) {
+							eprintf ("Setting ymm registers not supported yet!\n");
+						} else {
+							ut64 val = r_num_math (core->num, eq);
+							r_reg_set_pack (core->dbg->reg, item, index, size, val);
+							r_debug_reg_sync (core->dbg, reg_type, true);
+						}
+					} else {
+						r_debug_reg_sync (core->dbg, reg_type, false);
+						if (!explicit_index) {
+							cmd_debug_reg_print_packed_reg (core, item, explicit_size, pack_show);
+						} else {
+							ut64 res = r_reg_get_pack (core->dbg->reg, item, index, size);
+							// print selected index / wordsize
+							r_cons_printf ("0x%08" PFMT64x "\n", res);
+						}
+					}
+				} else {
+					eprintf ("cannot find multimedia register '%s'\n", name);
+				}
+				free (name);
+			} else {
+				// explicit size no name
+				RListIter *iter;
+				RRegItem *item;
+				RList *head;
+				r_debug_reg_sync (core->dbg, reg_type, false);
+				head = r_reg_get_list (core->dbg->reg, reg_type);
+				if (head) {
+					r_list_foreach (head, iter, item) {
+						if (item->type != reg_type) {
+							continue;
+						}
+						r_cons_printf ("%-5s = ", item->name);
+						cmd_debug_reg_print_packed_reg (core, item, explicit_size, pack_show);
+					}
+				}
+			}
+		} else { // drm # no arg
+			if (str[1] == 'y') { // drmy
+				r_debug_reg_sync (core->dbg, R_REG_TYPE_YMM, false);
+				r_debug_reg_list (core->dbg, R_REG_TYPE_YMM, 256, NULL, 0, 0);
+			} else { // drm
+				r_debug_reg_sync (core->dbg, R_REG_TYPE_XMM, false);
+				r_debug_reg_list (core->dbg, R_REG_TYPE_XMM, 128, NULL, 0, 0);
+			}
 		}
 		//r_debug_drx_list (core->dbg);
 		break;
 	case 'f': // "drf"
-		/* note, that negative type forces sync to print the regs from the backend */
-		r_debug_reg_sync (core->dbg, -R_REG_TYPE_FPU, false);
 		//r_debug_drx_list (core->dbg);
 		if (str[1]=='?') {
 			eprintf ("usage: drf [fpureg] [= value]\n");
 		} else if (str[1]==' ') {
-			char *p, *name = strdup (str+2);
+			char *p, *name = strdup (str + 2);
 			char *eq = strchr (name, '=');
 			if (eq) {
 				*eq++ = 0;
@@ -2378,14 +2806,16 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 				} else {
 					r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false);
 					r_debug_reg_sync (core->dbg, R_REG_TYPE_FPU, false);
-					long double res = r_reg_get_double (core->dbg->reg, item);
-					r_cons_printf ("%lf\n", res);
+					long double res = r_reg_get_longdouble (core->dbg->reg, item);
+					r_cons_printf ("%Lf\n", res);
 				}
 			} else {
+				/* note, that negative type forces sync to print the regs from the backend */
 				eprintf ("cannot find multimedia register '%s'\n", name);
 			}
 			free (name);
 		} else {
+			//TODO: Do not use this hack to print fpu register
 			r_debug_reg_sync (core->dbg, -R_REG_TYPE_FPU, false);
 		}
 		break;
@@ -2405,14 +2835,17 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 			rad = str[1];
 			str++;
 			if (rad == 'j' && !str[1]) {
-				r_cons_print("[");
-				for (i = 0; (name = r_reg_get_type (i)); i++) {
-					if (i) {
-						r_cons_print (",");
-					}
-					r_cons_printf ("\"%s\"", name);
+				PJ *pj = r_core_pj_new (core);
+				if (!pj) {
+					break;
 				}
-				r_cons_println ("]");
+				pj_a (pj);
+				for (i = 0; (name = r_reg_get_type (i)); i++) {
+					pj_s (pj, name);
+				}
+				pj_end (pj);
+				r_cons_println (pj_string (pj));
+				pj_free (pj);
 				break;
 			}
 			// fallthrough
@@ -2426,21 +2859,24 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 			size = atoi (regname);
 			if (size < 1) {
 				char *arg = strchr (str + 2, ' ');
-				size = -1;
+				size = 0;
 				if (arg) {
 					*arg++ = 0;
 					size = atoi (arg);
 				}
 				type = r_reg_type_by_name (str + 2);
-				if (size < 0) {
-					size = core->dbg->bits * 8;
-				}
 				r_debug_reg_sync (core->dbg, type, false);
-				r_debug_reg_list (core->dbg, type, size, rad, use_color);
+				PJ *pj = (tolower (rad) == 'j')? r_core_pj_new (core): NULL;
+				r_debug_reg_list (core->dbg, type, size, pj, rad, use_color);
+				if (pj) {
+					char *s = pj_drain (pj);
+					r_cons_printf ("%s\n", s);
+					free (s);
+				}
 			} else {
 				if (type != R_REG_TYPE_LAST) {
 					r_debug_reg_sync (core->dbg, type, false);
-					r_debug_reg_list (core->dbg, type, size, rad, use_color);
+					r_debug_reg_list (core->dbg, type, size, NULL, rad, use_color);
 				} else {
 					eprintf ("cmd_debug_reg: unknown type\n");
 				}
@@ -2466,12 +2902,19 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 		}
 		break;
 	case 'd': // "drd"
-		r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, 3, use_color); // xxx detect which one is current usage
+		r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, NULL, 3, use_color); // xxx detect which one is current usage
 		break;
 	case 'o': // "dro"
 		r_reg_arena_swap (core->dbg->reg, false);
-		r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, 0, use_color); // xxx detect which one is current usage
+		r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, NULL, 0, use_color); // xxx detect which one is current usage
 		r_reg_arena_swap (core->dbg->reg, false);
+		break;
+	case ',': // "dr,"
+		if (r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false)) {
+			__tableRegList (core, core->dbg->reg, str + 1);
+		} else {
+			eprintf ("cannot retrieve registers from pid %d\n", core->dbg->pid);
+		}
 		break;
 	case '=': // "dr="
 		{
@@ -2479,37 +2922,55 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 			if (r_config_get_i (core->config, "cfg.debug")) {
 				if (r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false)) {
 					if (pcbits && pcbits != bits) {
-						r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, 2, use_color); // xxx detect which one is current usage
+						r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, NULL, '=', use_color); // xxx detect which one is current usage
 					}
-					r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, 2, use_color); // xxx detect which one is current usage
+					r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, NULL, '=', use_color); // xxx detect which one is current usage
 					if (pcbits2) {
-						r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits2, 2, use_color); // xxx detect which one is current usage
+						r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits2, NULL, '=', use_color); // xxx detect which one is current usage
 					}
 				} //else eprintf ("cannot retrieve registers from pid %d\n", core->dbg->pid);
 			} else {
 				RReg *orig = core->dbg->reg;
 				core->dbg->reg = core->anal->reg;
-				if (pcbits && pcbits != bits)
-					r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, 2, use_color); // xxx detect which one is current usage
-				r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, 2, use_color); // xxx detect which one is current usage
+				if (pcbits && pcbits != bits) {
+					r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, NULL, '=', use_color); // xxx detect which one is current usage
+				}
+				r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, NULL, '=', use_color); // xxx detect which one is current usage
 				core->dbg->reg = orig;
+			}
+		}
+		break;
+	case '.':
+		if (r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false)) {
+			int pcbits2, pcbits = grab_bits (core, str + 1, &pcbits2);
+			r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, NULL, '.', use_color);
+			if (pcbits2) {
+				r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits2, NULL, '.', use_color);
 			}
 		}
 		break;
 	case '*': // "dr*"
 		if (r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false)) {
 			int pcbits2, pcbits = grab_bits (core, str + 1, &pcbits2);
-			r_cons_printf ("fs+regs\n");
-			r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, '*', use_color);
+			r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, NULL, '*', use_color);
 			if (pcbits2) {
-				r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits2, '*', use_color);
+				r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits2, NULL, '*', use_color);
 			}
 			r_flag_space_pop (core->flags);
-			r_cons_printf ("fs-\n");
 		}
 		break;
+	case 'i': // "dri"
+		r_core_debug_ri (core, core->dbg->reg, 0);
+		break;
 	case 'r': // "drr"
-		r_core_debug_rr (core, core->dbg->reg);
+		switch (str[1]) {
+		case 'j': // "drrj"
+			r_core_debug_rr (core, core->dbg->reg, 'j');
+			break;
+		default:
+			r_core_debug_rr (core, core->dbg->reg, 0);
+			break;
+		}
 		break;
 	case 'j': // "drj"
 	case '\0': // "dr"
@@ -2518,11 +2979,19 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 			const char *pcname = r_reg_get_name (core->anal->reg, R_REG_NAME_PC);
 			RRegItem *reg = r_reg_get (core->anal->reg, pcname, 0);
 			if (reg) {
-				if (core->assembler->bits != reg->size) {
+				if (core->rasm->bits != reg->size) {
 					pcbits = reg->size;
 				}
 			}
-			r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, str[0], use_color);
+			if (str[0] == 'j') {
+				PJ *pj = r_core_pj_new (core);
+				if (!pj) {
+					return;
+				}
+				r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, pj, 'j', use_color);
+			} else {
+				r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, pcbits, NULL, 0, use_color);
+			}
 		} else {
 			eprintf ("cannot retrieve registers from pid %d\n", core->dbg->pid);
 		}
@@ -2530,11 +2999,9 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 	case ' ': // "dr"
 		arg = strchr (str + 1, '=');
 		if (arg) {
-			char *string;
-			const char *regname;
 			*arg = 0;
-			string = r_str_trim (strdup (str + 1));
-			regname = r_reg_get_name (core->dbg->reg, r_reg_get_name_idx (string));
+			char *string = r_str_trim_dup (str + 1);
+			const char *regname = r_reg_get_name (core->dbg->reg, r_reg_get_name_idx (string));
 			if (!regname) {
 				regname = string;
 			}
@@ -2565,13 +3032,12 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 			return;
 		}
 
-		int size = atoi (str + 1);
+		size = atoi (str + 1);
 		if (size) {
-			r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, size, str[0], use_color);
+			r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, size, NULL, str[0], use_color);
 		} else {
 			char *comma = strchr (str + 1, ',');
 			if (comma) {
-				size = 32; // non-zero
 				char *args = strdup (str + 1);
 				char argc = r_str_split (args, ',');
 				for (i = 0; i < argc; i++) {
@@ -2579,27 +3045,10 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 				}
 				free (args);
 			} else {
-				size = showreg (core, str + 1);
+				showreg (core, str + 1);
 			}
 		}
 	}
-}
-
-static int validAddress(RCore *core, ut64 addr) {
-	RDebugMap *map;
-	RListIter *iter;
-	if (!r_config_get_i (core->config, "dbg.bpinmaps")) {
-		return core->num->value = 1;
-	}
-	r_debug_map_sync (core->dbg);
-	r_list_foreach (core->dbg->maps, iter, map) {
-		if (addr >= map->addr && addr < map->addr_end) {
-			return core->num->value = 1;
-		}
-	}
-	// TODO: try to read memory, expect no 0xffff
-	// TODO: check map permissions
-	return core->num->value = 0;
 }
 
 static void backtrace_vars(RCore *core, RList *frames) {
@@ -2698,7 +3147,7 @@ static void asciiart_backtrace(RCore *core, RList *frames) {
 		ut64 s = f->sp ? f->sp : dsp;
 		ut64 b = f->bp ? f->bp : dbp;
 		char *str = r_str_newf ("[frame %d]", n);
-		r_cons_printf ("0x%016"PFMT64x"  |%4s    %10s      | ; size %d\n", s, sp, str, s - b);
+		r_cons_printf ("0x%016"PFMT64x"  |%4s    %10s      | ; size %" PFMTDPTR "\n", s, sp, str, (ptrdiff_t)(s - b));
 		free (str);
 		r_cons_printf ("                    |            ...         |\n");
 		r_cons_printf ("0x%016"PFMT64x"  |%4s 0x%016"PFMT64x" | %s\n", b, bp, f->addr, "; return address");
@@ -2714,46 +3163,282 @@ static void asciiart_backtrace(RCore *core, RList *frames) {
 	}
 }
 
+static void get_backtrace_info(RCore* core, RDebugFrame* frame, ut64 addr, char** flagdesc, char** flagdesc2, char** pcstr, char** spstr) {
+	RFlagItem *f = r_flag_get_at (core->flags, frame->addr, true);
+	*flagdesc = NULL;
+	*flagdesc2 = NULL;
+	if (f) {
+		if (f->offset != addr) {
+			int delta = (int)(frame->addr - f->offset);
+			if (delta > 0) {
+				*flagdesc = r_str_newf ("%s+%d", f->name, delta);
+			} else if (delta < 0) {
+				*flagdesc = r_str_newf ("%s%d", f->name, delta);
+			} else {
+				*flagdesc = r_str_newf ("%s", f->name);
+			}
+		} else {
+			*flagdesc = r_str_newf ("%s", f->name);
+		}
+	}
+	f = r_flag_get_at (core->flags, frame->addr, true);
+	if (f && !strchr (f->name, '.')) {
+		f = r_flag_get_at (core->flags, frame->addr - 1, true);
+	}
+	if (f) {
+		if (f->offset != addr) {
+			int delta = (int)(frame->addr - 1 - f->offset);
+			if (delta > 0) {
+				*flagdesc2 = r_str_newf ("%s+%d", f->name, delta + 1);
+			} else if (delta < 0) {
+				*flagdesc2 = r_str_newf ("%s%d", f->name, delta + 1);
+			} else {
+				*flagdesc2 = r_str_newf ("%s+1", f->name);
+			}
+		} else {
+			*flagdesc2 = r_str_newf ("%s", f->name);
+		}
+	}
+	if (!r_str_cmp (*flagdesc, *flagdesc2, -1)) {
+		free (*flagdesc2);
+		*flagdesc2 = NULL;
+	}
+	if (pcstr && spstr) {
+		if (core->dbg->bits & R_SYS_BITS_64) {
+			*pcstr = r_str_newf ("0x%-16" PFMT64x, frame->addr);
+			*spstr = r_str_newf ("0x%-16" PFMT64x, frame->sp);
+		} else if (core->dbg->bits & R_SYS_BITS_32) {
+			*pcstr = r_str_newf ("0x%-8" PFMT64x, frame->addr);
+			*spstr = r_str_newf ("0x%-8" PFMT64x, frame->sp);
+		} else {
+			*pcstr = r_str_newf ("0x%" PFMT64x, frame->addr);
+			*spstr = r_str_newf ("0x%" PFMT64x, frame->sp);
+		}
+	}
+}
+
 static void static_debug_stop(void *u) {
 	RDebug *dbg = (RDebug *)u;
 	r_debug_stop (dbg);
 }
 
+static void core_cmd_dbi(RCore *core, const char *input, const ut64 idx) {
+	int i;
+	char *p;
+	RBreakpointItem *bpi;
+	switch (input[2]) {
+	case ' ': // "dbi."
+		{
+			const int index = r_bp_get_index_at (core->dbg->bp, idx);
+			if (index != -1) {
+				r_cons_printf ("%d\n", index);
+			}
+		}
+		break;
+	case '-': // "dbi-"
+		{
+			if (!r_bp_del_index (core->dbg->bp, idx)) {
+				eprintf ("Breakpoint with index %d not found\n", (int)idx);
+			}
+		}
+		break;
+	case '.': // "dbi."
+		{
+			const int index = r_bp_get_index_at (core->dbg->bp, core->offset);
+			if (index != -1) {
+				r_cons_printf ("%d\n", index);
+			}
+		}
+		break;
+	case 0: // "dbi"
+		for (i = 0; i < core->dbg->bp->bps_idx_count; i++) {
+			if ((bpi = core->dbg->bp->bps_idx[i])) {
+				r_cons_printf ("%d 0x%08"PFMT64x" E:%d T:%d\n",
+						i, bpi->addr, bpi->enabled, bpi->trace);
+			}
+		}
+		break;
+	case 'x': // "dbix"
+		if (input[3] == ' ') {
+			if ((bpi = r_bp_get_index (core->dbg->bp, idx))) {
+				char *expr = strchr (input + 4, ' ');
+				if (expr) {
+					free (bpi->expr);
+					bpi->expr = strdup (expr);
+				}
+			}
+			r_cons_printf ("%d\n", (int)idx);
+		} else {
+			for (i = 0; i < core->dbg->bp->bps_idx_count; i++) {
+				RBreakpointItem *bp = core->dbg->bp->bps_idx[i];
+				if (bp) {
+					r_cons_printf ("%d 0x%08"PFMT64x" %s\n", i, bp->addr, bp->expr);
+				}
+			}
+		}
+		break;
+	case 'c': // "dbic"
+		p = strchr (input + 3, ' ');
+		if (p) {
+			char *q = strchr (p + 1, ' ');
+			if (q) {
+				*q++ = 0;
+				ut64 addr = r_num_math (core->num, p);
+				bpi = r_bp_get_index (core->dbg->bp, addr);
+				if (bpi) {
+					bpi->data = strdup (q);
+				} else {
+					eprintf ("Cannot set command\n");
+				}
+			} else {
+				eprintf ("|Usage: dbic # cmd\n");
+			}
+		} else {
+			eprintf ("|Usage: dbic # cmd\n");
+		}
+		break;
+	case 'e': // "dbie"
+		if ((bpi = r_bp_get_index (core->dbg->bp, idx))) {
+			bpi->enabled = true;
+		} else {
+			eprintf ("Cannot unset tracepoint\n");
+		}
+		break;
+	case 'd': // "dbid"
+		if ((bpi = r_bp_get_index (core->dbg->bp, idx))) {
+			bpi->enabled = false;
+		} else {
+			eprintf ("Cannot unset tracepoint\n");
+		}
+		break;
+	case 's': // "dbis"
+		if ((bpi = r_bp_get_index (core->dbg->bp, idx))) {
+			bpi->enabled = !!!bpi->enabled;
+		} else {
+			eprintf ("Cannot unset tracepoint\n");
+		}
+		break;
+	case 't': // "dbite" "dbitd" ...
+		switch (input[3]) {
+		case 'e':
+			if ((bpi = r_bp_get_index (core->dbg->bp, idx))) {
+				bpi->trace = true;
+			} else {
+				eprintf ("Cannot unset tracepoint\n");
+			}
+			break;
+		case 'd':
+			if ((bpi = r_bp_get_index (core->dbg->bp, idx))) {
+				bpi->trace = false;
+			} else eprintf ("Cannot unset tracepoint\n");
+			break;
+		case 's':
+			if ((bpi = r_bp_get_index (core->dbg->bp, idx))) {
+				bpi->trace = !!!bpi->trace;
+			} else {
+				eprintf ("Cannot unset tracepoint\n");
+			}
+			break;
+		}
+		break;
+	}
+}
+
+#if __WINDOWS__
+#include "../debug/p/native/windows/windows_message.h"
+#endif
+
+#define DB_ARG(x) r_str_word_get0(str, x)
+static void add_breakpoint(RCore *core, const char *input, bool hwbp, bool watch) {
+	RBreakpointItem *bpi;
+	ut64 addr;
+	int i = 0;
+
+	char *str = strdup (r_str_trim_head_ro (input + 1));
+	int sl = r_str_word_set0 (str);
+	// For dbw every second argument is 'rw', so we need to skip it.
+	for (; i < sl; i += 1 + (watch ? 1 : 0)) {
+		if (*DB_ARG (i) == '-') {
+			r_bp_del (core->dbg->bp, r_num_math (core->num, DB_ARG (i) + 1));
+		} else {
+			int rw = 0;
+			if (watch) {
+				if (sl % 2 == 0) {
+					if (!strcmp (DB_ARG (i + 1), "r")) {
+						rw = R_BP_PROT_READ;
+					} else if (!strcmp (DB_ARG (i + 1), "w")) {
+						rw = R_BP_PROT_WRITE;
+					} else if (!strcmp (DB_ARG (i + 1), "rw")) {
+						rw = R_BP_PROT_ACCESS;
+					} else {
+						r_core_cmd_help (core, help_msg_dbw);
+						break;
+					}
+				} else {
+					r_core_cmd_help (core, help_msg_dbw);
+					break;
+				}
+			}
+			addr = r_num_math (core->num, DB_ARG (i));
+			bpi = r_debug_bp_add (core->dbg, addr, hwbp, watch, rw, NULL, 0);
+			if (bpi) {
+				free (bpi->name);
+				if (!strcmp (DB_ARG (i), "$$")) {
+					RFlagItem *f = r_core_flag_get_by_spaces (core->flags, addr);
+					if (f) {
+						if (addr > f->offset) {
+							bpi->name = r_str_newf ("%s+0x%" PFMT64x, f->name, addr - f->offset);
+						} else {
+							bpi->name = strdup (f->name);
+						}
+					} else {
+						bpi->name = r_str_newf ("0x%08" PFMT64x, addr);
+					}
+				} else {
+					bpi->name = strdup (DB_ARG (i));
+				}
+			} else {
+				eprintf ("Cannot set breakpoint at '%s'\n", DB_ARG (i));
+			}
+		}
+	}
+
+	free (str);
+}
+
 static void r_core_cmd_bp(RCore *core, const char *input) {
 	RBreakpointItem *bpi;
-	int i, hwbp = r_config_get_i (core->config, "dbg.hwbp");
+	int i;
+	bool hwbp = r_config_get_b (core->config, "dbg.hwbp");
 	RDebugFrame *frame;
 	RListIter *iter;
 	const char *p;
 	bool watch = false;
-	int rw = 0;
 	RList *list;
-	ut64 addr;
+	ut64 addr, idx;
 	p = strchr (input, ' ');
 	addr = p? r_num_math (core->num, p + 1): UT64_MAX;
+	idx = addr; // 0 is valid index
 	if (!addr) {
 		addr = UT64_MAX;
 	}
+	char *str = NULL;
 
 	switch (input[1]) {
 	case '.':
 		if (input[2]) {
 			ut64 addr = r_num_tail (core->num, core->offset, input + 2);
-			if (validAddress (core, addr)) {
-				bpi = r_debug_bp_add (core->dbg, addr, hwbp, false, 0, NULL, 0);
-				if (!bpi) {
-					eprintf ("Unable to add breakpoint (%s)\n", input + 2);
-				}
-			} else {
-				eprintf ("Invalid address\n");
+			bpi = r_debug_bp_add (core->dbg, addr, hwbp, false, 0, NULL, 0);
+			if (!bpi) {
+				eprintf ("Unable to add breakpoint (%s)\n", input + 2);
 			}
 		} else {
 			bpi = r_bp_get_at (core->dbg->bp, core->offset);
 			if (bpi) {
 				r_cons_printf ("breakpoint %s %s %s\n",
-						r_str_rwx_i (bpi->rwx),
+						r_str_rwx_i (bpi->perm),
 						bpi->enabled ?  "enabled" : "disabled",
-						bpi->name ? bpi->name : "");
+						r_str_get (bpi->name));
 			}
 		}
 		break;
@@ -2762,7 +3447,7 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 		RList *symbols = r_bin_get_symbols (core->bin);
 		RBinSymbol *symbol;
 		r_list_foreach (symbols, iter, symbol) {
-			if (symbol->type && !strcmp (symbol->type, "FUNC")) {
+			if (symbol->type && !strcmp (symbol->type, R_BIN_TYPE_FUNC_STR)) {
 				if (r_anal_noreturn_at (core->anal, symbol->vaddr)) {
 					bpi = r_debug_bp_add (core->dbg, symbol->vaddr, hwbp, false, 0, NULL, 0);
 					if (bpi) {
@@ -2775,6 +3460,23 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 				}
 			}
 		}
+		}
+		break;
+	case 'x': // "dbx"
+		if (input[2] == ' ') {
+			if (addr == UT64_MAX) {
+				addr = core->offset;
+			}
+			bpi = r_bp_get_at (core->dbg->bp, addr);
+			if (bpi) {
+				free (bpi->expr);
+				bpi->expr = strdup (input + 3);
+			}
+		} else {
+			RBreakpointItem *bp;
+			r_list_foreach (core->dbg->bp->bps, iter, bp) {
+				r_cons_printf ("0x%08"PFMT64x" %s\n", bp->addr, r_str_get (bp->expr));
+			}
 		}
 		break;
 	case 't': // "dbt"
@@ -2817,23 +3519,42 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 				eprintf ("Cannot unset tracepoint\n");
 			}
 			break;
-		case 'j': // "dbtj"
+		case 'j': { // "dbtj"
+			PJ *pj = r_core_pj_new (core);
+			if (!pj) {
+				return;
+			}
 			addr = UT64_MAX;
 			if (input[2] == ' ' && input[3]) {
 				addr = r_num_math (core->num, input + 2);
 			}
 			i = 0;
 			list = r_debug_frames (core->dbg, addr);
-			r_cons_printf ("[");
+			pj_a (pj);
 			r_list_foreach (list, iter, frame) {
-				r_cons_printf ("%s%"PFMT64d,
-					       (i ? "," : ""),
-					       frame->addr);
+				char *flagdesc, *flagdesc2, *desc;
+				get_backtrace_info (core, frame, addr, &flagdesc, &flagdesc2, NULL, NULL);
+				RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, frame->addr, 0);
+				desc = r_str_newf ("%s%s", r_str_get (flagdesc), r_str_get (flagdesc2));
+				pj_o (pj);
+				pj_ki (pj, "idx", i);
+				pj_kn (pj, "pc", frame->addr);
+				pj_kn (pj, "sp", frame->sp);
+				pj_ki (pj, "frame_size", frame->size);
+				pj_ks (pj, "fname", fcn ? fcn->name : "");
+				pj_ks (pj, "desc", desc);
+				pj_end (pj);
 				i++;
+				free (flagdesc);
+				free (flagdesc2);
+				free (desc);
 			}
-			r_cons_printf ("]\n");
+			pj_end (pj);
+			r_cons_println (pj_string (pj));
+			pj_free (pj);
 			r_list_free (list);
 			break;
+		}
 		case '=': // dbt=
 			addr = UT64_MAX;
 			if (input[2] == ' ' && input[3]) {
@@ -2890,72 +3611,20 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 			i = 0;
 			list = r_debug_frames (core->dbg, addr);
 			r_list_foreach (list, iter, frame) {
-				char flagdesc[1024], flagdesc2[1024], pcstr[32], spstr[32];
-				RFlagItem *f = r_flag_get_at (core->flags, frame->addr, true);
-				flagdesc[0] = flagdesc2[0] = 0;
-				if (f) {
-					if (f->offset != addr) {
-						int delta = (int)(frame->addr - f->offset);
-						if (delta > 0) {
-							snprintf (flagdesc, sizeof (flagdesc),
-									"%s+%d", f->name, delta);
-						} else if (delta < 0) {
-							snprintf (flagdesc, sizeof (flagdesc),
-									"%s%d", f->name, delta);
-						} else {
-							snprintf (flagdesc, sizeof (flagdesc),
-									"%s", f->name);
-						}
-					} else {
-						snprintf (flagdesc, sizeof (flagdesc),
-								"%s", f->name);
-					}
-				}
-				f = r_flag_get_at (core->flags, frame->addr, true);
-				if (f && !strchr (f->name, '.')) {
-					f = r_flag_get_at (core->flags, frame->addr - 1, true);
-				}
-				if (f) {
-					if (f->offset != addr) {
-						int delta = (int)(frame->addr - 1 - f->offset);
-						if (delta > 0) {
-							snprintf (flagdesc2, sizeof (flagdesc2),
-									"%s+%d", f->name, delta + 1);
-						} else if (delta<0) {
-							snprintf (flagdesc2, sizeof (flagdesc2),
-									"%s%d", f->name, delta + 1);
-						} else {
-							snprintf (flagdesc2, sizeof (flagdesc2),
-									"%s+1", f->name);
-						}
-					} else {
-						snprintf (flagdesc2, sizeof (flagdesc2),
-								"%s", f->name);
-					}
-				}
-				if (!strcmp (flagdesc, flagdesc2)) {
-					flagdesc2[0] = 0;
-				}
-
-				if (core->dbg->bits & R_SYS_BITS_64) {
-					snprintf (pcstr, sizeof (pcstr), "0x%-16" PFMT64x, frame->addr);
-					snprintf (spstr, sizeof (spstr), "0x%-16" PFMT64x, frame->sp);
-				} else if (core->dbg->bits & R_SYS_BITS_32) {
-					snprintf (pcstr, sizeof (pcstr), "0x%-8" PFMT64x, frame->addr);
-					snprintf (spstr, sizeof (spstr), "0x%-8" PFMT64x, frame->sp);
-				} else {
-					snprintf (pcstr, sizeof (pcstr), "0x%" PFMT64x, frame->addr);
-					snprintf (spstr, sizeof (spstr), "0x%" PFMT64x, frame->sp);
-				}
-
+				char *flagdesc, *flagdesc2, *pcstr, *spstr;
+				get_backtrace_info (core, frame, addr, &flagdesc, &flagdesc2, &pcstr, &spstr);
 				RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, frame->addr, 0);
 				r_cons_printf ("%d  %s sp: %s  %-5d"
 						"[%s]  %s %s\n", i++,
 						pcstr, spstr,
 						(int)frame->size,
 						fcn ? fcn->name : "??",
-						flagdesc,
-						flagdesc2);
+						r_str_get (flagdesc),
+						r_str_get (flagdesc2));
+				free (flagdesc);
+				free (flagdesc2);
+				free (pcstr);
+				free (spstr);
 			}
 			r_list_free (list);
 			break;
@@ -2974,22 +3643,40 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 		break;
 	case 'm': // "dbm"
 		if (input[2] && input[3]) {
-			char *string = strdup (input + 3);
-			char *module = NULL;
+			char *module = r_str_trim_dup (input + 3);
 			st64 delta = 0;
-
-			module = strtok (string, " ");
-			delta = (ut64)r_num_math (core->num, strtok (NULL, ""));
+			char *sdelta = (char *)r_str_lchr (module, ' ');
+			if (!sdelta) {
+				eprintf ("Usage: dbm [modulename] [delta]\n");
+				free (module);
+				break;
+			}
+			*sdelta++ = 0;
+			delta = (ut64)r_num_math (core->num, sdelta);
 			bpi = r_debug_bp_add (core->dbg, 0, hwbp, false, 0, module, delta);
-			free (string);
+			if (!bpi) {
+				eprintf ("Cannot set breakpoint.\n");
+			}
+			free (module);
 		}
 		break;
 	case 'j': r_bp_list (core->dbg->bp, 'j'); break;
 	case '*': r_bp_list (core->dbg->bp, 1); break;
 	case '\0': r_bp_list (core->dbg->bp, 0); break;
 	case '-': // "db-"
-		if (input[2] == '*') r_bp_del_all (core->dbg->bp);
-		else r_bp_del (core->dbg->bp, r_num_math (core->num, input + 2));
+		if (input[2] == '*') {
+			r_bp_del_all (core->dbg->bp);
+		} else {
+			#define DB_ARG(x) r_str_word_get0(str, x)
+			char *str = strdup (r_str_trim_head_ro (input +2));
+			int i = 0;
+			int sl = r_str_word_set0 (str);
+			for ( ; i < sl; i++) {
+				const ut64 addr = r_num_math (core->num, DB_ARG (i));
+				r_bp_del (core->dbg->bp, addr);
+			}
+			free (str);
+		}
 		break;
 	case 'c': // "dbc"
 		if (input[2] == ' ') {
@@ -3040,7 +3727,7 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 				eprintf ("Cannot strdup. Your heap is fucked up\n");
 			}
 		} else {
-			eprintf ("Use: dbc [addr] [command]\n");
+			eprintf ("Use: dbC [addr] [command]\n");
 		}
 		break;
 	case 's': // "dbs"
@@ -3053,7 +3740,9 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 		} else {
 			// XXX(jjd): does t his need an address validity check??
 			bpi = r_debug_bp_add (core->dbg, addr, hwbp, false, 0, NULL, 0);
-			if (!bpi) eprintf ("Cannot set breakpoint (%s)\n", input + 2);
+			if (!bpi) {
+				eprintf ("Cannot set breakpoint (%s)\n", input + 2);
+			}
 		}
 		r_bp_enable (core->dbg->bp, r_num_math (core->num, input + 2), true, 0);
 		break;
@@ -3073,7 +3762,7 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 			}
 		}
 		break;
-	case 'e':
+	case 'e': // "dbe"
 		for (p = input + 2; *p == ' '; p++);
 		if (*p == '*') r_bp_enable_all (core->dbg->bp,true);
 		else {
@@ -3081,7 +3770,7 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 			r_bp_enable (core->dbg->bp, r_num_math (core->num, input + 2), true, r_num_math (core->num, p));
 		}
 		break;
-	case 'd':
+	case 'd': // "dbd"
 		for (p = input + 2; *p == ' '; p++);
 		if (*p == '*') r_bp_enable_all (core->dbg->bp, false);
 		else {
@@ -3089,7 +3778,7 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 			r_bp_enable (core->dbg->bp, r_num_math (core->num, input + 2), false, r_num_math (core->num, p));
 		}
 		break;
-	case 'h':
+	case 'h': // "dbh"
 		switch (input[2]) {
 		case 0:
 			r_bp_plugin_list (core->dbg->bp);
@@ -3114,165 +3803,45 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 			break;
 		}
 		break;
-	case 'w': // "dbw"
-		if (input[2] == 'C') { // "dbwC"
-			if (input[3] == ' ') {
-				char *inp = strdup (input + 4);
-				if (inp) {
-					char *arg = strchr (inp, ' ');
-					if (arg) {
-						*arg++ = 0;
-						addr = r_num_math (core->num, inp);
-						bpi = r_bp_get_at (core->dbg->bp, addr);
-						if (bpi) {
-							free (bpi->cond);
-							bpi->cond = strdup (arg);
-						} else {
-							eprintf ("No breakpoint defined at 0x%08"PFMT64x"\n", addr);
-						}
-					} else {
-						eprintf ("1 Missing argument\n");
-					}
-					free (inp);
-				} else {
-					eprintf ("Cannot strdup. Your heap is fucked up\n");
-				}
+#if __WINDOWS__
+	case 'W': // "dbW"
+		if (input[2] == ' ') {
+			if (r_w32_add_winmsg_breakpoint (core->dbg, input + 3)) {
+				r_cons_print ("Breakpoint set.\n");
 			} else {
-				eprintf ("Use: dbwC [addr] [command]\n");
+				r_cons_print ("Breakpoint not set.\n");
 			}
-			break;
-		}
-		input++; // skip 'w'
-		watch = true;
-		// passthru
-	case ' ': // "db"
-		for (p = input + 2; *p == ' '; p++);
-		if (*p == '-') {
-			r_bp_del (core->dbg->bp, r_num_math (core->num, p + 1));
-		} else {
-			#define DB_ARG(x) r_str_word_get0(str, x)
-			char *str = strdup (p);
-			int sl = r_str_word_set0 (str);
-			addr = r_num_math (core->num, DB_ARG(0));
-			if (watch) {
-					if (sl == 2) {
-						rw = (strcmp (DB_ARG(1), "r") == 0 ? R_BP_PROT_READ : R_BP_PROT_WRITE);
-					} else {
-						eprintf ("Usage: dbw <addr> <rw> # Add watchpoint\n");
-						free (str);
-						break;
-					}
-			}
-			if (validAddress (core, addr)) {
-				bpi = r_debug_bp_add (core->dbg, addr, hwbp, watch, rw, NULL, 0);
-				if (bpi) {
-					free (bpi->name);
-					if (!strcmp (input + 2, "$$")) {
-						RFlagItem *f = r_flag_get_i2 (core->flags, addr);
-						if (f) {
-							if (addr > f->offset) {
-								bpi->name = r_str_newf ("%s+0x%" PFMT64x, f->name, addr - f->offset);
-							} else {
-								bpi->name = strdup (f->name);
-							}
-						} else {
-							bpi->name = r_str_newf ("0x%08" PFMT64x, addr);
-						}
-					} else {
-						bpi->name = strdup (input + 2);
-					}
-				} else {
-					eprintf ("Cannot set breakpoint at '%s'\n", input + 2);
-				}
-			} else {
-				eprintf ("Cannot place a breakpoint on 0x%08"PFMT64x" unmapped memory. See e? dbg.bpinmaps\n", addr);
-			}
-			free (str);
 		}
 		break;
+#endif
+	case 'w': // "dbw"
+		add_breakpoint (core, input + 1, hwbp, true);
+		break;
+	case 'H': // "dbH"
+		add_breakpoint (core, input + 1, true, watch);
+		break;
+	case ' ': // "db"
+		add_breakpoint (core, input + 1, hwbp, watch);
+		break;
 	case 'i':
-		switch (input[2]) {
-		case 0: // "dbi"
-			for (i = 0;i < core->dbg->bp->bps_idx_count; i++) {
-				if ((bpi = core->dbg->bp->bps_idx[i])) {
-					r_cons_printf ("%d 0x%08"PFMT64x" E:%d T:%d\n",
-							i, bpi->addr, bpi->enabled, bpi->trace);
-				}
-			}
-			break;
-		case 'c': // "dbic"
-			p = strchr (input + 3, ' ');
-			if (p) {
-				char *q = strchr (p + 1, ' ');
-				if (q) {
-					*q++ = 0;
-					ut64 addr = r_num_math (core->num, p);
-					bpi = r_bp_get_index (core->dbg->bp, addr);
-					if (bpi) {
-						bpi->data = strdup (q);
-					} else {
-						eprintf ("Cannot set command\n");
-					}
-				} else {
-					eprintf ("|Usage: dbic # cmd\n");
-				}
-			} else {
-				eprintf ("|Usage: dbic # cmd\n");
-			}
-			break;
-		case 'e': // "dbie"
-			if ((bpi = r_bp_get_index (core->dbg->bp, addr))) {
-				bpi->enabled = true;
-			} else eprintf ("Cannot unset tracepoint\n");
-			break;
-		case 'd': // "dbid"
-			if ((bpi = r_bp_get_index (core->dbg->bp, addr))) {
-				bpi->enabled = false;
-			} else eprintf ("Cannot unset tracepoint\n");
-			break;
-		case 's': // "dbis"
-			if ((bpi = r_bp_get_index (core->dbg->bp, addr))) {
-				bpi->enabled = !!!bpi->enabled;
-			} else eprintf ("Cannot unset tracepoint\n");
-			break;
-		case 't': // "dbite" "dbitd" ...
-			switch (input[3]) {
-			case 'e':
-				if ((bpi = r_bp_get_index (core->dbg->bp, addr))) {
-					bpi->trace = true;
-				} else eprintf ("Cannot unset tracepoint\n");
-				break;
-			case 'd':
-				if ((bpi = r_bp_get_index (core->dbg->bp, addr))) {
-					bpi->trace = false;
-				} else eprintf ("Cannot unset tracepoint\n");
-				break;
-			case 's':
-				if ((bpi = r_bp_get_index (core->dbg->bp, addr))) {
-					bpi->trace = !!!bpi->trace;
-				} else {
-					eprintf ("Cannot unset tracepoint\n");
-				}
-				break;
-			}
-			break;
-		}
+		core_cmd_dbi (core, input, idx);
 		break;
 	case '?':
 	default:
 		r_core_cmd_help (core, help_msg_db);
 		break;
 	}
+	free (str);
 }
 
-static RTreeNode *add_trace_tree_child (Sdb *db, RTree *t, RTreeNode *cur, ut64 addr) {
+static RTreeNode *add_trace_tree_child(Sdb *db, RTree *t, RTreeNode *cur, ut64 addr) {
 	struct trace_node *t_node;
 	char dbkey[TN_KEY_LEN];
 
 	snprintf (dbkey, TN_KEY_LEN, TN_KEY_FMT, addr);
 	t_node = (struct trace_node *)(size_t)sdb_num_get (db, dbkey, NULL);
 	if (!t_node) {
-		t_node = (struct trace_node *)malloc (sizeof (*t_node));
+		t_node = R_NEW0 (struct trace_node);
 		t_node->addr = addr;
 		t_node->refs = 1;
 		sdb_num_set (db, dbkey, (ut64)(size_t)t_node, 0);
@@ -3284,7 +3853,7 @@ static RTreeNode *add_trace_tree_child (Sdb *db, RTree *t, RTreeNode *cur, ut64 
 
 static RCore *_core = NULL;
 
-static void trace_traverse_pre (RTreeNode *n, RTreeVisitor *vis) {
+static void trace_traverse_pre(RTreeNode *n, RTreeVisitor *vis) {
 	const char *name = "";
 	struct trace_node *tn = n->data;
 	unsigned int i;
@@ -3301,7 +3870,7 @@ static void trace_traverse_pre (RTreeNode *n, RTreeVisitor *vis) {
 	r_cons_printf (" 0x%08"PFMT64x" refs %d %s\n", tn->addr, tn->refs, name);
 }
 
-static void trace_traverse (RTree *t) {
+static void trace_traverse(RTree *t) {
 	RTreeVisitor vis = { 0 };
 
 	/* clear the line on stderr, because somebody has written there */
@@ -3346,7 +3915,8 @@ static void do_debug_trace_calls(RCore *core, ut64 from, ut64 to, ut64 final_add
 		}
 		if (debug_to != UT64_MAX && !r_debug_continue_until (dbg, debug_to)) {
 			break;
-		} else if (!r_debug_step (dbg, 1)) {
+		}
+		if (!r_debug_step (dbg, 1)) {
 			break;
 		}
 		debug_to = UT64_MAX;
@@ -3361,7 +3931,7 @@ static void do_debug_trace_calls(RCore *core, ut64 from, ut64 to, ut64 final_add
 		addr_in_range = addr >= from && addr < to;
 
 		r_io_read_at (core->io, addr, buf, sizeof (buf));
-		r_anal_op (core->anal, &aop, addr, buf, sizeof (buf), R_ANAL_OP_MASK_ALL);
+		r_anal_op (core->anal, &aop, addr, buf, sizeof (buf), R_ANAL_OP_MASK_BASIC);
 		eprintf ("%d %"PFMT64x"\r", n++, addr);
 		switch (aop.type) {
 		case R_ANAL_OP_TYPE_UCALL:
@@ -3437,16 +4007,16 @@ static void debug_trace_calls(RCore *core, const char *input) {
 		return;
 	}
 	if (*input == ' ') {
-		input = r_str_trim_ro (input);
+		input = r_str_trim_head_ro (input);
 		ut64 first_n = r_num_math (core->num, input);
 		input = strchr (input, ' ');
 		if (input) {
-			input = r_str_trim_ro (input);
+			input = r_str_trim_head_ro (input);
 			from = first_n;
 			to = r_num_math (core->num, input);
 			input = strchr (input, ' ');
 			if (input) {
-				input = r_str_trim_ro (input);
+				input = r_str_trim_head_ro (input);
 				final_addr = r_num_math (core->num, input);
 			}
 		} else {
@@ -3457,7 +4027,7 @@ static void debug_trace_calls(RCore *core, const char *input) {
 	r_cons_break_push (static_debug_stop, core->dbg);
 	r_reg_arena_swap (core->dbg->reg, true);
 	if (final_addr != UT64_MAX) {
-		int hwbp = r_config_get_i (core->config, "dbg.hwbp");
+		bool hwbp = r_config_get_b (core->config, "dbg.hwbp");
 		bp_final = r_debug_bp_add (core->dbg, final_addr, hwbp, false, 0, NULL, 0);
 		if (!bp_final) {
 			eprintf ("Cannot set breakpoint at final address (%"PFMT64x")\n", final_addr);
@@ -3473,7 +4043,7 @@ static void debug_trace_calls(RCore *core, const char *input) {
 	r_cons_break_pop ();
 }
 
-static void r_core_debug_esil (RCore *core, const char *input) {
+static void r_core_debug_esil(RCore *core, const char *input) {
 	switch (input[0]) {
 	case '\0': // "de"
 		// list
@@ -3484,26 +4054,24 @@ static void r_core_debug_esil (RCore *core, const char *input) {
 			char *line = strdup (input + 1);
 			char *p, *q;
 			int done = 0;
-			int rwx = 0, dev = 0;
+			int perm = 0, dev = 0;
 			p = strchr (line, ' ');
 			if (p) {
 				*p++ = 0;
-				if (strchr (line, 'r')) rwx |= R_IO_READ;
-				if (strchr (line, 'w')) rwx |= R_IO_WRITE;
-				if (strchr (line, 'x')) rwx |= R_IO_EXEC;
+				if (strchr (line, 'r')) perm |= R_PERM_R;
+				if (strchr (line, 'w')) perm |= R_PERM_W;
+				if (strchr (line, 'x')) perm |= R_PERM_X;
 				q = strchr (p, ' ');
 				if (q) {
 					*q++ = 0;
 					dev = p[0];
-					if (q) {
-						r_debug_esil_watch (core->dbg, rwx, dev, q);
-						done = 1;
-					}
+					r_debug_esil_watch (core->dbg, perm, dev, q);
+					done = 1;
 				}
 			}
 			if (!done) {
 				const char *help_de_msg[] = {
-					"Usage:", "de", " [rwx] [reg|mem] [expr]",
+					"Usage:", "de", " [perm] [reg|mem] [expr]",
 					NULL
 				};
 				r_core_cmd_help (core, help_de_msg);
@@ -3563,8 +4131,8 @@ static void r_core_debug_esil (RCore *core, const char *input) {
 	}
 }
 
-static void r_core_debug_kill (RCore *core, const char *input) {
-	if (!input || *input=='?') {
+static void r_core_debug_kill(RCore *core, const char *input) {
+	if (!input || *input == '?') {
 		if (input && input[1]) {
 			const char *signame, *arg = input + 1;
 			int signum = atoi (arg);
@@ -3625,7 +4193,10 @@ static void r_core_debug_kill (RCore *core, const char *input) {
 				}
 		}
 	} else if (*input == 'j') {
+		core->dbg->pj = r_core_pj_new (core);
 		r_debug_signal_list (core->dbg, 2);
+		pj_free (core->dbg->pj);
+		core->dbg->pj = NULL;
 	} else if (!*input) {
 		r_debug_signal_list (core->dbg, 0);
 #if 0
@@ -3650,7 +4221,46 @@ static void r_core_debug_kill (RCore *core, const char *input) {
 	}
 }
 
-static bool cmd_dcu (RCore *core, const char *input) {
+static bool is_x86_call(RDebug *dbg, ut64 addr) {
+	ut8 buf[3];
+	ut8 *op = buf;
+	(void)dbg->iob.read_at (dbg->iob.io, addr, buf, R_ARRAY_SIZE (buf));
+	switch (buf[0]) {  /* Segment override prefixes */
+	case 0x65:
+	case 0x64:
+	case 0x26:
+	case 0x3e:
+	case 0x36:
+	case 0x2e:
+		op++;
+	}
+	if (op[0] == 0xe8) {
+		return true;
+	}
+	if (op[0] == 0xff  /* bits 4-5 (from right) of next byte must be 01 */
+	    && (op[1] & 0x30) == 0x10) {
+		return true;
+	}
+	/* ... */
+	return false;
+}
+
+static bool is_x86_ret(RDebug *dbg, ut64 addr) {
+	ut8 buf[1];
+	(void)dbg->iob.read_at (dbg->iob.io, addr, buf, R_ARRAY_SIZE (buf));
+	switch (buf[0]) {
+	case 0xc3:
+	case 0xcb:
+	case 0xc2:
+	case 0xca:
+		return true;
+	default:
+		return false;
+	}
+	/* Possibly incomplete with regard to instruction prefixes */
+}
+
+static bool cmd_dcu(RCore *core, const char *input) {
 	const char *ptr = NULL;
 	ut64 from, to, pc;
 	bool dcu_range = false;
@@ -3659,13 +4269,12 @@ static bool cmd_dcu (RCore *core, const char *input) {
 		r_core_cmd_help (core, help_msg_dcu);
 		return false;
 	}
-	from = UT64_MAX;
 	to = UT64_MAX;
 	if (input[2] == '.') {
-		ptr = strchr (input + 3, ' ');
+		ptr = (input[3])? strchr (input + 3, ' '): NULL;
 		if (ptr) { // TODO: put '\0' in *ptr to avoid
 			from = r_num_tail (core->num, core->offset, input + 2);
-			if (ptr[1]=='.') {
+			if (ptr[1] == '.') {
 				to = r_num_tail (core->num, core->offset, ptr+2);
 			} else {
 				to = r_num_math (core->num, ptr+1);
@@ -3675,7 +4284,7 @@ static bool cmd_dcu (RCore *core, const char *input) {
 			from = r_num_tail (core->num, core->offset, input + 2);
 		}
 	} else {
-		ptr = strchr (input + 3, ' ');
+		ptr = (input[2] && input[3])? strchr (input + 3, ' '): NULL;
 		if (ptr) { // TODO: put '\0' in *ptr to avoid
 			from = r_num_math (core->num, input + 3);
 			if (ptr[1]=='.') {
@@ -3688,7 +4297,7 @@ static bool cmd_dcu (RCore *core, const char *input) {
 			from = r_num_math (core->num, input + 3);
 		}
 	}
-	if (core->num->nc.errors && r_cons_singleton ()->is_interactive) {
+	if (core->num->nc.errors && r_cons_is_interactive ()) {
 		eprintf ("Cannot continue until unknown address '%s'\n", core->num->nc.calc_buf);
 		return false;
 	}
@@ -3710,10 +4319,81 @@ static bool cmd_dcu (RCore *core, const char *input) {
 		r_cons_break_pop ();
 	} else {
 		ut64 addr = from;
+		if (!strcmp (core->dbg->btalgo, "trace") && core->dbg->arch
+		    && !strcmp (core->dbg->arch, "x86") && core->dbg->bits == 4) {
+			unsigned long steps = 0;
+			long level = 0;
+			const char *pc_name = core->dbg->reg->name[R_REG_NAME_PC];
+			ut64 prev_pc = UT64_MAX;
+			bool prev_call = false;
+			bool prev_ret = false;
+			const char *sp_name = core->dbg->reg->name[R_REG_NAME_SP];
+			ut64 old_sp, cur_sp;
+			r_cons_break_push (NULL, NULL);
+			r_list_free (core->dbg->call_frames);
+			core->dbg->call_frames = r_list_new ();
+			core->dbg->call_frames->free = free;
+			r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false);
+			old_sp = r_debug_reg_get (core->dbg, sp_name);
+			while (true) {
+				r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false);
+				pc = r_debug_reg_get (core->dbg, pc_name);
+				if (prev_call) {
+					ut32 ret_addr;
+					RDebugFrame *frame = R_NEW0 (RDebugFrame);
+					cur_sp = r_debug_reg_get (core->dbg, sp_name);
+					(void)core->dbg->iob.read_at (core->dbg->iob.io, cur_sp,
+							(ut8 *)&ret_addr, sizeof (ret_addr));
+					frame->addr = ret_addr;
+					frame->size = old_sp - cur_sp;
+					frame->sp = cur_sp;
+					frame->bp = old_sp;
+					r_list_prepend (core->dbg->call_frames, frame);
+					eprintf ("%ld Call from 0x%08" PFMT64x " to 0x%08" PFMT64x " ret 0x%08" PFMT32x "\n",
+							level, prev_pc, pc, ret_addr);
+					level++;
+					old_sp = cur_sp;
+					prev_call = false;
+				} else if (prev_ret) {
+					RDebugFrame *head = r_list_get_bottom (core->dbg->call_frames);
+					if (head && head->addr != pc) {
+						eprintf ("*");
+					} else {
+						r_list_pop_head (core->dbg->call_frames);
+						eprintf ("%ld", level);
+						level--;
+					}
+					eprintf (" Ret from 0x%08" PFMT64x " to 0x%08" PFMT64x "\n",
+							prev_pc, pc);
+					prev_ret = false;
+				}
+				if (steps % 500 == 0 || pc == addr) {
+					eprintf ("At 0x%08" PFMT64x " after %lu steps\n", pc, steps);
+				}
+				if (r_cons_is_breaked () || r_debug_is_dead (core->dbg) || pc == addr) {
+					break;
+				}
+				if (is_x86_call (core->dbg, pc)) {
+					prev_pc = pc;
+					prev_call = true;
+				} else if (is_x86_ret (core->dbg, pc)) {
+					prev_pc = pc;
+					prev_ret = true;
+				}
+				r_debug_step (core->dbg, 1);
+				steps++;
+			}
+			r_cons_break_pop ();
+			return true;
+		}
 		eprintf ("Continue until 0x%08"PFMT64x" using %d bpsize\n", addr, core->dbg->bpsize);
 		r_reg_arena_swap (core->dbg->reg, true);
 		if (r_bp_add_sw (core->dbg->bp, addr, core->dbg->bpsize, R_BP_PROT_EXEC)) {
-			r_debug_continue (core->dbg);
+			if (r_debug_is_dead (core->dbg)) {
+				eprintf ("Cannot continue, run ood?\n");
+			} else {
+				r_debug_continue (core->dbg);
+			}
 			r_bp_del (core->dbg->bp, addr);
 		} else {
 			eprintf ("Cannot set breakpoint of size %d at 0x%08"PFMT64x"\n",
@@ -3723,7 +4403,7 @@ static bool cmd_dcu (RCore *core, const char *input) {
 	return true;
 }
 
-static int cmd_debug_continue (RCore *core, const char *input) {
+static int cmd_debug_continue(RCore *core, const char *input) {
 	int pid, old_pid, signum;
 	char *ptr;
 	// TODO: we must use this for step 'ds' too maybe...
@@ -3732,22 +4412,28 @@ static int cmd_debug_continue (RCore *core, const char *input) {
 		r_reg_arena_swap (core->dbg->reg, true);
 #if __linux__
 		core->dbg->continue_all_threads = true;
-		r_debug_continue (core->dbg);
-#else
-		r_debug_continue (core->dbg);
 #endif
+		if (r_debug_is_dead (core->dbg)) {
+			eprintf ("Cannot continue, run ood?\n");
+			break;
+		}
+		r_debug_continue (core->dbg);
 		break;
 	case 'a': // "dca"
 		eprintf ("TODO: dca\n");
 		break;
 	case 'b': // "dcb"
 		{
+			if (!core->dbg->session) {
+				eprintf ("Error: Session has not started\n");
+				break;
+			}
 			if (!r_debug_continue_back (core->dbg)) {
 				eprintf ("cannot continue back\n");
 			}
 			break;
 		}
-#if __WINDOWS__ && !__CYGWIN__
+#if __WINDOWS__
 	case 'e': // "dce"
 		r_reg_arena_swap (core->dbg->reg, true);
 		r_debug_continue_pass_exception (core->dbg);
@@ -3807,20 +4493,20 @@ static int cmd_debug_continue (RCore *core, const char *input) {
 			break;
 		}
 		break;
-	case 'p':
+	case 'p': // "dcp"
 		{ // XXX: this is very slow
-			RIOSection *s;
+			RIOMap *s;
 			ut64 pc;
 			int n = 0;
-			int t = core->dbg->trace->enabled;
-			core->dbg->trace->enabled = 0;
+			bool t = core->dbg->trace->enabled;
+			core->dbg->trace->enabled = false;
 			r_cons_break_push (static_debug_stop, core->dbg);
 			do {
 				r_debug_step (core->dbg, 1);
 				r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false);
 				pc = r_debug_reg_get (core->dbg, "PC");
 				eprintf (" %d %"PFMT64x"\r", n++, pc);
-				s = r_io_section_vget (core->io, pc);
+				s = r_io_map_get_at (core->io, pc);
 				if (r_cons_is_breaked ()) {
 					break;
 				}
@@ -3858,19 +4544,20 @@ static int cmd_debug_continue (RCore *core, const char *input) {
 	return 1;
 }
 
-static char *get_corefile_name (const char *raw_name, int pid) {
+static char *get_corefile_name(const char *raw_name, int pid) {
 	return (!*raw_name)?
 		r_str_newf ("core.%u", pid) :
-		r_str_trim (strdup (raw_name));
+		r_str_trim_dup (raw_name);
 }
 
-static int cmd_debug_step (RCore *core, const char *input) {
-	ut64 addr;
+static int cmd_debug_step(RCore *core, const char *input) {
+	ut64 addr = core->offset;;
 	ut8 buf[64];
 	RAnalOp aop;
 	int i, times = 1;
-	if (strlen (input) > 2) {
-		times = r_num_math (core->num, input + 2);
+	char *ptr = strchr (input, ' ');
+	if (ptr) {
+		times = r_num_math (core->num, ptr + 1);
 	}
 	if (times < 1) {
 		times = 1;
@@ -3883,6 +4570,8 @@ static int cmd_debug_step (RCore *core, const char *input) {
 			// sync registers for BSD PT_STEP/PT_CONT
 			// XXX(jjd): is this necessary?
 			r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false);
+			ut64 pc = r_debug_reg_get (core->dbg, "PC");
+			r_debug_trace_pc (core->dbg, pc);
 			if (!r_debug_step (core->dbg, times)) {
 				eprintf ("Step failed\n");
 				core->break_loop = true;
@@ -3924,8 +4613,7 @@ static int cmd_debug_step (RCore *core, const char *input) {
 		case 'i': // dsui
 			if (input[3] == 'r') {
 				step_until_inst (core, input + 4, true);
-			}
-			else {
+			} else {
 				step_until_inst (core, input + 3, false);
 			}
 			break;
@@ -3953,9 +4641,10 @@ static int cmd_debug_step (RCore *core, const char *input) {
 			r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false);
 			addr = r_debug_reg_get (core->dbg, "PC");
 			r_io_read_at (core->io, addr, buf, sizeof (buf));
-			r_anal_op (core->anal, &aop, addr, buf, sizeof (buf), R_ANAL_OP_MASK_ALL);
+			r_anal_op (core->anal, &aop, addr, buf, sizeof (buf), R_ANAL_OP_MASK_BASIC);
 			if (aop.type == R_ANAL_OP_TYPE_CALL) {
-				RIOSection *s = r_io_section_vget (core->io, aop.jump);
+				RBinObject *o = r_bin_cur_object (core->bin);
+				RBinSection *s = r_bin_get_section_at (o, aop.jump, true);
 				if (!s) {
 					r_debug_step_over (core->dbg, times);
 					continue;
@@ -3974,38 +4663,48 @@ static int cmd_debug_step (RCore *core, const char *input) {
 			for (i = 0; i < times; i++) {
 				r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false);
 				r_io_read_at (core->io, addr, buf, sizeof (buf));
-				r_anal_op (core->anal, &aop, addr, buf, sizeof (buf), R_ANAL_OP_MASK_ALL);
+				r_anal_op (core->anal, &aop, addr, buf, sizeof (buf), R_ANAL_OP_MASK_BASIC);
+#if 0
 				if (aop.jump != UT64_MAX && aop.fail != UT64_MAX) {
 					eprintf ("Don't know how to skip this instruction\n");
 					if (bpi) r_core_cmd0 (core, delb);
 					break;
 				}
+#endif
 				addr += aop.size;
 			}
 			r_debug_reg_set (core->dbg, "PC", addr);
+			r_reg_setv (core->anal->reg, "PC", addr);
+			r_core_cmd0 (core, ".dr*");
 			if (bpi) {
 				r_core_cmd0 (core, delb);
 			}
 			break;
 		}
 	case 'o': // "dso"
-		if (r_config_get_i (core->config, "cfg.debug")) {
-			char delb[128] = R_EMPTY;
-			addr = r_debug_reg_get (core->dbg, "PC");
-			RBreakpointItem *bpi = r_bp_get_at (core->dbg->bp, addr);
-			sprintf(delb, "db 0x%"PFMT64x"", addr);
-			r_bp_del (core->dbg->bp, addr);
-			r_reg_arena_swap (core->dbg->reg, true);
-			r_debug_step_over (core->dbg, times);
-			if (bpi) r_core_cmd0 (core, delb);
+		if (r_config_get_i (core->config, "dbg.skipover")) {
+			r_core_cmdf (core, "dss%s", input + 2);
 		} else {
-			r_core_cmdf (core, "aeso%s", input + 2);
+			if (r_config_get_i (core->config, "cfg.debug")) {
+				char delb[128] = R_EMPTY;
+				addr = r_debug_reg_get (core->dbg, "PC");
+				RBreakpointItem *bpi = r_bp_get_at (core->dbg->bp, addr);
+				sprintf(delb, "db 0x%"PFMT64x"", addr);
+				r_bp_del (core->dbg->bp, addr);
+				r_reg_arena_swap (core->dbg->reg, true);
+				r_debug_step_over (core->dbg, times);
+				if (bpi) r_core_cmd0 (core, delb);
+			} else {
+				r_core_cmdf (core, "aeso%s", input + 2);
+			}
 		}
 		break;
 	case 'b': // "dsb"
 		if (r_config_get_i (core->config, "cfg.debug")) {
-			if (!r_debug_step_back (core->dbg)) {
-				eprintf ("cannot step back\n");
+			if (!core->dbg->session) {
+				eprintf ("Session has not started\n");
+			} else if (r_debug_step_back (core->dbg, times) < 0) {
+				eprintf ("Error: stepping back failed\n");
 			}
 		} else {
 			if (r_core_esil_step_back (core)) {
@@ -4027,6 +4726,35 @@ static int cmd_debug_step (RCore *core, const char *input) {
 	return 1;
 }
 
+static ut8 *getFileData(RCore *core, const char *arg, int *sz) {
+	ut8 *out = NULL;
+	int size = 0;
+	if (*arg == '$' && !arg[1]) {
+		eprintf ("No alias name given\n");
+	} else if (*arg == '$') {
+		RCmdAliasVal *v  = r_cmd_alias_get (core->rcmd, arg+1);
+		if (v) {
+			out = malloc (v->sz);
+			if (out) {
+				memcpy (out, v->data, v->sz);
+				size = v->sz;
+			}
+		} else {
+			eprintf ("No such alias \"$%s\"\n", arg+1);
+		}
+	} else {
+		size_t file_sz;
+		out = (ut8*) r_file_slurp (arg, &file_sz);
+		size = file_sz;
+	}
+
+	if (sz) {
+		*sz = size;
+	}
+
+	return out;
+}
+
 static void consumeBuffer(RBuffer *buf, const char *cmd, const char *errmsg) {
 	if (!buf) {
 		if (errmsg) {
@@ -4038,8 +4766,9 @@ static void consumeBuffer(RBuffer *buf, const char *cmd, const char *errmsg) {
 		r_cons_printf ("%s", cmd);
 	}
 	int i;
-	for (i = 0; i < buf->length; i++) {
-		r_cons_printf ("%02x", buf->buf[i]);
+	r_buf_seek (buf, 0, R_BUF_SET);
+	for (i = 0; i < r_buf_size (buf); i++) {
+		r_cons_printf ("%02x", r_buf_read8 (buf));
 	}
 	r_cons_printf ("\n");
 }
@@ -4050,6 +4779,12 @@ static int cmd_debug(void *data, const char *input) {
 	int follow = 0;
 	const char *ptr;
 	ut64 addr;
+	int min;
+	RListIter *iter;
+	RList *list;
+	RDebugPid *p;
+	RDebugTracepoint *trace;
+	RAnalOp *op;
 
 	if (r_sandbox_enable (0)) {
 		eprintf ("Debugger commands disabled in sandbox mode\n");
@@ -4068,10 +4803,16 @@ static int cmd_debug(void *data, const char *input) {
 		// TODO: define ranges? to display only some traces, allow to scroll on this disasm? ~.. ?
 		switch (input[1]) {
 		case '\0': // "dt"
-			r_debug_trace_list (core->dbg, 0);
+			r_debug_trace_list (core->dbg, 0, core->offset);
+			break;
+		case '=': // "dt="
+			r_debug_trace_list (core->dbg, '=', core->offset);
+			break;
+		case 'q': // "dtq"
+			r_debug_trace_list (core->dbg, 'q', core->offset);
 			break;
 		case '*': // "dt*"
-			r_debug_trace_list (core->dbg, 1);
+			r_debug_trace_list (core->dbg, 1, core->offset);
 			break;
 		case ' ': // "dt [addr]"
 			if ((t = r_debug_trace_get (core->dbg,
@@ -4096,13 +4837,47 @@ static int cmd_debug(void *data, const char *input) {
 				debug_trace_calls (core, input + 2);
 			}
 			break;
-		case 'r': // "dtr"
-			eprintf ("TODO\n");
-			//trace_show(-1, trace_tag_get());
-			break;
 		case 'd': // "dtd"
-			// TODO: reimplement using the api
-			r_core_cmd0 (core, "pd 1 @@= `dt~[0]`");
+			min = r_num_math (core->num, input + 3);
+			if (input[2] == 'q') { // "dtdq"
+				int n = 0;
+				r_list_foreach (core->dbg->trace->traces, iter, trace) {
+					if (n >= min) {
+						r_cons_printf ("%d  ", trace->count);
+						r_cons_printf ("0x%08"PFMT64x"\n", trace->addr);
+						break;
+					}
+					n++;
+				}
+			} else if (input[2] == 'i') {
+				int n = 0;
+				r_list_foreach (core->dbg->trace->traces, iter, trace) {
+					op = r_core_anal_op (core, trace->addr, R_ANAL_OP_MASK_BASIC | R_ANAL_OP_MASK_DISASM);
+					if (n >= min) {
+						r_cons_printf ("%d %s\n", trace->count, op->mnemonic);
+					}
+					n++;
+					r_anal_op_free (op);
+				}
+			} else if (input[2] == ' ') {
+				int n = 0;
+				r_list_foreach (core->dbg->trace->traces, iter, trace) {
+					op = r_core_anal_op (core, trace->addr, R_ANAL_OP_MASK_BASIC | R_ANAL_OP_MASK_DISASM);
+					if (n >= min) {
+						r_cons_printf ("0x%08"PFMT64x" %s\n", trace->addr, op->mnemonic);
+					}
+					n++;
+					r_anal_op_free (op);
+				}
+			} else {
+				// TODO: reimplement using the api
+				//r_core_cmd0 (core, "pd 1 @@= `dtq`");
+				r_list_foreach (core->dbg->trace->traces, iter, trace) {
+					op = r_core_anal_op (core, trace->addr, R_ANAL_OP_MASK_BASIC | R_ANAL_OP_MASK_DISASM);
+					r_cons_printf ("0x%08"PFMT64x" %s\n", trace->addr, op->mnemonic);
+					r_anal_op_free (op);
+				}
+			}
 			break;
 		case 'g': // "dtg"
 			dot_trace_traverse (core, core->dbg->tree, input[2]);
@@ -4114,28 +4889,38 @@ static int cmd_debug(void *data, const char *input) {
 			core->dbg->trace = r_debug_trace_new ();
 			break;
 		case '+': // "dt+"
-			ptr = input + 3;
-			addr = r_num_math (core->num, ptr);
-			ptr = strchr (ptr, ' ');
-			if (ptr) {
-				RAnalOp *op = r_core_op_anal (core, addr);
+			if (input[2] == '+') { // "dt++"
+				char *a, *s = r_str_trim_dup (input + 3);
+				RList *args = r_str_split_list (s, " ", 0);
+				RListIter *iter;
+				r_list_foreach (args, iter, a) {
+					ut64 addr = r_num_get (NULL, a);
+					(void)r_debug_trace_add (core->dbg, addr, 1);
+				}
+				r_list_free (args);
+				free (s);
+			} else {
+				ptr = input + 2;
+				addr = r_num_math (core->num, ptr);
+				ptr = strchr (ptr, ' ');
+				int count = 1;
+				if (ptr) {
+					count = r_num_math (core->num, ptr + 1);
+				}
+				RAnalOp *op = r_core_op_anal (core, addr, R_ANAL_OP_MASK_HINT);
 				if (op) {
 					RDebugTracepoint *tp = r_debug_trace_add (core->dbg, addr, op->size);
 					if (!tp) {
 						r_anal_op_free (op);
 						break;
 					}
-					tp->count = r_num_math (core->num, ptr + 1);
+					tp->count = count;
 					r_anal_trace_bb (core->anal, addr);
 					r_anal_op_free (op);
 				} else {
 					eprintf ("Cannot analyze opcode at 0x%08" PFMT64x "\n", addr);
 				}
 			}
-			break;
-		case 'D': // "dtD"
-			// XXX: not yet tested..and rsc dwarf-traces comes from r1
-			r_core_cmd (core, "dt*|rsc dwarf-traces $FILE", 0);
 			break;
 		case 'e': // "dte"
 			if (!core->anal->esil) {
@@ -4148,30 +4933,28 @@ static int cmd_debug(void *data, const char *input) {
 				if (!(core->anal->esil = r_anal_esil_new (stacksize, iotrap, addrsize))) {
 					return 0;
 				}
-				r_anal_esil_setup (core->anal->esil,
-						core->anal, romem, stats, nonull);
+				r_anal_esil_setup (core->anal->esil, core->anal, romem, stats, nonull);
 			}
 			switch (input[2]) {
 			case 0: // "dte"
 				r_anal_esil_trace_list (core->anal->esil);
 				break;
 			case 'i': { // "dtei"
-				RAnalOp *op;
 				ut64 addr = r_num_math (core->num, input + 3);
 				if (!addr) {
 					addr = core->offset;
 				}
-				op = r_core_anal_op (core, addr);
+				RAnalOp *op = r_core_anal_op (core, addr, R_ANAL_OP_MASK_ESIL);
 				if (op) {
-					r_anal_esil_trace (core->anal->esil, op);
+					r_anal_esil_trace_op (core->anal->esil, op);
 				}
 				r_anal_op_free (op);
 			} break;
 			case '-': // "dte-"
 				if (!strcmp (input + 3, "*")) {
 					if (core->anal->esil) {
-						sdb_free (core->anal->esil->db_trace);
-						core->anal->esil->db_trace = sdb_new0 ();
+						sdb_free (core->anal->esil->trace->db);
+						core->anal->esil->trace->db = sdb_new0 ();
 					}
 				} else {
 					eprintf ("TODO: dte- cannot delete specific logs. Use dte-*\n");
@@ -4184,7 +4967,7 @@ static int cmd_debug(void *data, const char *input) {
 			} break;
 			case 'k': // "dtek"
 				if (input[3] == ' ') {
-					char *s = sdb_querys (core->anal->esil->db_trace,
+					char *s = sdb_querys (core->anal->esil->trace->db,
 							NULL, 0, input + 4);
 					r_cons_println (s);
 					free (s);
@@ -4198,42 +4981,45 @@ static int cmd_debug(void *data, const char *input) {
 			break;
 		case 's': // "dts"
 			switch (input[2]) {
-			case 0: // "dts"
-				r_debug_session_list (core->dbg);
-				break;
 			case '+': // "dts+"
-				r_debug_session_add (core->dbg, NULL);
+				if (r_debug_is_dead (core->dbg)) {
+					eprintf ("Cannot start session outside of debug mode, run ood?\n");
+					break;
+				}
+				if (core->dbg->session) {
+					eprintf ("Session already started\n");
+					break;
+				}
+				core->dbg->session = r_debug_session_new ();
+				r_debug_add_checkpoint (core->dbg);
 				break;
 			case '-': // "dts-"
-				if (input[3] == ' ') {
-					r_debug_session_delete (core->dbg, r_num_math (core->num, input + 3));
-				} else {
-					r_cons_println ("Usage: dts- [id] - Delete trace session");
+				if (!core->dbg->session) {
+					eprintf ("No session started\n");
+					break;
 				}
+				r_debug_session_free (core->dbg->session);
+				core->dbg->session = NULL;
 				break;
 			case 't': // "dtst"
-				if (input[3] == ' ') {
-					r_debug_session_save (core->dbg, input + 4);
-				} else {
-					r_cons_println ("Usage: dtst [file] - save trace sessions to disk");
+				if (!core->dbg->session) {
+					eprintf ("No session started\n");
+					break;
 				}
+				r_debug_session_save (core->dbg->session, input + 4);
 				break;
 			case 'f': // "dtsf"
-				if (input[3] == ' ') {
-					r_debug_session_restore (core->dbg, input + 4);
-				} else {
-					r_cons_println ("Usage: dtsf [file] - read trace sessions from disk");
+				if (core->dbg->session) {
+					r_debug_session_free (core->dbg->session);
+					core->dbg->session = NULL;
 				}
+				core->dbg->session = r_debug_session_new ();
+				r_debug_session_load (core->dbg, input + 4);
 				break;
-			case 'C': // "dtsC"
-				if (input[3] == ' ') {
-					r_debug_session_comment (core->dbg, atoi (input + 3), strchr (input + 4, ' '));
-				} else {
-					r_cons_println ("Usage: dtsC id comment - add comment for given trace session");
+			case 'm': // "dtsm"
+				if (core->dbg->session) {
+					r_debug_session_list_memory (core->dbg);
 				}
-				break;
-			case 'A': // "dtsA" for debugging command (private command for developer)
-				r_debug_session_set_idx (core->dbg, atoi (input + 4));
 				break;
 			default:
 				r_core_cmd_help (core, help_msg_dts);
@@ -4248,9 +5034,9 @@ static int cmd_debug(void *data, const char *input) {
 			break;
 		}
 		break;
-	case 'd': // "dtd"
+	case 'd': // "ddd"
 		switch (input[1]) {
-		case '\0': // "dtd"
+		case '\0': // "ddd"
 			r_debug_desc_list (core->dbg, 0);
 			break;
 		case '*': // "dtd*"
@@ -4364,10 +5150,9 @@ static int cmd_debug(void *data, const char *input) {
 		cmd_debug_map (core, input + 1);
 		break;
 	case 'r': // "dr"
-		if (core->io->debug || input[1] == '?') {
+		if (r_config_get_i (core->config, "cfg.debug") || input[1] == '?') {
 			cmd_debug_reg (core, input + 1);
 		} else {
-			void cmd_anal_reg (RCore *core, const char *str);
 			cmd_anal_reg (core, input + 1);
 		}
 		//r_core_cmd (core, "|reg", 0);
@@ -4376,30 +5161,51 @@ static int cmd_debug(void *data, const char *input) {
 		cmd_debug_pid (core, input);
 		break;
 	case 'L': // "dL"
-		if (input[1]=='q') {
-			r_debug_plugin_list (core->dbg, 'q');
-		} else if (input[1]==' ') {
-			char *str = r_str_trim (strdup (input + 2));
+		switch (input[1]) {
+		case 'q':
+			r_debug_plugin_list (core->dbg, input[1]);
+			break;
+		case 'j':
+			core->dbg->pj = r_core_pj_new (core);
+			r_debug_plugin_list (core->dbg, 'j');
+			pj_free (core->dbg->pj);
+			core->dbg->pj = NULL;
+			break;
+		case '?':
+			r_core_cmd_help (core, help_msg_dL);
+			break;
+		case ' ': {
+			char *str = r_str_trim_dup (input + 2);
 			r_config_set (core->config, "dbg.backend", str);
 			// implicit by config.set r_debug_use (core->dbg, str);
 			free (str);
-		} else {
+			}
+			break;
+		default:
 			r_debug_plugin_list (core->dbg, 0);
+			break;
 		}
 		break;
 	case 'i': // "di"
-		{
+		if (input[1] == 'r' ) { // "dir"
+			r_core_cmdf (core, "ls%s", input + 2);
+		} else {
 			RDebugInfo *rdi = r_debug_info (core->dbg, input + 2);
 			RDebugReasonType stop = r_debug_stop_reason (core->dbg);
-			char *escaped_str;
 			switch (input[1]) {
 			case '\0': // "di"
 #define P r_cons_printf
-#define PS(X, Y) {escaped_str = r_str_escape (Y);r_cons_printf(X, escaped_str);free(escaped_str);}
+				if (stop != -1) {
+					if (core->dbg->reason.type == R_DEBUG_REASON_SIGNAL) {
+						P ("signalstr=%s\n", r_signal_to_human (core->dbg->reason.signum));
+					}
+					P ("stopreason=%s\n", r_debug_reason_to_string (stop));
+				}
 				if (rdi) {
 					const char *s = r_signal_to_string (core->dbg->reason.signum);
 					P ("type=%s\n", r_debug_reason_to_string (core->dbg->reason.type));
-					P ("signal=%s\n", s? s: "none");
+					P ("signal=%s\n", r_str_get_fail (s, "none"));
+					P ("sigstr=%s\n", r_signal_to_human (core->dbg->reason.signum));
 					P ("signum=%d\n", core->dbg->reason.signum);
 					P ("sigpid=%d\n", core->dbg->reason.tid);
 					P ("addr=0x%"PFMT64x"\n", core->dbg->reason.addr);
@@ -4408,6 +5214,7 @@ static int cmd_debug(void *data, const char *input) {
 					P ("baddr=0x%"PFMT64x"\n", r_debug_get_baddr (core->dbg, NULL));
 					P ("pid=%d\n", rdi->pid);
 					P ("tid=%d\n", rdi->tid);
+					P ("stopaddr=0x%"PFMT64x"\n", core->dbg->stopaddr);
 					if (rdi->uid != -1) {
 						P ("uid=%d\n", rdi->uid);
 					}
@@ -4430,7 +5237,38 @@ static int cmd_debug(void *data, const char *input) {
 						P ("kernel_stack=\n%s\n", rdi->kernel_stack);
 					}
 				}
-				if (stop != -1) P ("stopreason=%d\n", stop);
+				break;
+			case 'f': // "dif" "diff"
+				if (input[1] == '?') {
+					eprintf ("Usage: dif $a $b  # diff two alias files\n");
+				} else {
+					char *arg = strchr (input, ' ');
+					if (arg) {
+						arg = strdup (r_str_trim_head_ro (arg + 1));
+						char *arg2 = strchr (arg, ' ');
+						if (arg2) {
+							*arg2++ = 0;
+							int al;
+							int bl;
+							ut8 *a = getFileData (core, arg, &al);
+							ut8 *b = getFileData (core, arg2, &bl);
+							if (a && b) {
+								RDiff *d = r_diff_new ();
+								char *uni = r_diff_buffers_to_string (d, a, al, b, bl);
+								r_cons_printf ("%s\n", uni);
+								r_diff_free (d);
+								free (uni);
+							} else {
+								eprintf ("Cannot open those alias files\n");
+							}
+							free (a);
+							free (b);
+						}
+						free (arg);
+					} else {
+						eprintf ("Usage: dif $a $b  # diff two alias files\n");
+					}
+				}
 				break;
 			case '*': // "di*"
 				if (rdi) {
@@ -4443,44 +5281,62 @@ static int cmd_debug(void *data, const char *input) {
 					r_cons_printf ("f dbg.tid = %d\n", rdi->tid);
 					r_cons_printf ("f dbg.uid = %d\n", rdi->uid);
 					r_cons_printf ("f dbg.gid = %d\n", rdi->gid);
-
 				}
 				break;
 			case 'j': // "dij"
-				P ("{");
+				{
+					PJ *pj = r_core_pj_new (core);
+					pj_o (pj);
+					pj_ks (pj, "stopreason", r_debug_reason_to_string (stop));
 				if (rdi) {
 					const char *s = r_signal_to_string (core->dbg->reason.signum);
-					P ("\"type\":\"%s\",", r_debug_reason_to_string (core->dbg->reason.type));
-					P ("\"signal\":\"%s\",", s? s: "none");
-					P ("\"signum\":%d,", core->dbg->reason.signum);
-					P ("\"sigpid\":%d,", core->dbg->reason.tid);
-					P ("\"addr\":%"PFMT64d",", core->dbg->reason.addr);
-					P ("\"inbp\":%s,", r_str_bool (core->dbg->reason.bp_addr));
-					P ("\"baddr\":%"PFMT64d",", r_debug_get_baddr (core->dbg, NULL));
-					P ("\"pid\":%d,", rdi->pid);
-					P ("\"tid\":%d,", rdi->tid);
-					P ("\"uid\":%d,", rdi->uid);
-					P ("\"gid\":%d,", rdi->gid);
+					pj_ks (pj, "type", r_debug_reason_to_string (core->dbg->reason.type));
+					pj_ks (pj, "signal", r_str_get_fail (s, "none"));
+					pj_kn (pj, "signum", core->dbg->reason.signum);
+					pj_ks (pj, "sigstr", r_signal_to_human (core->dbg->reason.signum));
+					pj_kn (pj, "sigpid", core->dbg->reason.tid);
+					pj_kn (pj, "addr", core->dbg->reason.addr);
+					pj_kn (pj, "inbp", core->dbg->reason.bp_addr);
+					pj_kn (pj, "baddr", r_debug_get_baddr (core->dbg, NULL));
+					pj_kn (pj, "stopaddr", core->dbg->stopaddr);
+					pj_kn (pj, "pid", rdi->pid);
+					pj_kn (pj, "tid", rdi->tid);
+					pj_kn (pj, "uid", rdi->uid);
+					pj_kn (pj, "gid", rdi->gid);
 					if (rdi->usr) {
-						PS("\"usr\":\"%s\",", rdi->usr);
+						pj_ks (pj, "usr", rdi->usr);
 					}
 					if (rdi->exe) {
-						PS("\"exe\":\"%s\",", rdi->exe);
+						pj_ks (pj, "exe", rdi->exe);
 					}
 					if (rdi->cmdline) {
-						PS ("\"cmdline\":\"%s\",", rdi->cmdline);
+						pj_ks (pj, "cmdline", rdi->cmdline);
 					}
 					if (rdi->cwd) {
-						PS ("\"cwd\":\"%s\",", rdi->cwd);
+						pj_ks (pj, "cwd", rdi->cwd);
 					}
 				}
-				P ("\"stopreason\":%d}\n", stop);
+				pj_end (pj);
+				char *s = pj_drain (pj);
+				P("%s", s);
+				free (s);
+				}
 				break;
 #undef P
 #undef PS
-			case '?': // "dij"
+			case 'q':
+				{
+					const char *r = r_debug_reason_to_string (core->dbg->reason.type);
+					if (!r) {
+						r = "none";
+					}
+					r_cons_printf ("%s at 0x%08"PFMT64x"\n", r, core->dbg->stopaddr);
+				}
+				break;
+			case '?': // "di?"
 			default:
 				r_core_cmd_help (core, help_msg_di);
+				break;
 			}
 			r_debug_info_free (rdi);
 		}
@@ -4497,7 +5353,7 @@ static int cmd_debug(void *data, const char *input) {
 			char *corefile = get_corefile_name (input + 1, core->dbg->pid);
 			eprintf ("Writing to file '%s'\n", corefile);
 			r_file_rm (corefile);
-			RBuffer *dst = r_buf_new_file (corefile, true);
+			RBuffer *dst = r_buf_new_file (corefile, O_RDWR | O_CREAT, 0644);
 			if (dst) {
 				if (!core->dbg->h->gcore (core->dbg, dst)) {
 					eprintf ("dg: coredump failed\n");
@@ -4517,7 +5373,27 @@ static int cmd_debug(void *data, const char *input) {
 		case '\0': // "do"
 			r_core_file_reopen (core, input[1] ? input + 2: NULL, 0, 1);
 			break;
-		case 'r': //"dor" : rarun profile
+		case 'e': // "doe"
+			switch (input[2]) {
+			case '\0': // "doe"
+				if (core->io->envprofile) {
+					r_cons_println (core->io->envprofile);
+				}
+				break;
+			case '!': // "doe!"
+			{
+				char *out = r_core_editor (core, NULL, core->io->envprofile);
+				if (out) {
+					free (core->io->envprofile);
+					core->io->envprofile = out;
+					eprintf ("%s\n", core->io->envprofile);
+				}
+			} break;
+			default:
+				break;
+			}
+			break;
+		case 'r': // "dor" : rarun profile
 			if (input[2] == ' ') {
 				setRarunProfileString (core, input + 3);
 			} else {
@@ -4525,8 +5401,43 @@ static int cmd_debug(void *data, const char *input) {
 				r_sys_cmd ("rarun2 -h");
 			}
 			break;
-		case 'o': //"doo" : reopen in debugger
-			r_core_file_reopen_debug (core, input + 2);
+		case 'o': // "doo" : reopen in debug mode
+			if (input[2] == 'f') { // "doof" : reopen in debug mode from the given file
+				r_config_set_i (core->config, "cfg.debug", true);
+				char *s = r_str_newf ("oodf %s", input + 3);
+				r_core_cmd0 (core, s);
+				free (s);
+			} else {
+				r_core_file_reopen_debug (core, input + 2);
+			}
+			break;
+		case 'c': // "doc" : close current debug session
+			if (!core || !core->io || !core->io->desc || !r_config_get_i (core->config, "cfg.debug")) {
+				eprintf ("No open debug session\n");
+				break;
+			}
+			// Stop trace session
+			if (core->dbg->session) {
+				r_debug_session_free (core->dbg->session);
+				core->dbg->session = NULL;
+			}
+			// Kill debugee and all child processes
+			if (core->dbg && core->dbg->h && core->dbg->h->pids && core->dbg->pid != -1) {
+				list = core->dbg->h->pids (core->dbg, core->dbg->pid);
+				if (list) {
+					r_list_foreach (list, iter, p) {
+						r_debug_kill (core->dbg, p->pid, p->pid, SIGKILL);
+						r_debug_detach (core->dbg, p->pid);
+					}
+				} else {
+					r_debug_kill (core->dbg, core->dbg->pid, core->dbg->pid, SIGKILL);
+					r_debug_detach (core->dbg, core->dbg->pid);
+				}
+			}
+			// Remove registers from the flag list
+			r_core_cmd0 (core, ".dr-*");
+			// Reopen and rebase the original file
+			r_core_cmd0 (core, "oo");
 			break;
 		case '?': // "do?"
 		default:
@@ -4534,6 +5445,15 @@ static int cmd_debug(void *data, const char *input) {
 			break;
 		}
 		break;
+#if __WINDOWS__
+	case 'W': // "dW"
+		if (input[1] == 'i') {
+			r_w32_identify_window ();
+		} else {
+			r_w32_print_windows (core->dbg);
+		}
+		break;
+#endif
 	case 'w': // "dw"
 		r_cons_break_push (static_debug_stop, core->dbg);
 		for (;!r_cons_is_breaked ();) {
@@ -4553,42 +5473,56 @@ static int cmd_debug(void *data, const char *input) {
 			ut8 bytes[4096];
 			if (strlen (input + 2) < 4096){
 				int bytes_len = r_hex_str2bin (input + 2, bytes);
-				if (bytes_len>0) r_debug_execute (core->dbg,
-						bytes, bytes_len, 0);
-				else eprintf ("Invalid hexpairs\n");
-			} else eprintf ("Injection opcodes so long\n");
+				if (bytes_len > 0) {
+					r_debug_execute (core->dbg, bytes, bytes_len, 0);
+				} else {
+					eprintf ("Invalid hexpairs\n");
+				}
+			} else {
+				eprintf ("Injection opcodes so long\n");
+			}
 			break;
 		}
 		case 'a': { // "dxa"
 			RAsmCode *acode;
-			r_asm_set_pc (core->assembler, core->offset);
-			acode = r_asm_massemble (core->assembler, input + 2);
-			if (acode && *acode->buf_hex) {
+			r_asm_set_pc (core->rasm, core->offset);
+			acode = r_asm_massemble (core->rasm, input + 2);
+			if (acode) {
 				r_reg_arena_push (core->dbg->reg);
-				r_debug_execute (core->dbg, acode->buf,
-						acode->len, 0);
+				r_debug_execute (core->dbg, acode->bytes, acode->len, 0);
 				r_reg_arena_pop (core->dbg->reg);
 			}
 			r_asm_code_free (acode);
 			break;
 		}
-		case 'e': { // "dxe"
-			REgg *egg = core->egg;
-			RBuffer *b;
-			const char *asm_arch = r_config_get (core->config, "asm.arch");
-			int asm_bits = r_config_get_i (core->config, "asm.bits");
-			const char *asm_os = r_config_get (core->config, "asm.os");
-			r_egg_setup (egg, asm_arch, asm_bits, 0, asm_os);
-			r_egg_reset (egg);
-			r_egg_load (egg, input + 1, 0);
-			r_egg_compile (egg);
-			b = r_egg_get_bin (egg);
-			r_asm_set_pc (core->assembler, core->offset);
-			r_reg_arena_push (core->dbg->reg);
-			r_debug_execute (core->dbg, b->buf, b->length, 0);
-			r_reg_arena_pop (core->dbg->reg);
+		case 'e':
+			if (input[2] == '?') {
+				r_core_cmd_help (core, help_msg_dxe);
+			} else { // "dxe"
+				const char *program = r_str_trim_head_ro (input + 2);
+				REgg *egg = core->egg;
+				const char *asm_arch = r_config_get (core->config, "asm.arch");
+				int asm_bits = r_config_get_i (core->config, "asm.bits");
+				const char *asm_os = r_config_get (core->config, "asm.os");
+				r_egg_setup (egg, asm_arch, asm_bits, 0, asm_os);
+				r_egg_reset (egg);
+				r_egg_load (egg, program, 0);
+				if (!r_egg_compile (egg)) {
+					eprintf ("Failed to compile.\n");
+				}
+				RBuffer *b = r_egg_get_bin (egg);
+				r_asm_set_pc (core->rasm, core->offset);
+				r_reg_arena_push (core->dbg->reg);
+				ut64 tmpsz;
+				const ut8 *tmp = r_buf_data (b, &tmpsz);
+				if (tmpsz > 0) {
+					r_debug_execute (core->dbg, tmp, tmpsz, 0);
+				} else {
+					eprintf ("No egg program compiled to execute.\n");
+				}
+				r_reg_arena_pop (core->dbg->reg);
+			}
 			break;
-		}
 		case 'r': // "dxr"
 			r_reg_arena_push (core->dbg->reg);
 			if (input[2] == ' ') {
@@ -4611,7 +5545,9 @@ static int cmd_debug(void *data, const char *input) {
 			if (input[2]) {
 				char *str;
 				r_cons_push ();
-				str = r_core_cmd_str (core, sdb_fmt ("gs %s", input + 2));
+				char *cmd = r_str_newf ("gs %s", input + 2);
+				str = r_core_cmd_str (core, cmd);
+				free (cmd);
 				r_cons_pop ();
 				r_core_cmdf (core, "dx %s", str); //`gs %s`", input + 2);
 				free (str);

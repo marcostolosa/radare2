@@ -10,12 +10,11 @@
 
 #include <propeller_disas.h>
 
-static int propeller_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len) {
+static int propeller_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
 	int ret;
 	struct propeller_cmd cmd;
 
 	memset (&cmd, 0, sizeof (cmd));
-	memset (op, 0, sizeof (RAnalOp));
 
 	ret = op->size = propeller_decode_command (buf, &cmd);
 
@@ -24,8 +23,6 @@ static int propeller_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int
 	}
 
 	op->addr = addr;
-	op->jump = op->fail = UT64_MAX;
-	op->ptr = op->val = -1;
 
 	switch (cmd.opcode) {
 	case PROP_TEST:

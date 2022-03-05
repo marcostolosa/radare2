@@ -1,257 +1,226 @@
 # How to report issues
 
-Before reporting an issue with GitHub, be sure that:
-* you are using the git version of radare2
-* you are using a clean installation
-* the issue was not already reported
+Before reporting an issue on GitHub, please check that:
+* You are using the most recent git version of radare2
+* You are using a clean installation of radare2
+* The issue has not already been reported (search
+  [here](https://github.com/radareorg/radare2/issues))
 
-When the above conditions are satisfied, feel free to submit an issue,
-trying to be as precise as possible. If you can, provide the problematic
-binary, the steps to reproduce the error and a backtrace in case of SEGFAULTs.
-Any information will help to fix the problem.
+When the above conditions are satisfied, feel free to submit an issue. Please
+provide a precise description, and as many of the following as possible:
+
+* Your operating system and architecture; e.g. "Windows 10 32-bit", "Debian 11
+  64-bit".
+* The file in use when the issue was encountered (we may add the file or a
+  section of it to our test suite to avoid regressions).
+* A backtrace, if the issue is a segmentation fault. You can compile with ASan
+  on Linux using `sys/sanitize.sh` to allow easier diagnosis of such issues.
+* Detailed steps to reproduce the issue, including a list of commands and
+  expected and/or actual output.
 
 # How to contribute
 
-There are a few guidelines that we need contributors to follow so that we can
-try to keep the codebase consistent and clean.
+There are a few guidelines that we ask contributors to follow to ensure that
+the codebase is clean and consistent.
 
 ## Getting Started
 
-* Make sure you have a GitHub account.
-* Fork the repository on GitHub.
-* Create a topic branch from master. Please avoid working directly on the ```master``` branch.
-* Make commits of logical units.
-* Check for unnecessary whitespace with ```git diff --check``` and be sure to follow the CODINGSTYLE (more on this in the next section).
-* Submit the Pull Request(PR) on Github.
-* When relevant, write a test for
-  [radare2-regressions](https://github.com/radare/radare2-regressions) and
-  submit a PR also there. Use the same branch name in both repositories, so
-  Travis will be able to use your new tests together with new changes. 
-  AppVeyor (for now) still uses radare/radare2-regressions repo with branch
-  master. NOTE: when merging PRs, *always* merge the radare2-regressions PR
-  first.
+* Make sure you have a GitHub account and a basic understanding of `git`. If
+  you don't know how to use `git`, there is a useful guide
+  [here](https://learnxinyminutes.com/docs/git).
+* Fork the repository on GitHub (there should be a "Fork" button on the top
+  right of the repository home page).
+* Create a branch on your fork based off of `master`. Please avoid working
+  directly on the `master` branch. This will make it easier to prepare your
+  changes for merging when it's ready.
 
-## Coding Style guidelines
-
-* Tabs are used for indentation. In a switch statement, the
-  cases are indentend at the switch level.
-
-```c
-switch(n) {
-case 1:
-case 2:
-default:
-}
+```sh
+git checkout master
+git checkout -b mybranch
 ```
 
-* Lines should be at most 78 chars. A tab is considered as 4 chars.
+* Make commits of logical units. Try not to make several unrelated changes in
+  the same commit, but don't feel obligated to split them up too much either.
+  Ideally, r2 should successfully compile at each commit. This simplifies the
+  debugging process, as it allows easier use of tools such as `git bisect`
+  alongside the `r2r` testing suite to identify when a bug is introduced.
+* Check for coding style issues with:
 
-* Braces open on the same line as the for/while/if/else/function/etc. Closing
-  braces are put on a line of their own, except in the else of an if statement
-  or in a while of a do-while statement. Always use braces for if and while.
-
-```c
-if (a == b) {
-	...
-}
-
-if (a == b) {
-	...
-} else if (a > b) {
-	...
-}
-
-if (a == b) {
-	...
-} else {
-	do_something_else ();
-}
-
-do {
-	do_something ();
-} while (cond);
-
-if (a == b) {
-	b = 3;
-}
-
+```sh
+git diff master..mybranch | sys/clang-format-diff.py -p1
 ```
 
-* In general, don't use goto. The goto statement only comes in handy when a
-  function exits from multiple locations and some common work such as cleanup
-  has to be done.  If there is no cleanup needed then just return directly.
+  For more on the coding style, see [DEVELOPERS.md](DEVELOPERS.md).
+* Open a [pull request](https://github.com/radareorg/radare2/pulls) (PR) on
+  Github.
+* Prefix the PR title with `WIP:` and mark it as a draft if you aren't ready to
+  merge.
+* When relevant, add or modify tests in [test/](test).
 
-  Choose label names which say what the goto does or why the goto exists.  An
-  example of a good name could be "out_buffer:" if the goto frees "buffer".
-  Avoid using GW-BASIC names like "err1:" and "err2:".
+## Rebasing onto updated master
 
-* Use early returns instead of if-else when you need to filter out some bad
-  value at the start of a function.
+New changes are frequently pushed to the `master` branch. Before your branch
+can be merged, you must resolve any conflicts with new commits made to
+`master`.
 
-```c
-int check(RCore *c, int a, int b) {
-	if (!c) return false;
-	if (a < 0 || b < 1) return false;
+To prepare your branch for merging onto `master`, you must first `rebase` it
+onto the most recent commit on `radareorg/master`, then, if you already pushed
+to your remote, force-`push` it to overwrite the previous commits after any
+conflict resolution.
 
-	... /* do something else */
-}
+#### Step 0: Configuring git
+
+You may wish to change default git settings to ensure you don't need to always
+provide specific options. These do not need to be set again after initial
+configuration unless your git settings are lost, e.g. if you delete the
+repository folder and then clone it again.
+
+If you cloned from your fork, you can add a new remote for upstream. The
+commands here will assume that `origin` is your fork and `radareorg` is
+upstream, but you can name them as you choose.
+
+```sh
+# Use SSH
+git remote add radareorg git@github.com:radareorg/radare2.git
+
+# Use HTTPS
+git remote add radareorg https://github.com/radareorg/radare2
 ```
 
-* Use a space after most of the keyword and around operators.
+radare2 uses a `fast-forward` merging style. This means that instead of taking
+the new commits you make and adding them to `master` in a single "merge
+commit", the commits are directly copied and applied to `master`, "replaying"
+them to bring `master` up to date with your branch.
 
-```c
-a = b + 3;
-a = (b << 3) * 5;
+Default settings may create these "merge commits", which are undesirable and
+make the commit history harder to read and interpret. You can set `merge` and
+`pull` to fast-forward only to avoid this.
+
+```sh
+git config merge.ff only
+git config pull.ff only
 ```
 
-* Multiline ternary operator conditionals must be indented a-la JS way:
+#### Step 1: Pull new commits to `master` from upstream
 
-```c
-- ret = over ?
--         r_debug_step_over (dbg, 1) :
--         r_debug_step (dbg, 1);
-+ ret = over
-+         ? r_debug_step_over (dbg, 1)
-+         : r_debug_step (dbg, 1);
+```sh
+git checkout master
+git pull radareorg master
 ```
 
-* Split long conditional expressions into small `static inline` functions to make them more readable:
+You may need to add the `-f` flag to force the pull if it is rejected. If you
+have made commits to your local `master` branch (not recommended!), this may
+overwrite them.
 
-```c
-+static inline bool inRange(RBreakpointItem *b, ut64 addr) {
-+       return (addr >= b->addr && addr < (b->addr + b->size));
-+}
-+
-+static inline bool matchProt(RBreakpointItem *b, int rwx) {
-+       return (!rwx || (rwx && b->rwx));
-+}
-+
- R_API RBreakpointItem *r_bp_get_in(RBreakpoint *bp, ut64 addr, int rwx) {
-        RBreakpointItem *b;
-        RListIter *iter;
-        r_list_foreach (bp->bps, iter, b) {
--               if (addr >= b->addr && addr < (b->addr+b->size) && \
--                       (!rwx || rwx&b->rwx))
-+               if (inRange (b, addr) && matchProt (b, rwx)) {
-                        return b;
-+               }
-        }
-        return NULL;
- }
+If there are new commits to master, you will see the list of changed files. If
+there are no updates, you will see `Already up to date.`.
+
+#### Step 2: Rebase `mybranch` onto master
+
+```sh
+git checkout mybranch
+git rebase master
 ```
 
-* Why return int vs enum
+You may optionally use the interactive mode. This allows you to reorder,
+`reword`, `edit`, or `squash` your commits into fewer individual commits.
 
-The reason why many places in r2land functions return int instead of an enum type is because enums cant be OR'ed because it breaks the usage within a switch statement and also because swig cant handle that stuff.
-
+```sh
+git rebase -i master
 ```
-r_core_wrap.cxx:28612:60: error: assigning to 'RRegisterType' from incompatible type 'long'
-  arg2 = static_cast< long >(val2); if (arg1) (arg1)->type = arg2; resultobj = SWIG_Py_Void(); return resultobj; fail:
-                                                           ^ ~~~~
-r_core_wrap.cxx:32103:61: error: assigning to 'RDebugReasonType' from incompatible type 'int'
-    arg2 = static_cast< int >(val2); if (arg1) (arg1)->type = arg2; resultobj = SWIG_Py_Void(); return resultobj; fail:
-                                                            ^ ~~~~
-3 warnings and 2 errors generated.
-````
 
-* Do not leave trailing whitespaces at the end of line
+Again, you must resolve any conflicts that occur before you can merge.
 
-* Do not use asserts
+If you are concerned about potential loss of work, you can back up your code by
+creating a new branch using your feature branch as a base before rebasing.
 
-* Do not use C99 variable declaration
-  - This way we reduce the number of local variables per function
-    and it's easier to find which variables are used, where and so on.
+```sh
+git checkout mybranch
+git branch backup
+git rebase master
+```
 
-* Always put a space before every parenthesis (function calls, conditionals,
-  fors, etc, ...) except when defining the function signature. This is
-  useful for grepping.
+#### Step 3: Publish your updated local branch
 
-* Comments should be smart. Function names should be explicit enough
-  to not require a comment to explain what it does. If this is not
-  possible at all, we can still use a comment. But it is a bad idea
-  to rely on comments to make the code readable.
+If you have not pushed this branch before:
 
-* Use 'R_API' define to mark exportable (public) methods only for module APIs
+```sh
+git push -u origin mybranch
+```
 
-* The rest of functions must be static, to avoid polluting the global space.
+If you are updating an existing branch:
 
-* Avoid using global variables, they are evil. Only use them for singletons
-  and wip code, placing a comment explaining the reason for them to stay there.
+```sh
+git push -f
+```
 
-* If you *really* need to comment out some code, use #if 0 (...) #endif. In
-  general, don't comment out code because it makes the code less readable.
+The `-f` flag may be needed to `force` the push onto the remote if you are
+replacing existing commits on the remote because git commits are immutable -
+this discards the old commits on your remote, and git won't take potentially
+destructive actions without confirmation.
 
-* Do not write ultra-large functions, split them into multiple or simplify
-  the algorithm, only external-copy-pasted-not-going-to-be-maintained code
-  can be accepted in this way (gnu code, external disassemblers, etc..)
+## Commit message guidelines
 
-* See doc/vim for vimrc
+When committing changes, we ask that you follow some guidelines to keep the
+history readable and consistent:
 
-* See doc/clang-format for work-in-progress support for automated indentation
+* Start the message capitalized (only the first character must be in uppercase)
+* Be concise. A descriptive message under 100 characters is preferred, but may
+  not be possible in all situations. For large commits, it is acceptable to use
+  a summary line, followed by an empty line, then an asterisk item list of
+  changes.
+* If a command is inlined, use backticks, e.g.:
 
-* Use the r2 types instead of the ones in stdint, which are known to cause some
-  portability issues. So, instead of uint8_t, use ut8, etc..
+```sh
+git commit -m 'Modify output of `ls`'
+```
 
-* Never ever use %lld or %llx. This is not portable. Always use the PFMT64x
-  macros. Those are similar to the ones in GLIB.
+* Add a tag if the change falls into a relevant category (see below)
+* If the commit fixes an issue, you may optionally start the message with
+  `Fix #number - `
+* Use present simple tense and avoid past tense. Use "add", "fix", or "change"
+  instead of "added", "fixed", or "changed".
 
-# Manage Endianness
+### Commit message tag list
 
-As hackers, we need to be aware of endianness.
-
-Endianness can become a problem when you try to process buffers or streams
-of bytes and store intermediate values as integers with width larger than
-a single byte.
-
-It can seem very easy to write the following code:
-
-  	ut8 opcode[4] = {0x10, 0x20, 0x30, 0x40};
-  	ut32 value = *(ut32*)opcode;
-
-... and then continue to use "value" in the code to represent the opcode.
-
-This needs to be avoided!
-
-Why? What is actually happening?
-
-When you cast the opcode stream to a unsigned int, the compiler uses the endianness
-of the host to interpret the bytes and stores it in host endianness.  This leads to
-very unportable code, because if you compile on a different endian machine, the
-value stored in "value" might be 0x40302010 instead of 0x10203040.
-
-## Solution
-
-Use bitshifts and OR instructions to interpret bytes in a known endian.
-Instead of casting streams of bytes to larger width integers, do the following:
-
-ut8 opcode[4] = {0x10, 0x20, 0x30, 0x40};
-ut32 value = opcode[0] | opcode[1] << 8 | opcode[2] << 16 | opcode[3] << 24;
-
-or if you prefer the other endian:
-
-ut32 value = opcode[3] | opcode[2] << 8 | opcode[1] << 16 | opcode[0] << 24;
-
-This is much better because you actually know which endian your bytes are stored in
-within the integer value, REGARDLESS of the host endian of the machine.
-
-## Endian helper functions
-
-Radare2 now uses helper functions to interpret all byte streams in a known endian.
-
-Please use these at all times, eg:
-
-  	val32 = r_read_be32(buffer)		// reads 4 bytes from a stream in BE
-  	val32 = r_read_le32(buffer)		// reads 4 bytes from a stream in LE
-  	val32 = r_read_ble32(buffer, isbig)	// reads 4 bytes from a stream:
-  						//   if isbig is true, reads in BE
-  						//   otherwise reads in LE
-
-There are a number of helper functions for 64, 32, 16, and 8 bit reads and writes.
-
-(Note that 8 bit reads are equivalent to casting a single byte of the buffer
-to a ut8 value, ie endian is irrelevant).
+| Tag              | Relevant changes |
+|------------------|------------------|
+| `##analysis`     | Analysis |
+| `##arch`         | Architecture |
+| `##asm`          | Assembly (not disassembly) |
+| `##bin`          | Binary parsing |
+| `##build`        | Build system |
+| `##config`       | Configuration variables |
+| `##cons`         | Console/terminal |
+| `##crypto`       | Cryptography |
+| `##debug`        | Debugger |
+| `##diff`         | Diffing code, strings, basic blocks, etc. |
+| `##disasm`       | Disassembler |
+| `##doc`          | Documentation |
+| `##egg`          | The `r_lang` compiler |
+| `##emu`          | Emulation, including esil |
+| `##graph`        | Basic block graph, callgraph, etc. |
+| `##io`           | The `r_io` library |
+| `##json`         | JSON |
+| `##lang`         | Language bindings |
+| `##meta`         | Metadata handling, excluding printing |
+| `##optimization` | Space/time optimizations |
+| `##platform`     | Platform-specific code |
+| `##port`         | Portability - new OS or architectures |
+| `##print`        | Printing data, structures, strings, tables, types, etc. |
+| `##projects`     | Saving and loading state |
+| `##refactor`     | Code quality improvements |
+| `##remote`       | Usage over a remote connection (TCP, HTTP, RAP, etc.), collaboration |
+| `##search`       | `rafind2`, `/` command, etc. |
+| `##shell`        | Command-line, argument parsing, new commands, etc. |
+| `##signatures`   | Searching for or generating signatures |
+| `##test`         | Testing infrastructure, including `r2r` |
+| `##tools`        | `r2pm`, `rarun2`, `rax2` changes that don't fit in another category |
+| `##util`         | Core APIs |
+| `##visual`       | Visual UI, including panels |
 
 # Additional resources
 
-* [README.md](https://github.com/radare/radare2/blob/master/README.md)
-* [DEVELOPERS.md](https://github.com/radare/radare2/blob/master/DEVELOPERS.md)
+ * [README.md](README.md)
+ * [DEVELOPERS.md](DEVELOPERS.md)
+ * [USAGE.md](USAGE.md)

@@ -1,3 +1,5 @@
+/* radare - LGPL - Copyright 2009-2021 - pancake */
+
 #ifndef R2_DEBUG_H
 #define R2_DEBUG_H
 
@@ -32,6 +34,11 @@ R_LIB_VERSION_HEADER(r_debug);
 #undef trapframe
 #undef rwindow
 
+#ifdef PTRACE_SYSCALL
+/* on freebsd does not have the same meaning */
+#undef PTRACE_SYSCALL
+#endif
+
 #define PTRACE_PEEKTEXT PT_READ_I
 #define PTRACE_POKETEXT PT_WRITE_I
 #define PTRACE_PEEKDATA PT_READ_D
@@ -59,7 +66,6 @@ typedef enum {
 	R_DBG_PROC_RAISED = 'R' // has produced a signal, breakpoint, etc..
 } RDebugPidState;
 
-
 // signal handling must support application and debugger level options
 typedef enum {
 	R_DBG_SIGNAL_IGNORE = 0, // ignore signal handler
@@ -67,7 +73,6 @@ typedef enum {
 	R_DBG_SIGNAL_SKIP = 2, //
 	//..
 } RDebugSignalMode;
-
 
 /*
  * when a user wants to resume from a breakpoint, we need to know how they want
@@ -86,7 +91,6 @@ typedef enum {
 	R_DEBUG_REASON_DEAD = -1,
 	R_DEBUG_REASON_NONE = 0,
 	R_DEBUG_REASON_SIGNAL,
-	R_DEBUG_REASON_SEGFAULT,
 	R_DEBUG_REASON_BREAKPOINT,
 	R_DEBUG_REASON_TRACEPOINT,
 	R_DEBUG_REASON_COND,
@@ -108,9 +112,11 @@ typedef enum {
 	R_DEBUG_REASON_SWI,
 	R_DEBUG_REASON_INT,
 	R_DEBUG_REASON_FPU,
-	R_DEBUG_REASON_USERSUSP,
+	R_DEBUG_REASON_USERSUSP, // ?
+	R_DEBUG_REASON_SEGFAULT,
+	R_DEBUG_REASON_STOPPED,
+	R_DEBUG_REASON_TERMINATED,
 } RDebugReasonType;
-
 
 /* TODO: move to r_anal */
 typedef struct r_debug_frame_t {
@@ -156,47 +162,42 @@ typedef struct r_debug_desc_t {
 	ut64 off;
 } RDebugDesc;
 
-struct r_debug_snap_diff_t;
-typedef struct r_page_data_t {
-	struct r_debug_snap_diff_t *diff; // Pointing SnapDiff that has this pagedata.
-	ut32 page_off;
-	ut8 *data;
-	ut8 hash[128];
-} RPageData;
-
-struct r_debug_snap_t;
-typedef struct r_debug_snap_diff_t {
-	struct r_debug_snap_t *base;
-	RList *pages; // <RPageData*>
-	RPageData **last_changes; // Last diff entries of each pages
-} RDebugSnapDiff;
-
 typedef struct r_debug_snap_t {
+	char *name;
 	ut64 addr;
 	ut64 addr_end;
-	ut8 *data;
 	ut32 size;
-	ut32 page_num;
-	ut64 timestamp;
-	RHash *hash_ctx;
-	ut8 **hashes; // Hash of each pages
-	RList *history; // <RDebugSnapDiff*>
+	ut8 *data;
 	int perm;
-	char *comment;
+	int user;
+	bool shared;
 } RDebugSnap;
 
-typedef struct r_debug_key {
-	ut64 addr;
-	ut32 id;
-} RDebugKey;
+typedef struct {
+	int cnum;
+	ut64 data;
+} RDebugChangeReg;
+
+typedef struct {
+	int cnum;
+	ut8 data;
+} RDebugChangeMem;
+
+typedef struct r_debug_checkpoint_t {
+	int cnum;
+	RRegArena *arena[R_REG_TYPE_LAST];
+	RList *snaps; // <RDebugSnap>
+} RDebugCheckpoint;
 
 typedef struct r_debug_session_t {
-	RDebugKey key;
-	RListIter *reg[R_REG_TYPE_LAST];
-	RList *memlist; // <RDebugSnapDiff*>
-	/* XXX: DebugSession should have base snapshot of memlist. */
-	//RDebugSnap *base;
-	char *comment;
+	ut32 cnum;
+	ut32 maxcnum;
+	RDebugCheckpoint *cur_chkpt;
+	RVector *checkpoints; /* RVector<RDebugCheckpoint> */
+	HtUP *memory; /* RVector<RDebugChangeMem> */
+	HtUP *registers; /* RVector<RDebugChangeReg> */
+	int reasontype /*RDebugReasonType*/;
+	RBreakpointItem *bp;
 } RDebugSession;
 
 /* Session file format */
@@ -227,7 +228,7 @@ typedef struct r_debug_trace_t {
 	int dup;
 	char *addresses;
 	// TODO: add range here
-	Sdb *db;
+	HtPP *ht;
 } RDebugTrace;
 
 typedef struct r_debug_tracepoint_t {
@@ -277,11 +278,13 @@ typedef struct r_debug_t {
 	int steps; /* counter of steps done */
 	RDebugReason reason; /* stop reason */
 	RDebugRecoilMode recoil_mode; /* what did the user want to do? */
+	ut64 stopaddr;  /* stop address  */
 
 	/* tracing vars */
 	RDebugTrace *trace;
 	Sdb *tracenodes;
 	RTree *tree;
+	RList *call_frames;
 
 	RReg *reg;
 	RList *q_regs;
@@ -297,17 +300,30 @@ typedef struct r_debug_t {
 	struct r_debug_plugin_t *h;
 	RList *plugins;
 
+	bool pc_at_bp; /* after a breakpoint, is the pc at the bp? */
+	bool pc_at_bp_set; /* is the pc_at_bp variable set already? */
+
+	REvent *ev;
+
 	RAnal *anal;
 	RList *maps; // <RDebugMap>
 	RList *maps_user; // <RDebugMap>
-	RList *snaps; // <RDebugSnap>
-	RList *sessions; // <RDebugSession>
+
+	bool trace_continue;
+	RAnalOp *cur_op;
+	RDebugSession *session;
+
 	Sdb *sgnls;
 	RCoreBind corebind;
+	PJ *pj;
 	// internal use only
 	int _mode;
 	RNum *num;
 	REgg *egg;
+	bool verbose;
+	size_t maxsnapsize;
+	bool main_arena_resolved; /* is the main_arena resolved already? */
+	int glibc_version;
 } RDebug;
 
 typedef struct r_debug_desc_plugin_t {
@@ -347,7 +363,7 @@ typedef struct r_debug_plugin_t {
 	const char *license;
 	const char *author;
 	const char *version;
-	//const char **archs; // MUST BE DEPREACTED!!!!
+	//const char **archs; // MUST BE DEPRECATED!!!!
 	ut32 bits;
 	const char *arch;
 	int canstep;
@@ -355,37 +371,38 @@ typedef struct r_debug_plugin_t {
 	/* life */
 	RDebugInfo* (*info)(RDebug *dbg, const char *arg);
 	int (*startv)(int argc, char **argv);
-	int (*attach)(RDebug *dbg, int pid);
-	int (*detach)(RDebug *dbg, int pid);
-	int (*select)(int pid, int tid);
+	bool (*attach)(RDebug *dbg, int pid);
+	bool (*detach)(RDebug *dbg, int pid);
+	bool (*select)(RDebug *dbg, int pid, int tid);
 	RList *(*threads)(RDebug *dbg, int pid);
 	RList *(*pids)(RDebug *dbg, int pid);
 	RList *(*tids)(RDebug *dbg, int pid);
 	RFList (*backtrace)(RDebug *dbg, int count);
 	/* flow */
 	int (*stop)(RDebug *dbg);
-	int (*step)(RDebug *dbg);
-	int (*step_over)(RDebug *dbg);
-	int (*cont)(RDebug *dbg, int pid, int tid, int sig);
-	int (*wait)(RDebug *dbg, int pid);
+	bool (*step)(RDebug *dbg);
+	bool (*step_over)(RDebug *dbg);
+	bool (*cont)(RDebug *dbg, int pid, int tid, int sig);
+	RDebugReasonType (*wait)(RDebug *dbg, int pid);
 	bool (*gcore)(RDebug *dbg, RBuffer *dest);
 	bool (*kill)(RDebug *dbg, int pid, int tid, int sig);
 	RList* (*kill_list)(RDebug *dbg);
-	int (*contsc)(RDebug *dbg, int pid, int sc);
+	bool (*contsc)(RDebug *dbg, int pid, int sc);
 	RList* (*frames)(RDebug *dbg, ut64 at);
 	RBreakpointCallback breakpoint;
 // XXX: specify, pid, tid, or RDebug ?
 	int (*reg_read)(RDebug *dbg, int type, ut8 *buf, int size);
 	int (*reg_write)(RDebug *dbg, int type, const ut8 *buf, int size); //XXX struct r_regset_t regs);
 	char* (*reg_profile)(RDebug *dbg);
+	int (*set_reg_profile)(const char *str);
 	/* memory */
 	RList *(*map_get)(RDebug *dbg);
 	RList *(*modules_get)(RDebug *dbg);
-	RDebugMap* (*map_alloc)(RDebug *dbg, ut64 addr, int size);
+	RDebugMap* (*map_alloc)(RDebug *dbg, ut64 addr, int size, bool thp);
 	int (*map_dealloc)(RDebug *dbg, ut64 addr, int size);
 	int (*map_protect)(RDebug *dbg, ut64 addr, int size, int perms);
-	int (*init)(RDebug *dbg);
-	int (*drx)(RDebug *dbg, int n, ut64 addr, int size, int rwx, int g);
+	bool (*init)(RDebug *dbg);
+	int (*drx)(RDebug *dbg, int n, ut64 addr, int size, int rwx, int g, int api_type);
 	RDebugDescPlugin desc;
 	// TODO: use RList here
 } RDebugPlugin;
@@ -393,6 +410,7 @@ typedef struct r_debug_plugin_t {
 // TODO: rename to r_debug_process_t ? maybe a thread too ?
 typedef struct r_debug_pid_t {
 	int pid;
+	int ppid;
 	char status; /* stopped, running, zombie, sleeping ,... */
 	int runnable; /* when using 'run', 'continue', .. this proc will be runnable */
 	bool signalled;
@@ -410,9 +428,9 @@ typedef struct r_debug_pid_t {
  */
 #ifdef R_API
 R_API RDebug *r_debug_new(int hard);
-R_API RDebug *r_debug_free(RDebug *dbg);
+R_API void r_debug_free(RDebug *dbg);
 
-R_API int r_debug_attach(RDebug *dbg, int pid);
+R_API bool r_debug_attach(RDebug *dbg, int pid);
 R_API int r_debug_detach(RDebug *dbg, int pid);
 R_API int r_debug_startv(RDebug *dbg, int argc, char **argv);
 R_API int r_debug_start(RDebug *dbg, const char *cmd);
@@ -435,7 +453,7 @@ R_API int r_debug_continue_syscall(RDebug *dbg, int sc);
 R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc);
 R_API int r_debug_continue(RDebug *dbg);
 R_API int r_debug_continue_kill(RDebug *dbg, int signal);
-#if __WINDOWS__ && !__CYGWIN__
+#if __WINDOWS__
 R_API int r_debug_continue_pass_exception(RDebug *dbg);
 #endif
 
@@ -454,7 +472,7 @@ R_API bool r_debug_set_arch(RDebug *dbg, const char *arch, int bits);
 R_API bool r_debug_use(RDebug *dbg, const char *str);
 
 R_API RDebugInfo *r_debug_info(RDebug *dbg, const char *arg);
-R_API void r_debug_info_free (RDebugInfo *rdi);
+R_API void r_debug_info_free(RDebugInfo *rdi);
 
 R_API ut64 r_debug_get_baddr(RDebug *dbg, const char *file);
 
@@ -475,23 +493,24 @@ R_API int r_debug_kill_setup(RDebug *dbg, int sig, int action);
 /* handle.c */
 R_API void r_debug_plugin_init(RDebug *dbg);
 R_API int r_debug_plugin_set(RDebug *dbg, const char *str);
-R_API int r_debug_plugin_list(RDebug *dbg, int mode);
+R_API bool r_debug_plugin_list(RDebug *dbg, int mode);
 R_API bool r_debug_plugin_add(RDebug *dbg, RDebugPlugin *foo);
+R_API bool r_debug_plugin_set_reg_profile(RDebug *dbg, const char *str);
 
 /* memory */
 R_API RList *r_debug_modules_list(RDebug*);
-R_API RDebugMap *r_debug_map_alloc(RDebug *dbg, ut64 addr, int size);
+R_API RDebugMap *r_debug_map_alloc(RDebug *dbg, ut64 addr, int size, bool thp);
 R_API int r_debug_map_dealloc(RDebug *dbg, RDebugMap *map);
 R_API RList *r_debug_map_list_new(void);
 R_API RDebugMap *r_debug_map_get(RDebug *dbg, ut64 addr);
-R_API RDebugMap *r_debug_map_new (char *name, ut64 addr, ut64 addr_end, int perm, int user);
+R_API RDebugMap *r_debug_map_new(char *name, ut64 addr, ut64 addr_end, int perm, int user);
 R_API void r_debug_map_free(RDebugMap *map);
-R_API void r_debug_map_list(RDebug *dbg, ut64 addr, int rad);
-R_API void r_debug_map_list_visual(RDebug *dbg, ut64 addr, int use_color, int cons_cols);
+R_API void r_debug_map_list(RDebug *dbg, ut64 addr, const char *input);
+R_API void r_debug_map_list_visual(RDebug *dbg, ut64 addr, const char *input, int colors);
 
 /* descriptors */
-R_API RDebugDesc *r_debug_desc_new (int fd, char* path, int perm, int type, int off);
-R_API void r_debug_desc_free (RDebugDesc *p);
+R_API RDebugDesc *r_debug_desc_new(int fd, const char *path, int perm, int type, int off);
+R_API void r_debug_desc_free(RDebugDesc *p);
 R_API int r_debug_desc_open(RDebug *dbg, const char *path);
 R_API int r_debug_desc_close(RDebug *dbg, int fd);
 R_API int r_debug_desc_dup(RDebug *dbg, int fd, int newfd);
@@ -502,13 +521,13 @@ R_API int r_debug_desc_list(RDebug *dbg, int rad);
 
 /* registers */
 R_API int r_debug_reg_sync(RDebug *dbg, int type, int write);
-R_API int r_debug_reg_list(RDebug *dbg, int type, int size, int rad, const char *use_color);
+R_API bool r_debug_reg_list(RDebug *dbg, int type, int size, PJ *pj, int rad, const char *use_color);
 R_API int r_debug_reg_set(RDebug *dbg, const char *name, ut64 num);
 R_API ut64 r_debug_reg_get(RDebug *dbg, const char *name);
 R_API ut64 r_debug_reg_get_err(RDebug *dbg, const char *name, int *err, utX *value);
 
 R_API ut64 r_debug_execute(RDebug *dbg, const ut8 *buf, int len, int restore);
-R_API int r_debug_map_sync(RDebug *dbg);
+R_API bool r_debug_map_sync(RDebug *dbg);
 
 R_API int r_debug_stop(RDebug *dbg);
 
@@ -518,22 +537,25 @@ R_API RList *r_debug_frames(RDebug *dbg, ut64 at);
 R_API bool r_debug_is_dead(RDebug *dbg);
 R_API int r_debug_map_protect(RDebug *dbg, ut64 addr, int size, int perms);
 /* args XXX: weird food */
-R_API ut64 r_debug_arg_get(RDebug *dbg, int fast, int num);
-R_API bool r_debug_arg_set(RDebug *dbg, int fast, int num, ut64 value);
+R_API ut64 r_debug_arg_get(RDebug *dbg, const char *cc, int num);
+R_API bool r_debug_arg_set(RDebug *dbg, const char *cc, int num, ut64 value);
 
 /* breakpoints (most in r_bp, this calls those) */
 R_API RBreakpointItem *r_debug_bp_add(RDebug *dbg, ut64 addr, int hw, bool watch, int rw, char *module, st64 m_delta);
+R_API void r_debug_bp_rebase(RDebug *dbg, ut64 old_base, ut64 new_base);
+R_API void r_debug_bp_update(RDebug *dbg);
 
 /* pid */
-R_API int r_debug_thread_list(RDebug *dbg, int pid);
+R_API int r_debug_thread_list(RDebug *dbg, int pid, char fmt);
 
 R_API void r_debug_tracenodes_reset(RDebug *dbg);
 
 R_API void r_debug_trace_reset(RDebug *dbg);
 R_API int r_debug_trace_pc(RDebug *dbg, ut64 pc);
+R_API void r_debug_trace_op(RDebug *dbg, RAnalOp *op);
 R_API void r_debug_trace_at(RDebug *dbg, const char *str);
 R_API RDebugTracepoint *r_debug_trace_get(RDebug *dbg, ut64 addr);
-R_API void r_debug_trace_list(RDebug *dbg, int mode);
+R_API void r_debug_trace_list(RDebug *dbg, int mode, ut64 offset);
 R_API RDebugTracepoint *r_debug_trace_add(RDebug *dbg, ut64 addr, int size);
 R_API RDebugTrace *r_debug_trace_new(void);
 R_API void r_debug_trace_free(RDebugTrace *dbg);
@@ -547,51 +569,53 @@ R_API int r_debug_drx_unset(RDebug *dbg, int idx);
 
 /* esil */
 R_API ut64 r_debug_num_callback(RNum *userptr, const char *str, int *ok);
-R_API int r_debug_esil_stepi(RDebug *dbg);
+R_API bool r_debug_esil_stepi(RDebug *dbg);
 R_API ut64 r_debug_esil_step(RDebug *dbg, ut32 count);
 R_API ut64 r_debug_esil_continue(RDebug *dbg);
 R_API void r_debug_esil_watch(RDebug *dbg, int rwx, int dev, const char *expr);
 R_API void r_debug_esil_watch_reset(RDebug *dbg);
 R_API void r_debug_esil_watch_list(RDebug *dbg);
-R_API int r_debug_esil_watch_empty(RDebug *dbg);
-R_API void r_debug_esil_prestep (RDebug *d, int p);
+R_API bool r_debug_esil_watch_empty(RDebug *dbg);
+R_API void r_debug_esil_prestep(RDebug *d, int p);
 
-/* snap */
-R_API RDebugSnap *r_debug_snap_new(void);
-R_API void r_debug_snap_free(void *snap);
-R_API int r_debug_snap_delete(RDebug *dbg, int idx);
-R_API void r_debug_snap_list(RDebug *dbg, int idx, int mode);
-R_API int r_debug_snap(RDebug *dbg, ut64 addr);
-R_API int r_debug_snap_comment(RDebug *dbg, int idx, const char *msg);
-R_API RDebugSnapDiff *r_debug_snap_map(RDebug *dbg, RDebugMap *map);
-R_API int r_debug_snap_all(RDebug *dbg, int perms);
-R_API RDebugSnap *r_debug_snap_get(RDebug *dbg, ut64 addr);
-R_API int r_debug_snap_set_idx(RDebug *dbg, int idx);
-R_API int r_debug_snap_set(RDebug *dbg, RDebugSnap *snap);
+/* record & replay */
+// R_API ut8 r_debug_get_byte(RDebug *dbg, ut32 cnum, ut64 addr);
+R_API bool r_debug_add_checkpoint(RDebug *dbg);
+R_API bool r_debug_session_add_reg_change(RDebugSession *session, int arena, ut64 offset, ut64 data);
+R_API bool r_debug_session_add_mem_change(RDebugSession *session, ut64 addr, ut8 data);
+R_API void r_debug_session_restore_reg_mem(RDebug *dbg, ut32 cnum);
+R_API void r_debug_session_list_memory(RDebug *dbg);
+R_API void r_debug_session_serialize(RDebugSession *session, Sdb *db);
+R_API void r_debug_session_deserialize(RDebugSession *session, Sdb *db);
+R_API bool r_debug_session_save(RDebugSession *session, const char *file);
+R_API bool r_debug_session_load(RDebug *dbg, const char *file);
+R_API bool r_debug_trace_ins_before(RDebug *dbg);
+R_API bool r_debug_trace_ins_after(RDebug *dbg);
 
-/* snap diff */
-R_API void r_debug_diff_free(void *p);
-R_API RDebugSnapDiff *r_debug_diff_add(RDebug *dbg, RDebugSnap *base);
-R_API void r_debug_diff_set(RDebug *dbg, RDebugSnapDiff *diff);
-R_API void r_debug_diff_set_base(RDebug *dbg, RDebugSnap *base);
+R_API RDebugSession *r_debug_session_new(void);
+R_API void r_debug_session_free(RDebugSession *session);
 
-/* page data */
-R_API void r_page_data_free(void *p);
+R_API RDebugSnap *r_debug_snap_map(RDebug *dbg, RDebugMap *map);
+R_API bool r_debug_snap_contains(RDebugSnap *snap, ut64 addr);
+R_API ut8 *r_debug_snap_get_hash(RDebugSnap *snap);
+R_API bool r_debug_snap_is_equal(RDebugSnap *a, RDebugSnap *b);
+R_API void r_debug_snap_free(RDebugSnap *snap);
 
-/* debug session */
-R_API void r_debug_session_free(void *p);
-R_API void r_debug_session_list(RDebug *dbg);
-R_API RDebugSession *r_debug_session_add(RDebug *dbg, RListIter **tail);
-R_API bool r_debug_session_delete(RDebug *dbg, int idx);
-R_API bool r_debug_session_comment(RDebug *dbg, int idx, const char *msg);
-R_API void r_debug_session_path(RDebug *dbg, const char *path);
-R_API void r_debug_session_set(RDebug *dbg, RDebugSession *session);
-R_API bool r_debug_session_set_idx(RDebug *dbg, int idx);
-R_API RDebugSession *r_debug_session_get(RDebug *dbg, RListIter *tail);
-R_API void r_debug_session_save(RDebug *dbg, const char *file);
-R_API void r_debug_session_restore(RDebug *dbg, const char *file);
-R_API bool r_debug_step_back(RDebug *dbg);
+R_API int r_debug_step_back(RDebug *dbg, int steps);
+R_API bool r_debug_goto_cnum(RDebug *dbg, ut32 cnum);
+R_API int r_debug_step_cnum(RDebug *dbg, int steps);
 R_API bool r_debug_continue_back(RDebug *dbg);
+
+/* ptrace */
+#if HAVE_PTRACE
+static inline long r_debug_ptrace(RDebug *dbg, r_ptrace_request_t request, pid_t pid, void *addr, r_ptrace_data_t data) {
+	return dbg->iob.ptrace (dbg->iob.io, request, pid, addr, data);
+}
+
+static inline void *r_debug_ptrace_func(RDebug *dbg, void *(*func)(void *), void *user) {
+	return dbg->iob.ptrace_func (dbg->iob.io, func, user);
+}
+#endif
 
 /* plugin pointers */
 extern RDebugPlugin r_debug_plugin_native;
@@ -600,6 +624,7 @@ extern RDebugPlugin r_debug_plugin_rap;
 extern RDebugPlugin r_debug_plugin_gdb;
 extern RDebugPlugin r_debug_plugin_bf;
 extern RDebugPlugin r_debug_plugin_io;
+extern RDebugPlugin r_debug_plugin_winkd;
 extern RDebugPlugin r_debug_plugin_windbg;
 extern RDebugPlugin r_debug_plugin_bochs;
 extern RDebugPlugin r_debug_plugin_qnx;
@@ -609,25 +634,5 @@ extern RDebugPlugin r_debug_plugin_null;
 #ifdef __cplusplus
 }
 #endif
-
-#endif
-
-/* regset */
-//R_API struct r_regset_t* r_regset_diff(struct r_regset_t *a, struct r_regset_t *b);
-//R_API int r_regset_set(struct r_regset_t *r, int idx, const char *name, ut64 value);
-//R_API struct r_regset_t *r_regset_new(int size);
-//R_API void r_regset_free(struct r_regset_t *r);
-
-#if 0
-Missing callbacks
-=================
- - alloc
- - dealloc
- - list maps (memory regions)
- - change memory protections
- - touchtrace
- - filedescriptor set/get/mod..
- - get/set signals
- - get regs, set regs
 
 #endif

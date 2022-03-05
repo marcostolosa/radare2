@@ -6,26 +6,33 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 
 #undef eprintf
 #define eprintf(...) fprintf(stderr,__VA_ARGS__)
 
+// Inspired in https://gcc.gnu.org/wiki/Visibility
 #ifndef SDB_API
-#if defined(__GNUC__) && __GNUC__ >= 4
-#define SDB_API __attribute__((visibility("default")))
-#else
-#define SDB_API
+	#undef SDB_IPI
+	#if defined _WIN32 || defined __CYGWIN__
+		#ifdef __GNUC__
+			#define SDB_API __attribute__ ((dllexport))
+		#else
+			#define SDB_API __declspec(dllexport) // Note: actually gcc seems to also supports this syntax.
+		#endif
+		#define SDB_IPI
+	#else
+	#if __GNUC__ >= 4
+		#define SDB_API __attribute__ ((visibility ("default")))
+		#define SDB_IPI  __attribute__ ((visibility ("hidden")))
+	#else
+		#define SDB_API
+		#define SDB_IPI
+	#endif
+	#endif
 #endif
-#endif
-
-#ifndef SDB_IPI
-#if defined(__GNUC__) && __GNUC__ >= 4
-// __attribute__((visibility("hidden")))
-#endif
-#define SDB_IPI static
-#endif
-
 
 #if MINGW || __MINGW32__ || __MINGW64__
 #define __MINGW__ 1
@@ -33,28 +40,38 @@
 
 #if __WIN32__ || __MINGW__ || __WINDOWS__ || _MSC_VER
 #define __SDB_WINDOWS__ 1
-#include <windows.h>
+#undef DIRSEP
 #define DIRSEP '\\'
+#undef lseek
+#define lseek _lseek
+#include <windows.h>
+#include <io.h>
+#if __MINGW32__
+#define ULLFMT PRIx64
+#else
+#define ULLFMT "I64"
+#endif
+#undef HAVE_MMAN
+#define HAVE_MMAN 0
 #else
 // CYGWIN AND UNIX
 #define __SDB_WINDOWS__ 0
+#undef DIRSEP
 #define DIRSEP '/'
+#include <unistd.h>
+#undef HAVE_MMAN
+#define HAVE_MMAN 1
+#define ULLFMT PRIx64
 #endif
 
-#include <inttypes.h>
-#if __SDB_WINDOWS__ && !__CYGWIN__
+#if __wasi__ || EMSCRIPTEN
+#undef HAVE_MMAN
 #define HAVE_MMAN 0
-#define ULLFMT "I64"
-#else
-#define HAVE_MMAN 1
-#define ULLFMT "ll"
 #endif
 
 #ifndef USE_MMAN
 #define USE_MMAN HAVE_MMAN
 #endif
-
-#include <unistd.h>
 
 #ifndef UNUSED
 #  define UNUSED
@@ -67,11 +84,11 @@
 #endif
 
 #ifndef ut8
-#define ut8 unsigned char
-#define ut32 unsigned int
-#define ut64 unsigned long long
-#define st64 long long
-#define boolt int
+#define ut8 uint8_t
+#define ut32 uint32_t
+#define ut64 uint64_t
+#define st64 int64_t
+
 // TODO: deprecate R_NEW
 #ifndef R_NEW
 //it means we are within sdb

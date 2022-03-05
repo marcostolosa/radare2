@@ -1,11 +1,20 @@
-/* radare - LGPL - Copyright 2017 - pancake */
+/* radare - LGPL - Copyright 2017-2019 - pancake */
 
 #include <r_fs.h>
 #include <r_lib.h>
 #include <sys/stat.h>
 
-static RFSFile *fs_io_open(RFSRoot *root, const char *path) {
-	char *cmd = r_str_newf ("m %s", path);
+static char *enbase(const char *p) {
+	char *enc_path = r_base64_encode_dyn (p, -1);
+	char *res = r_str_newf ("base64:%s", enc_path);
+	free (enc_path);
+	return res;
+}
+
+static RFSFile *fs_io_open(RFSRoot *root, const char *path, bool create) {
+	char *enc_uri = enbase (path);
+	char *cmd = r_str_newf ("m %s", enc_uri);
+	free (enc_uri);
 	char *res = root->iob.system (root->iob.io, cmd);
 	R_FREE (cmd);
 	if (res) {
@@ -29,23 +38,33 @@ static RFSFile *fs_io_open(RFSRoot *root, const char *path) {
 	return NULL;
 }
 
-static bool fs_io_read(RFSFile *file, ut64 addr, int len) {
+static int fs_io_read(RFSFile *file, ut64 addr, int len) {
 	RFSRoot *root = file->root;
-	// char *cmd = r_str_newf ("mg %s %"PFMT64x" %d", file->path, addr, len);
-	char *cmd = r_str_newf ("mg %s", file->name);
+	char *abs_path = r_fs_file_copy_abs_path (file);
+	if (!abs_path) {
+		return -1;
+	}
+	
+	char *enc_uri = enbase (abs_path);
+	free (abs_path);
+	char *cmd = r_str_newf ("mg %s 0x%08"PFMT64x" %d", enc_uri, addr, len);
+	free (enc_uri);
+	if (!cmd) {
+		return -1;
+	}
 	char *res = root->iob.system (root->iob.io, cmd);
 	R_FREE (cmd);
 	if (res) {
 		int encoded_size = strlen (res);
 		if (encoded_size != len * 2) {
-			eprintf ("Wrong size\n");
+			eprintf ("Unexpected size (%d vs %d)\n", encoded_size, len*2);
 			R_FREE (res);
-			return NULL;
+			return -1;
 		}
 		file->data = (ut8 *) calloc (1, len);
 		if (!file->data) {
 			R_FREE (res);
-			return NULL;
+			return -1;
 		}
 		int ret = r_hex_str2bin (res, file->data);
 		if (ret != len) {
@@ -53,8 +72,9 @@ static bool fs_io_read(RFSFile *file, ut64 addr, int len) {
 			R_FREE (file->data);
 		}
 		R_FREE (res);
+		return ret;
 	}
-	return NULL;
+	return -1;
 }
 
 static void fs_io_close(RFSFile *file) {
@@ -77,11 +97,13 @@ static RList *fs_io_dir(RFSRoot *root, const char *path, int view /*ignored*/) {
 	if (!list) {
 		return NULL;
 	}
-	char *cmd = r_str_newf ("md %s", path);
+	char *uri_path = enbase (path);
+	char *cmd = r_str_newf ("md %s", uri_path);
+	free (uri_path);
 	char *res = root->iob.system (root->iob.io, cmd);
 	if (res) {
-		int i, count = 0;
-		int *lines = r_str_split_lines (res, &count);
+		size_t i, count = 0;
+		size_t *lines = r_str_split_lines (res, &count);
 		if (lines) {
 			for (i = 0; i < count; i++) {
 				const char *line = res + lines[i];
@@ -124,8 +146,8 @@ RFSPlugin r_fs_plugin_io = {
 	.umount = fs_io_umount,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_FS,
 	.data = &r_fs_plugin_io,
 	.version = R2_VERSION

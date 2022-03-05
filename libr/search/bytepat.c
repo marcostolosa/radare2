@@ -1,11 +1,8 @@
-/* radare - LGPL - Copyright 2006-2014 - esteve, pancake */
+/* radare - LGPL - Copyright 2006-2019 - esteve, pancake */
 
-#include "r_search.h"
-#include "r_print.h"
-
-#include <stdio.h>
-#include <unistd.h>
-#include <stdlib.h>
+#include <r_search.h>
+#include <r_util.h>
+#include <r_util/r_print.h>
 
 #define CTXMINB 5
 #define BSIZE (1024*1024)
@@ -16,10 +13,12 @@ typedef struct _fnditem {
 	void* next;
 } fnditem;
 
-static fnditem* init_fi() {
+static fnditem* init_fi(void) {
 	fnditem* n;
 	n = (fnditem*) malloc (sizeof (fnditem));
-	if (!n) return NULL;
+	if (!n) {
+		return NULL;
+	}
 	n->next = NULL;
 	return n;
 }
@@ -36,9 +35,11 @@ static void fini_fi(fnditem* fi) {
 	free (fu);
 }
 
-static void add_fi (fnditem* n, unsigned char* blk, int patlen) {
+static void add_fi(fnditem* n, unsigned char* blk, int patlen) {
 	fnditem* p;
-	for (p=n; p->next!=NULL; p=p->next);
+	for (p = n; p->next != NULL; p = p->next) {
+		;
+	}
 	p->next = (fnditem*) malloc (sizeof (fnditem));
 	p = p->next;
 	memcpy (p->str, blk, patlen);
@@ -47,13 +48,15 @@ static void add_fi (fnditem* n, unsigned char* blk, int patlen) {
 
 static int is_fi_present(fnditem* n, unsigned char* blk , int patlen) {
 	fnditem* p;
-	for (p=n; p->next!=NULL; p=p->next)
-		if (!memcmp (blk, p->str, patlen))
+	for (p = n; p->next != NULL; p = p->next) {
+		if (!memcmp (blk, p->str, patlen)) {
 			return true;
+		}
+	}
 	return false;
 }
 
-R_API int r_search_pattern(RSearch *s, ut64 from, ut64 to) {
+R_IPI int search_pattern(RSearch *s, ut64 from, ut64 to) {
 	ut8 block[BSIZE+MAX_PATLEN], sblk[BSIZE+MAX_PATLEN+1];
 	ut64 addr, bact, bytes, intaddr, rb, bproc = 0;
 	int nr,i, moar=0, pcnt, cnt = 0, k = 0;
@@ -96,7 +99,6 @@ R_API int r_search_pattern(RSearch *s, ut64 from, ut64 to) {
 			nr += (patlen - (nr % patlen)); // tamany de bloc llegit multiple superior de tamany busqueda
 			rb = s->iob.read_at (s->iob.io, bproc, block, nr);
 			if (rb < 1) {
-				bproc += nr;
 				break;
 			}
 			nr = rb;
@@ -108,8 +110,9 @@ R_API int r_search_pattern(RSearch *s, ut64 from, ut64 to) {
 						add_fi (root, sblk, patlen);
 						pcnt++;
 						eprintf ("\nbytes: %d: ", pcnt);
-						for (k = 0; k<patlen; k++)
+						for (k = 0; k < patlen; k++) {
 							eprintf ("%02x", sblk[k]);
+						}
 						eprintf ("\nfound: %d: 0x%08"PFMT64x" ", pcnt, intaddr);
 					}
 					moar++;
@@ -117,8 +120,9 @@ R_API int r_search_pattern(RSearch *s, ut64 from, ut64 to) {
 					eprintf ("0x%08"PFMT64x" ", bproc+i);
 				}
 			}
-			if (moar>0)
-				eprintf ("\ncount: %d: %d\n", pcnt, moar+1);
+			if (moar > 0) {
+				eprintf ("\ncount: %d: %d\n", pcnt, moar + 1);
+			}
 			bproc += rb;
 		}
 		bact += (moar > 0)? patlen: 1;

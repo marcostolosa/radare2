@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2008-2018 - pancake */
+/* radare - LGPL - Copyright 2008-2021 - pancake */
 
 #include <r_cons.h>
 #define I r_cons_singleton ()
@@ -21,7 +21,9 @@ static void setnewline(int old) {
 
 static void saveline(int n, const char *str) {
 	char *out;
-	if (!str) return;
+	if (!str) {
+		return;
+	}
 	out = r_str_word_get0set (lines, bytes, _n, str, &bytes);
 	free (lines);
 	lines = out;
@@ -29,7 +31,9 @@ static void saveline(int n, const char *str) {
 
 static int up(void *n) {
 	int old = _n;
-	if (_n > 0) _n--;
+	if (_n > 0) {
+		_n--;
+	}
 	setnewline (old);
 	return -1;
 }
@@ -40,20 +44,23 @@ static int down(void *n) {
 	return -1;
 }
 
-static void filesave() {
+static void filesave(void) {
 	char buf[128];
 	int i;
 	if (!path) {
 		eprintf ("File: ");
 		buf[0] = 0;
-		fgets (buf, sizeof (buf) - 1, stdin);
-		buf[sizeof (buf) - 1] = 0;
-		i = strlen (buf);
-		if (i > 0) {
-			buf[i - 1] = 0;
-			free (path);
-			path = strdup (buf);
+		if (fgets (buf, sizeof (buf), stdin)) {
+			if (buf[0]) {
+				r_str_trim_tail (buf);
+				free (path);
+				path = strdup (buf);
+			}
 		}
+	}
+	if (!path) {
+		eprintf ("No file given.\n");
+		return;
 	}
 	if (lines) {
 		for (i = 0; i < bytes; i++) {
@@ -80,7 +87,14 @@ R_API char *r_cons_editor(const char *file, const char *str) {
 	if (file) {
 		path = strdup (file);
 		bytes = 0;
-		lines = r_file_slurp (file, &bytes);
+		size_t sz = 0;
+		lines = r_file_slurp (file, &sz);
+		bytes = (int)sz;
+		if (!lines) {
+			eprintf ("Failed to load '%s'.\n", file);
+			R_FREE (path);
+			return NULL;
+		}
 		nlines = r_str_split (lines, '\n');
 		eprintf ("Loaded %d lines on %d byte(s)\n",
 			(nlines? (nlines - 1): 0), bytes);

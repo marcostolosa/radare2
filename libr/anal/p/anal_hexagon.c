@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2018 - xvilka */
+/* radare - LGPL - Copyright 2018-2021 - xvilka, pancake */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -9,30 +9,39 @@
 #include "hexagon_insn.h"
 #include "hexagon_anal.h"
 
-static int hexagon_v6_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len) {
-	HexInsn hi = {0};;
-	ut32 data = 0;
-	memset (op, 0, sizeof (RAnalOp));
-	data = r_read_le32 (buf);
-	int size = hexagon_disasm_instruction (data, &hi);
+static int hexagon_v6_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
+	if (len < 4) {
+		return 0;
+	}
+	ut32 data = r_read_le32 (buf);
+	HexInsn hi = {0};
+	int size = hexagon_disasm_instruction (data, &hi, (ut32) addr);
+	if (size > 0 && mask & R_ANAL_OP_MASK_DISASM) {
+		op->mnemonic = strdup (hi.mnem);
+	}
 	op->size = size;
-	if (size <= 0) {
+	if (size < 1) {
 		return size;
 	}
-
+	op->vliw = hi.op_count;
 	op->addr = addr;
-	op->jump = op->fail = -1;
-	op->ptr = op->val = -1;
 	return hexagon_anal_instruction (&hi, op);
 }
 
-static int set_reg_profile(RAnal *anal) {
+static bool set_reg_profile(RAnal *anal) {
 	// TODO: Add missing registers
 	const char *p =
 		"=PC	pc\n"
 		"=SP	r29\n"
+		"=A0	r0\n"
+		"=A1	r1\n"
+		"=A2	r2\n"
+		"=A3	r3\n"
+		"=A4	r4\n"
+		"=A5	r5\n"
 		"=BP	r30\n"
 		"=LR	r31\n"
+		"=SN	r6\n"
 		"=ZF	z\n"
 		"=SF	s\n"
 		"=OF	ov\n"
@@ -92,14 +101,14 @@ RAnalPlugin r_anal_plugin_hexagon = {
 	.arch = "hexagon",
 	.bits = 32,
 	.op = hexagon_v6_op,
-	.esil = true,
+	.esil = false,
 	.set_reg_profile = set_reg_profile,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
-	.data = &r_anal_plugin_hexagon_v6,
+	.data = &r_anal_plugin_hexagon,
 	.version = R2_VERSION
 };
 #endif

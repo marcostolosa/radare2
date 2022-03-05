@@ -1,18 +1,38 @@
 /* Mini MCMS :: renamed to 'spp'? */
 
+#ifndef INCLUDE_P_SPP_H
+#define INCLUDE_P_SPP_H
+
+#if __UNIX__
 #include <unistd.h>
+#endif
+
+#if __WIN32__
+#undef HAVE_SYSTEM
+#define HAVE_SYSTEM 0
+#undef __WINDOWS__
+#define __WINDOWS__ 1
+#endif
+#ifdef _MSC_VER
+#undef HAVE_SYSTEM
+#define HAVE_SYSTEM 0
+#undef __WINDOWS__
+#define __WINDOWS__ 1
+#endif
 
 static char *spp_var_get(char *var) {
-	return getenv(var);
+	return r_sys_getenv (var);
 }
 
 static int spp_var_set(const char *var, const char *val) {
-	return r_sys_setenv(var, val);
+	return r_sys_setenv (var, val);
 }
 
+#if HAVE_SYSTEM
 /* Should be dynamic buffer */
 static char *cmd_to_str(const char *cmd) {
 	char *out = (char *)calloc (4096, 1);
+	char *tout;
 	int ret = 0, len = 0, outlen = 4096;
 	FILE *fd = popen (cmd, "r");
 	while (fd) {
@@ -24,12 +44,22 @@ static char *cmd_to_str(const char *cmd) {
 		}
 		if (ret + 1024 > outlen) {
 			outlen += 4096;
-			out = realloc (out, outlen);
+			tout = realloc (out, outlen);
+			if (!tout) {
+				if (fd) {
+					pclose (fd);
+					fd = NULL;
+				}
+				fprintf (stderr, "Out of memory.\n");
+				break;
+			}
+			out = tout;
 		}
 	}
 	out[len] = '\0';
 	return out;
 }
+#endif
 
 static TAG_CALLBACK(spp_set) {
 	char *eq, *val = "";
@@ -62,7 +92,7 @@ static TAG_CALLBACK(spp_get) {
 	}
 	var = spp_var_get (buf);
 	if (var) {
-		do_printf (out, "%s", var);
+		out_printf (out, "%s", var);
 	}
 	return 0;
 }
@@ -73,12 +103,16 @@ static TAG_CALLBACK(spp_getrandom) {
 		return 0;
 	}
 	// XXX srsly? this is pretty bad random
-	srandom (getpid ()); // TODO: change this to be portable
+#if __WINDOWS__
+	srand (r_sys_getpid ());
+#else
+	srandom (r_sys_getpid ()); // TODO: change this to be portable
+#endif
 	max = atoi (buf);
 	if (max > 0) {
 		max = (int)(rand () % max);
 	}
-	do_printf (out, "%d", max);
+	out_printf (out, "%d", max);
 	return 0;
 }
 
@@ -123,22 +157,17 @@ static TAG_CALLBACK(spp_sub) {
 	return ret;
 }
 
-// XXX This method needs some love
 static TAG_CALLBACK(spp_trace) {
-#if HAVE_SYSTEM
-	char b[1024];
 	if (state->echo[state->ifl]) {
-		snprintf (b, 1023, "echo '%s' >&2 ", buf);
-		system (b);
+		fprintf (stderr, "%.1000s\n", buf);
 	}
-#endif
 	return 0;
 }
 
 /* TODO: deprecate */
 static TAG_CALLBACK(spp_echo) {
 	if (state->echo[state->ifl]) {
-		do_printf (out, "%s", buf);
+		out_printf (out, "%s", buf);
 	}
 	// TODO: add variable replacement here?? not necessary, done by {{get}}
 	return 0;
@@ -164,9 +193,11 @@ static TAG_CALLBACK(spp_system) {
 	if (!state->echo[state->ifl]) {
 		return 0;
 	}
+#if HAVE_SYSTEM
 	char *str = cmd_to_str (buf);
-	do_printf (out, "%s", str);
-	free(str);
+	out_printf (out, "%s", str);
+	free (str);
+#endif
 	return 0;
 }
 
@@ -228,7 +259,7 @@ static TAG_CALLBACK(spp_hex) {
 			b = buf[i + 2];
 			buf[i + 2] = '\0';
 			sscanf(buf + i, "%02x", &ch);
-			do_printf (out, "%c", ch);
+			out_printf (out, "%c", ch);
 			buf[i + 2] = b;
 			buf = buf + 2;
 		}
@@ -250,10 +281,12 @@ static TAG_CALLBACK(spp_grepline) {
 		line = atoi (ptr+1);
 		if (fd) {
 			while (!feof (fd) && line--) {
-				fgets(b, 1023, fd);
+				if (!fgets (b, 1023, fd)) {
+					break;
+				}
 			}
 			fclose (fd);
-			do_printf (out, "%s", b);
+			out_printf (out, "%s", b);
 		} else {
 			fprintf(stderr, "Unable to open '%s'\n", buf);
 		}
@@ -303,10 +336,14 @@ static TAG_CALLBACK(spp_default) {
 	return 0;
 }
 
+#if HAVE_SYSTEM
 static FILE *spp_pipe_fd = NULL;
+#endif
 
 static TAG_CALLBACK(spp_pipe) {
+#if HAVE_SYSTEM
 	spp_pipe_fd = popen (buf, "w");
+#endif
 	return 0;
 }
 
@@ -334,33 +371,44 @@ static TAG_CALLBACK(spp_endswitch) {
 }
 
 static TAG_CALLBACK(spp_endpipe) {
+#if HAVE_SYSTEM
 	/* TODO: Get output here */
 	int ret = 0, len = 0;
 	int outlen = 4096;
 	char *str = (char *)malloc (4096);
+	char *tstr;
 	do {
 		len += ret;
 		ret = fread (str + len, 1, 1023, spp_pipe_fd);
 		if (ret + 1024 > outlen) {
 			outlen += 4096;
-			str = realloc (str, outlen);
+			tstr = realloc (str, outlen);
+			if (!tstr) {
+				fprintf (stderr, "Out of memory.\n");
+				break;
+			}
+			str = tstr;
 		}
 	} while (ret > 0);
 	str[len] = '\0';
-	do_printf (out, "%s", str);
+	out_printf (out, "%s", str);
 	if (spp_pipe_fd) {
 		pclose (spp_pipe_fd);
 	}
 	spp_pipe_fd = NULL;
 	free (str);
+#endif
 	return 0;
 }
 
 static PUT_CALLBACK(spp_fputs) {
+#if HAVE_SYSTEM
 	if (spp_pipe_fd) {
 		fprintf (spp_pipe_fd, "%s", buf);
-	} else {
-		do_printf (out, "%s", buf);
+	} else
+#endif
+	{
+		out_printf (out, "%s", buf);
 	}
 	return 0;
 }
@@ -431,3 +479,4 @@ DLL_LOCAL struct Proc spp_proc = {
 	.default_echo = 1,
 	.tag_begin = 0,
 };
+#endif

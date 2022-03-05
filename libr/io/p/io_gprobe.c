@@ -2,11 +2,17 @@
 
 #include <r_io.h>
 #include <r_lib.h>
-#include <r_print.h>
+#include <r_util.h>
+#include <r_util/r_print.h>
 
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
+#define USE_OWNTIMER 1
+#if USE_OWNTIMER
+#include "io_gprobe.h"
+#else
+#define Timersub timersub
+#define Timeradd timeradd
+#define Timercmp timercmp
+#endif
 
 #if __WINDOWS__
 #include <cfgmgr32.h>
@@ -14,14 +20,26 @@
 #include <tchar.h>
 #include <windows.h>
 #else
-#if !__linux__ && !__APPLE__ && !__OpenBSD__
+
+#if __UNIX__
+#include <errno.h>
+#include <fcntl.h>
+#endif
+
+#if HAVE_PTY
+#include <sys/ioctl.h>
+#include <termios.h>
+#elif __linux__
 #include <stropts.h>
 #endif
-#include <termios.h>
+
 #endif
 
 #define GPROBE_SIZE (1LL << 32)
 #define GPROBE_I2C_ADDR 0x6e
+#ifndef B115200
+#define B115200 0010002
+#endif
 
 #define I2C_SLAVE 0x0703
 
@@ -67,30 +85,32 @@ enum {
 };
 
 #if __UNIX__
-static ut8 gprobe_checksum_i2c (const ut8 *p, unsigned int size, ut8 initial) {
+static ut8 gprobe_checksum_i2c(const ut8 *p, unsigned int size, ut8 initial) {
 	ut8 res = initial;
 	unsigned int k;
 
-	for (k = 0; k < size; ++k)
+	for (k = 0; k < size; k++) {
 		res ^= p[k];
+	}
 
 	return res;
 }
 
-static void gprobe_frame_i2c (RBuffer *frame) {
+static void gprobe_frame_i2c(RBuffer *frame) {
 	ut8 size = r_buf_size (frame) + 1;
 	ut8 header[] = {0x51, 0x80 + size + 3, 0xc2, 0x00, 0x00};
-	ut8 checksum;
 
 	r_buf_prepend_bytes (frame, &size, 1);
 	r_buf_prepend_bytes (frame, header, sizeof (header));
 
-	checksum = gprobe_checksum_i2c (r_buf_buffer (frame), r_buf_size (frame), GPROBE_I2C_ADDR);
+	ut64 tmpsz;
+	const ut8 *tmp = r_buf_data (frame, &tmpsz);
+	ut8 checksum = gprobe_checksum_i2c (tmp, tmpsz, GPROBE_I2C_ADDR);
 
 	r_buf_append_bytes (frame, &checksum, 1);
 }
 
-static int gprobe_get_reply_i2c (struct gport *port, ut8 cmd, RBuffer *reply) {
+static int gprobe_get_reply_i2c(struct gport *port, ut8 cmd, RBuffer *reply) {
 	ut8 buf[131];
 	int count;
 	int ddc2bi3_len;
@@ -129,15 +149,16 @@ static int gprobe_get_reply_i2c (struct gport *port, ut8 cmd, RBuffer *reply) {
 	return 0;
 }
 
-static int gprobe_send_request_i2c (struct gport *port, RBuffer *request) {
-	if (write (port->fd, r_buf_buffer (request), r_buf_size (request)) != r_buf_size (request)) {
+static int gprobe_send_request_i2c(struct gport *port, RBuffer *request) {
+	ut64 tmpsz;
+	const ut8 *tmp = r_buf_data (request, &tmpsz);
+	if (write (port->fd, tmp, tmpsz) != r_buf_size (request)) {
 		return -1;
 	}
-
 	return 0;
 }
 
-static int i2c_open (struct gport *port) {
+static int i2c_open(struct gport *port) {
 	char *end, filename[32];
 	int i2cbus = strtol (port->name + 4, &end, 0);
 
@@ -161,13 +182,12 @@ static int i2c_open (struct gport *port) {
 		port->fd = -1;
 		return -1;
 	}
-
 	port->fd = file;
 	return 0;
 }
 #endif
 
-static int sp_close (struct gport *port) {
+static int sp_close(struct gport *port) {
 #if __WINDOWS__
 	/* Returns non-zero upon success, 0 upon failure. */
 	if (CloseHandle (port->hdl) == 0){
@@ -179,7 +199,7 @@ static int sp_close (struct gport *port) {
 #define CLOSE_OVERLAPPED(ovl)                                   \
 	do {                                                    \
 		if (port->ovl.hEvent != INVALID_HANDLE_VALUE && \
-		    CloseHandle (port->ovl.hEvent) == 0)        \
+			CloseHandle (port->ovl.hEvent) == 0)    \
 			return -1;                              \
 	} while (0)
 	CLOSE_OVERLAPPED (read_ovl);
@@ -197,7 +217,7 @@ static int sp_close (struct gport *port) {
 
 #if __WINDOWS__
 /* To be called after port receive buffer is emptied. */
-static int restart_wait (struct gport *port) {
+static int restart_wait(struct gport *port) {
 	DWORD wait_result;
 
 	if (port->wait_running) {
@@ -223,7 +243,7 @@ static int restart_wait (struct gport *port) {
 }
 #endif
 
-static int sp_open (struct gport *port) {
+static int sp_open(struct gport *port) {
 #if __WINDOWS__
 	int ret;
 	DWORD errors;
@@ -238,7 +258,7 @@ static int sp_open (struct gport *port) {
 	}
 	sprintf (escaped_port_name, "\\\\.\\%s", port->name);
 
-	filename_ = r_sys_conv_utf8_to_utf16 (escaped_port_name);
+	filename_ = r_sys_conv_utf8_to_win (escaped_port_name);
 
 	port->hdl = CreateFile (filename_, GENERIC_READ | GENERIC_WRITE, 0, 0,
 				OPEN_EXISTING,
@@ -321,13 +341,12 @@ static int sp_open (struct gport *port) {
 
 	return 0;
 #else
-	struct termios tty;
+	struct termios tty = {0};
 
 	if ((port->fd = r_sandbox_open (port->name, O_NONBLOCK | O_NOCTTY | O_RDWR, 0)) < 0) {
 		return -1;
 	}
 
-	memset (&tty, 0, sizeof tty);
 	if (tcgetattr (port->fd, &tty) != 0) {
 		sp_close (port);
 		return -1;
@@ -347,7 +366,11 @@ static int sp_open (struct gport *port) {
 	tty.c_cflag |= (CLOCAL | CREAD);
 	tty.c_cflag &= ~(PARENB | PARODD);
 	tty.c_cflag &= ~CSTOPB;
+#ifdef CRTSCTS
 	tty.c_cflag &= ~CRTSCTS;
+#else
+	tty.c_cflag &= ~020000000000;
+#endif
 
 	if (tcsetattr (port->fd, TCSANOW, &tty) != 0) {
 		return -1;
@@ -359,7 +382,7 @@ static int sp_open (struct gport *port) {
 
 #if __WINDOWS__
 /* Restart wait operation if buffer was emptied. */
-static int restart_wait_if_needed (struct gport *port, unsigned int bytes_read) {
+static int restart_wait_if_needed(struct gport *port, unsigned int bytes_read) {
 	DWORD errors;
 	COMSTAT comstat;
 
@@ -381,7 +404,7 @@ static int restart_wait_if_needed (struct gport *port, unsigned int bytes_read) 
 }
 #endif
 
-static int sp_blocking_read (struct gport *port, void *buf,
+static int sp_blocking_read(struct gport *port, void *buf,
 			     size_t count, unsigned int timeout_ms) {
 #if __WINDOWS__
 	DWORD bytes_read = 0;
@@ -428,7 +451,7 @@ static int sp_blocking_read (struct gport *port, void *buf,
 		delta.tv_sec = timeout_ms / 1000;
 		delta.tv_usec = (timeout_ms % 1000) * 1000;
 		/* Calculate time at which we should give up. */
-		timeradd (&start, &delta, &end);
+		Timeradd (&start, &delta, &end);
 	}
 
 	FD_ZERO (&fds);
@@ -443,11 +466,11 @@ static int sp_blocking_read (struct gport *port, void *buf,
 		 */
 		if (timeout_ms && started) {
 			gettimeofday (&now, NULL);
-			if (timercmp (&now, &end, >)) {
+			if (Timercmp (&now, &end, >)) {
 				/* Timeout has expired. */
 				break;
 			}
-			timersub (&end, &now, &delta);
+			Timersub (&end, &now, &delta);
 		}
 		result = select (port->fd + 1, &fds, NULL, NULL, timeout_ms ? &delta : NULL);
 		started = 1;
@@ -486,7 +509,7 @@ static int sp_blocking_read (struct gport *port, void *buf,
 #endif
 }
 
-static int sp_flush (struct gport *port) {
+static int sp_flush(struct gport *port) {
 #if __WINDOWS__
 	/* Returns non-zero upon success, 0 upon failure. */
 	if (PurgeComm (port->hdl, PURGE_RXCLEAR) == 0) {
@@ -506,7 +529,7 @@ static int sp_flush (struct gport *port) {
 }
 
 #if __WINDOWS__
-static int await_write_completion (struct gport *port) {
+static int await_write_completion(struct gport *port) {
 	DWORD bytes_written;
 	BOOL result;
 
@@ -523,7 +546,7 @@ static int await_write_completion (struct gport *port) {
 }
 #endif
 
-static int sp_blocking_write (struct gport *port, const void *buf,
+static int sp_blocking_write(struct gport *port, const void *buf,
 			      size_t count, unsigned int timeout_ms) {
 #if __WINDOWS__
 	DWORD bytes_written = 0;
@@ -569,7 +592,7 @@ static int sp_blocking_write (struct gport *port, const void *buf,
 		delta.tv_sec = timeout_ms / 1000;
 		delta.tv_usec = (timeout_ms % 1000) * 1000;
 		/* Calculate time at which we should give up. */
-		timeradd (&start, &delta, &end);
+		Timeradd (&start, &delta, &end);
 	}
 
 	FD_ZERO (&fds);
@@ -584,11 +607,11 @@ static int sp_blocking_write (struct gport *port, const void *buf,
 		 */
 		if (timeout_ms && started) {
 			gettimeofday (&now, NULL);
-			if (timercmp (&now, &end, >)) {
+			if (Timercmp (&now, &end, >)) {
 				/* Timeout has expired. */
 				break;
 			}
-			timersub (&end, &now, &delta);
+			Timersub (&end, &now, &delta);
 		}
 		result = select (port->fd + 1, NULL, &fds, NULL, timeout_ms ? &delta : NULL);
 		started = 1;
@@ -624,11 +647,11 @@ static int sp_blocking_write (struct gport *port, const void *buf,
 #endif
 }
 
-static ut8 gprobe_checksum (const ut8 *p, unsigned int size) {
+static ut8 gprobe_checksum(const ut8 *p, unsigned int size) {
 	ut8 res = 0;
 	unsigned int k;
 
-	for (k = 0; k < size; ++k) {
+	for (k = 0; k < size; k++) {
 		res += p[k];
 	}
 
@@ -637,17 +660,19 @@ static ut8 gprobe_checksum (const ut8 *p, unsigned int size) {
 	return res;
 }
 
-static void gprobe_frame_sp (RBuffer *frame) {
-	ut8 size = r_buf_size (frame) + 2;
+static void gprobe_frame_sp(RBuffer *frame) {
+	ut64 size;
+	const ut8 *tmp = r_buf_data (frame, &size);
+	size += 2;
 	ut8 checksum;
 
-	r_buf_prepend_bytes (frame, &size, 1);
-	checksum = gprobe_checksum (r_buf_buffer (frame), size - 1);
+	r_buf_prepend_bytes (frame, (const ut8 *)&size, 1);
+	checksum = gprobe_checksum (tmp, size - 1);
 
 	r_buf_append_bytes (frame, &checksum, 1);
 }
 
-static int gprobe_get_reply_sp (struct gport *port, ut8 cmd, RBuffer *reply) {
+static int gprobe_get_reply_sp(struct gport *port, ut8 cmd, RBuffer *reply) {
 	ut8 buf[256];
 	int count = sp_blocking_read (port, buf, 2, 50);
 
@@ -681,18 +706,19 @@ static int gprobe_get_reply_sp (struct gport *port, ut8 cmd, RBuffer *reply) {
 	return 0;
 }
 
-static int gprobe_send_request_sp (struct gport *port, RBuffer *request) {
+static int gprobe_send_request_sp(struct gport *port, RBuffer *request) {
 	sp_flush (port);
 
-	if (sp_blocking_write (port, r_buf_buffer (request), r_buf_size (request),
-			       100) != r_buf_size (request)) {
+	ut64 tmpsz;
+	const ut8 *tmp = r_buf_data (request, &tmpsz);
+	if (sp_blocking_write (port, tmp, tmpsz, 100) != tmpsz) {
 		return -1;
 	}
 
 	return 0;
 }
 
-static int gprobe_read (struct gport *port, ut32 addr, ut8 *buf, ut32 count) {
+static int gprobe_read(struct gport *port, ut32 addr, ut8 *buf, ut32 count) {
 	RBuffer *request = r_buf_new ();
 	RBuffer *reply = r_buf_new ();
 	const ut8 cmd = GPROBE_RAM_READ_2;
@@ -701,6 +727,8 @@ static int gprobe_read (struct gport *port, ut32 addr, ut8 *buf, ut32 count) {
 	int res;
 
 	if (!request || !reply) {
+		r_buf_free (request);
+		r_buf_free (reply);
 		return -1;
 	}
 
@@ -736,7 +764,7 @@ fail:
 	return -1;
 }
 
-static int gprobe_write (struct gport *port, ut32 addr, const ut8 *buf, ut32 count) {
+static int gprobe_write(struct gport *port, ut32 addr, const ut8 *buf, ut32 count) {
 	RBuffer *request = r_buf_new ();
 	RBuffer *reply = r_buf_new ();
 	const ut8 cmd = GPROBE_RAM_WRITE_2;
@@ -744,6 +772,8 @@ static int gprobe_write (struct gport *port, ut32 addr, const ut8 *buf, ut32 cou
 	ut8 count_be[4];
 
 	if (!request || !reply) {
+		r_buf_free (request);
+		r_buf_free (reply);
 		return -1;
 	}
 
@@ -777,7 +807,7 @@ fail:
 	return -1;
 }
 
-static int gprobe_reset (struct gport *port, ut8 code) {
+static int gprobe_reset(struct gport *port, ut8 code) {
 	if (!port) {
 		return -1;
 	}
@@ -815,7 +845,7 @@ fail:
 	return -1;
 }
 
-static int gprobe_debugon (struct gport *port) {
+static int gprobe_debugon(struct gport *port) {
 	if (!port) {
 		return -1;
 	}
@@ -849,7 +879,7 @@ fail:
 	return -1;
 }
 
-static int gprobe_debugoff (struct gport *port) {
+static int gprobe_debugoff(struct gport *port) {
 	RBuffer *request = r_buf_new ();
 	RBuffer *reply = r_buf_new ();
 	const ut8 cmd = GPROBE_DEBUGOFF;
@@ -874,7 +904,7 @@ fail:
 	return -1;
 }
 
-static int gprobe_runcode (struct gport *port, ut32 addr) {
+static int gprobe_runcode(struct gport *port, ut32 addr) {
 	if (!port) {
 		return -1;
 	}
@@ -913,7 +943,7 @@ fail:
 	return -1;
 }
 
-static int gprobe_getdeviceid (struct gport *port, ut8 index) {
+static int gprobe_getdeviceid(struct gport *port, ut8 index) {
 	if (!port) {
 		return -1;
 	}
@@ -955,7 +985,7 @@ fail:
 	return -1;
 }
 
-static int gprobe_getinformation (struct gport *port) {
+static int gprobe_getinformation(struct gport *port) {
 	if (!port) {
 		return -1;
 	}
@@ -981,7 +1011,9 @@ static int gprobe_getinformation (struct gport *port) {
 		goto fail;
 	}
 
-	r_print_hexdump (NULL, 0, r_buf_buffer (reply), r_buf_size (reply), 16, 1, 1);
+	ut64 tmpsz;
+	const ut8 *tmp = r_buf_data (reply, &tmpsz);
+	r_print_hexdump (NULL, 0, tmp, tmpsz, 16, 1, 1);
 
 	r_buf_free (request);
 	r_buf_free (reply);
@@ -994,7 +1026,7 @@ fail:
 	return -1;
 }
 
-static int __write (RIO *io, RIODesc *fd, const ut8 *buf, int count) {
+static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 	RIOGprobe *gprobe;
 	int res;
 	int has_written = 0;
@@ -1021,7 +1053,7 @@ static int __write (RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 	return count;
 }
 
-static int __read (RIO *io, RIODesc *fd, ut8 *buf, int count) {
+static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	int res;
 	RIOGprobe *gprobe;
 	int has_read = 0;
@@ -1048,21 +1080,17 @@ static int __read (RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	return has_read;
 }
 
-static int __close (RIODesc *fd) {
-	RIOGprobe *gprobe;
-
+static bool __close(RIODesc *fd) {
 	if (!fd || !fd->data) {
-		return -1;
+		return false;
 	}
-	gprobe = (RIOGprobe *)fd->data;
-
+	RIOGprobe *gprobe = (RIOGprobe *)fd->data;
 	sp_close (&gprobe->gport);
 	R_FREE (fd->data);
-
-	return 0;
+	return true;
 }
 
-static ut64 __lseek (RIO *io, RIODesc *fd, ut64 offset, int whence) {
+static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 	RIOGprobe *gprobe;
 	if (!fd || !fd->data) {
 		return offset;
@@ -1074,25 +1102,22 @@ static ut64 __lseek (RIO *io, RIODesc *fd, ut64 offset, int whence) {
 			return gprobe->offset = GPROBE_SIZE - 1;
 		}
 		return gprobe->offset = offset;
-		break;
 	case SEEK_CUR:
 		if ((gprobe->offset + offset) >= GPROBE_SIZE) {
 			return gprobe->offset = GPROBE_SIZE - 1;
 		}
 		return gprobe->offset += offset;
-		break;
 	case SEEK_END:
 		return gprobe->offset = GPROBE_SIZE - 1;
-		break;
 	}
 	return offset;
 }
 
-static bool __plugin_open (RIO *io, const char *pathname, bool many) {
+static bool __plugin_open(RIO *io, const char *pathname, bool many) {
 	return pathname && r_str_startswith (pathname, "gprobe://") && strlen (pathname + strlen ("gprobe://"));
 }
 
-static RIODesc *__open (RIO *io, const char *pathname, int rw, int mode) {
+static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 	if (__plugin_open (io, pathname, 0)) {
 		RIOGprobe *gprobe = R_NEW0 (RIOGprobe);
 
@@ -1134,13 +1159,11 @@ static RIODesc *__open (RIO *io, const char *pathname, int rw, int mode) {
 	return NULL;
 }
 
-static char *__system (RIO *io, RIODesc *fd, const char *cmd) {
-	RIOGprobe *gprobe;
-
+static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 	if (!fd || !fd->data) {
 		return NULL;
 	}
-	gprobe = (RIOGprobe *)fd->data;
+	RIOGprobe *gprobe = (RIOGprobe *)fd->data;
 
 	if (!cmd[0] || cmd[0] == '?' || !strcmp (cmd, "help")) {
 		printf ("Usage: =!cmd args\n"
@@ -1203,19 +1226,20 @@ static char *__system (RIO *io, RIODesc *fd, const char *cmd) {
 
 RIOPlugin r_io_plugin_gprobe = {
 	.name = "gprobe",
-	.desc = "open gprobe connection using gprobe://",
+	.desc = "Open gprobe connection",
 	.license = "LGPL3",
+	.uris = "gprobe://",
 	.open = __open,
 	.close = __close,
 	.read = __read,
 	.check = __plugin_open,
-	.lseek = __lseek,
+	.seek = __lseek,
 	.write = __write,
 	.system = __system,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_IO,
 	.data = &r_io_plugin_gprobe,
 	.version = R2_VERSION};

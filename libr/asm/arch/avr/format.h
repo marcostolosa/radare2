@@ -16,13 +16,13 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA. 
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * format_disasm.h - Header file to formatting of disassembled instructions, with
  *  regard to the several formatting features this disasssembler supports.
  *
  */
- 
+
 #include "avr_disasm.h"
 #include "errorcodes.h"
 
@@ -80,9 +80,8 @@ typedef struct _formattingOptions formattingOptions;
 
 
 /* Prints a disassembled instruction, formatted with options set in the formattingOptions structure. */
-static int printDisassembledInstruction(char *out, const disassembledInstruction dInstruction, formattingOptions fOptions);
-#ifdef _MSC_VER
-extern uint32_t AVR_Long_Address;
-extern int AVR_Long_Instruction;
-#endif
+int printDisassembledInstruction(RAsm *, avrDisassembleContext *context, char *out, int out_len, const disassembledInstruction dInstruction, formattingOptions fOptions);
+int analPrintDisassembledInstruction(RAnal *a, avrDisassembleContext *context, char *out, int out_len, const disassembledInstruction dInstruction, formattingOptions fOptions);
+int parse_registerpair(const char *operand);
+
 #endif

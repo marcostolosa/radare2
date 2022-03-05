@@ -1,15 +1,15 @@
-/* radare - LGPL - Copyright 2016-2018 pancake */
+/* radare - LGPL - Copyright 2016-2021 pancake */
 
 #include <r_io.h>
 #include <r_asm.h>
 #include <r_debug.h>
 
-static int __io_step(RDebug *dbg) {
+static bool __io_step(RDebug *dbg) {
 	free (dbg->iob.system (dbg->iob.io, "ds"));
 	return true;
 }
 
-static int __io_step_over(RDebug *dbg) {
+static bool __io_step_over(RDebug *dbg) {
 	free (dbg->iob.system (dbg->iob.io, "dso"));
 	return true;
 }
@@ -64,14 +64,12 @@ static RList *__io_maps(RDebug *dbg) {
 	return list;
 }
 
-static int __io_wait(RDebug *dbg, int pid) {
+static RDebugReasonType __io_wait(RDebug *dbg, int pid) {
 	/* do nothing */
-	return true;
+	return R_DEBUG_REASON_NONE;
 }
 
-static int curPid = -1;
-static int __io_attach(RDebug *dbg, int pid) {
-	curPid = pid;
+static bool __io_attach(RDebug *dbg, int pid) {
 	return true;
 }
 
@@ -124,7 +122,7 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 }
 
 // "dc" continue execution
-static int __io_continue(RDebug *dbg, int pid, int tid, int sig) {
+static bool __io_continue(RDebug *dbg, int pid, int tid, int sig) {
 	dbg->iob.system (dbg->iob.io, "dc");
 	r_cons_flush ();
 	return true;
@@ -132,7 +130,7 @@ static int __io_continue(RDebug *dbg, int pid, int tid, int sig) {
 
 // "dk" send kill signal
 static bool __io_kill(RDebug *dbg, int pid, int tid, int sig) {
-	const char *cmd = sdb_fmt ("dk %d", sig);
+	r_strf_var (cmd, 32, "dk %d", sig);
 	dbg->iob.system (dbg->iob.io, cmd);
 	r_cons_flush ();
 	return true;
@@ -162,8 +160,8 @@ RDebugPlugin r_debug_plugin_io = {
 #endif
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_DBG,
 	.data = &r_debug_plugin_io,
 	.version = R2_VERSION

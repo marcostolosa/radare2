@@ -25,7 +25,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <getopt.h>
 #include <string.h>
 #include <errno.h>
 #include <ctype.h>
@@ -33,7 +32,9 @@
 
 static int getc_nospace(FILE *f) {
 	int c;
-	while (isspace (c = getc (f)));
+	while (isspace (c = getc (f))) {
+		;
+	}
 	return c;
 }
 
@@ -116,7 +117,7 @@ R_API bool r_base85_decode(FILE *fp, int delims, int ignore_garbage) {
 			}
 			ungetc (c, fp);
 		} else if (c == EOF) {
-			eprint ("ascii85: missing <~");
+			eprintf ("ascii85: missing <~");
 			return false;
 		}
 	}
@@ -133,7 +134,7 @@ R_API bool r_base85_decode(FILE *fp, int delims, int ignore_garbage) {
 		if (c == '~' && delims) {
 			c = getc_nospace (fp);
 			if (c != '>') {
-				eprint ("ascii85: ~ without >\n");
+				eprintf ("ascii85: ~ without >\n");
 				return false;
 			}
 			c = EOF;
@@ -141,7 +142,7 @@ R_API bool r_base85_decode(FILE *fp, int delims, int ignore_garbage) {
 		}
 		if (c == EOF) {
 			if (delims && !end) {
-				eprint ("ascii85: missing ~>");
+				eprintf ("ascii85: missing ~>");
 				return false;
 			}
 			if (count > 0) {

@@ -1,14 +1,10 @@
-/* radare - LGPL - Copyright 2009-2017 - pancake, nibble */
+/* radare - LGPL - Copyright 2009-2021 - pancake, nibble */
 
-#include <stdio.h>
-#include <string.h>
-#include <r_types.h>
-#include <r_lib.h>
 #include <r_asm.h>
 
 static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 	const ut8 *b;
-	int rep = 1;
+	size_t rep = 1;
 
 	/* Count repetitions of the current instruction, unless it's a trap. */
 	if (*buf != 0x00 && *buf != 0xff) {
@@ -16,142 +12,110 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 			rep++;
 		}
 	}
-
+	const char *buf_asm = "invalid";
 	switch (*buf) {
 	case '[':
-		strcpy (op->buf_asm, "while [ptr]");
+		buf_asm = "while [ptr]";
 		break;
 	case ']':
-		strcpy (op->buf_asm, "loop"); // TODO: detect clause and put label name
+		buf_asm = "loop";
 		break;
 	case '>':
-		if (rep > 1) {
-			strcpy (op->buf_asm, "add ptr");
-		} else {
-			strcpy (op->buf_asm, "inc ptr");
-		}
+		buf_asm = (rep > 1)? "add ptr": "inc ptr";
 		break;
 	case '<':
-		if (rep > 1) {
-			strcpy (op->buf_asm, "sub ptr");
-		} else {
-			strcpy (op->buf_asm, "dec ptr");
-		}
+		buf_asm = (rep > 1)? "sub ptr": "dec ptr";
 		break;
 	case '+':
-		if (rep > 1) {
-			strcpy (op->buf_asm, "add [ptr]");
-		} else {
-			strcpy (op->buf_asm, "inc [ptr]");
-		}
+		buf_asm = (rep > 1)? "add [ptr]": "inc [ptr]";
 		break;
 	case '-':
-		if (rep > 1) {
-			strcpy (op->buf_asm, "sub [ptr]");
-		} else {
-			strcpy (op->buf_asm, "dec [ptr]");
-		}
+		buf_asm = (rep > 1)? "sub [ptr]": "dec [ptr]";
 		break;
 	case ',':
-		strcpy (op->buf_asm, "in [ptr]");
+		buf_asm = "in [ptr]";
 		break;
 	case '.':
-		strcpy (op->buf_asm, "out [ptr]");
+		buf_asm = "out [ptr]";
 		break;
 	case 0xff:
 	case 0x00:
-		strcpy (op->buf_asm, "trap");
+		buf_asm = "trap";
 		break;
 	default:
-		strcpy (op->buf_asm, "nop");
+		buf_asm = "nop";
 		break;
 	}
 
+	char buf_asm_local[256];
 	if (rep > 1) {
-		/* Note: snprintf's source and destination buffers may not
-		* overlap. */
-		const char *fmt = strchr (op->buf_asm, ' ')? "%s, %d": "%s %d";
-		char buf[sizeof (op->buf_asm)];
-		snprintf (buf, sizeof (buf), fmt, op->buf_asm, rep);
-		strcpy (op->buf_asm, buf);
+		/* Note: snprintf's source and destination buffers may not overlap. */
+		const char *fmt = strchr (buf_asm, ' ')? "%s, %d": "%s %d";
+		snprintf (buf_asm_local, sizeof (buf_asm_local), fmt, buf_asm, rep);
+		buf_asm = buf_asm_local;
 	}
-
+	r_strbuf_set (&op->buf_asm, buf_asm);
 	op->size = rep;
 	return rep;
 }
 
+static bool _write_asm(RAsmOp *op, int value, int n) {
+	ut8 *opbuf = malloc (n);
+	if (opbuf == NULL) {
+		return true;
+	}
+	memset (opbuf, value, n);
+	r_strbuf_setbin (&op->buf, opbuf, n);
+	free (opbuf);
+	return false;
+}
+
 static int assemble(RAsm *a, RAsmOp *op, const char *buf) {
-	const char *ref, *arg;
 	int n = 0;
 	if (buf[0] && buf[1] == ' ') {
 		buf += 2;
 	}
-	arg = strchr (buf, ',');
-	ref = strchr (buf, '[');
+	const char *arg = strchr (buf, ',');
+	const char *ref = strchr (buf, '[');
+	bool write_err = false;
+	if (arg) {
+		n = atoi (arg + 1);
+	} else {
+		n = 1;
+	}
 	if (!strncmp (buf, "trap", 4)) {
-		if (arg) {
-			n = atoi (arg + 1);
-			memset (op->buf, 0xcc, n);
-		} else {
-			op->buf[0] = 0x90;
-			n = 1;
-		}
-	} else if (!strncmp (buf, "nop", 3))        {
-		if (arg) {
-			n = atoi (arg + 1);
-			memset (op->buf, 0x90, n);
-		} else {
-			op->buf[0] = 0x90;
-			n = 1;
-		}
-	} else if (!strncmp (buf, "inc", 3))        {
+		write_err = _write_asm (op, 0xcc, n);
+	} else if (!strncmp (buf, "nop", 3)) {
+		write_err = _write_asm (op, 0x90, n);
+	} else if (!strncmp (buf, "inc", 3)) {
 		char ch = ref? '+': '>';
-		op->buf[0] = ch;
 		n = 1;
-	} else if (!strncmp (buf, "dec", 3))        {
+		write_err = _write_asm (op, ch, n);
+	} else if (!strncmp (buf, "dec", 3)) {
 		char ch = ref? '-': '<';
-		op->buf[0] = ch;
 		n = 1;
-	} else if (!strncmp (buf, "sub", 3))        {
+		write_err = _write_asm (op, ch, n);
+	} else if (!strncmp (buf, "sub", 3)) {
 		char ch = ref? '-': '<';
-		if (arg) {
-			n = atoi (arg + 1);
-			memset (op->buf, ch, n);
-		} else {
-			op->buf[0] = '<';
-			n = 1;
-		}
-	} else if (!strncmp (buf, "add", 3))        {
+		write_err = _write_asm (op, ch, n);
+	} else if (!strncmp (buf, "add", 3)) {
 		char ch = ref? '+': '>';
-		if (arg) {
-			n = atoi (arg + 1);
-			memset (op->buf, ch, n);
-		} else {
-			op->buf[0] = '<';
-			n = 1;
-		}
-	} else if (!strncmp (buf, "while", 5))        {
-		op->buf[0] = '[';
+		write_err = _write_asm (op, ch, n);
+	} else if (!strncmp (buf, "while", 5)) {
 		n = 1;
-	} else if (!strncmp (buf, "loop", 4))        {
-		op->buf[0] = ']';
+		write_err = _write_asm (op, '[', 1);
+	} else if (!strncmp (buf, "loop", 4)) {
 		n = 1;
-	} else if (!strncmp (buf, "in", 4))        {
-		if (arg) {
-			n = atoi (arg + 1);
-			memset (op->buf, ',', n);
-		} else {
-			op->buf[0] = ',';
-			n = 1;
-		}
-	} else if (!strncmp (buf, "out", 4))        {
-		if (arg) {
-			n = atoi (arg + 1);
-			memset (op->buf, '.', n);
-		} else {
-			op->buf[0] = '.';
-			n = 1;
-		}
+		write_err = _write_asm (op, ']', 1);
+	} else if (!strncmp (buf, "in", 2)) {
+		write_err = _write_asm (op, ',', n);
+	} else if (!strncmp (buf, "out", 3)) {
+		write_err = _write_asm (op, '.', n);
+	} else {
+		n = 0;
+	}
+	if (write_err) {
+		return 0;
 	}
 	return n;
 }
@@ -169,8 +133,8 @@ RAsmPlugin r_asm_plugin_bf = {
 	.assemble = &assemble
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ASM,
 	.data = &r_asm_plugin_bf,
 	.version = R2_VERSION

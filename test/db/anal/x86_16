@@ -1,0 +1,268 @@
+NAME=arj x86 16 bits
+FILE=malloc://0x100
+CMDS=<<EOF
+e asm.arch = x86
+e anal.arch = x86
+e asm.bits=16
+arj
+EOF
+EXPECT=<<EOF
+{"ip":0,"ax":0,"bx":0,"cx":0,"dx":0,"sp":0,"bp":0,"si":0,"di":0,"flags":0}
+EOF
+RUN
+
+NAME=lcall offset (#12284)
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+wx 9a34002001
+?v $j
+EOF
+EXPECT=<<EOF
+0x1234
+EOF
+RUN
+
+NAME=ljmp offset (#12284)
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+wx ea34002001
+?v $j
+EOF
+EXPECT=<<EOF
+0x1234
+EOF1
+RUN
+
+NAME=aoj pushf
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+wx 9c
+aoj~{}
+EOF
+EXPECT=<<EOF
+[
+  {
+    "opcode": "pushf",
+    "disasm": "pushf",
+    "pseudo": "push ()",
+    "description": "push flags register onto the stack",
+    "mnemonic": "pushf",
+    "mask": "ff",
+    "esil": "2,sp,-=,eflags,sp,=[2]",
+    "sign": false,
+    "prefix": 0,
+    "id": 612,
+    "opex": {
+      "operands": [
+        {
+          "size": 2,
+          "rw": 1,
+          "type": "reg",
+          "value": "flags"
+        }
+      ]
+    },
+    "addr": 0,
+    "bytes": "9c",
+    "size": 1,
+    "type": "upush",
+    "esilcost": 0,
+    "scale": 0,
+    "refptr": 0,
+    "cycles": 2,
+    "failcycles": 0,
+    "delay": 0,
+    "stack": "inc",
+    "stackptr": 2,
+    "family": "cpu"
+  }
+]
+EOF
+RUN
+
+NAME=16bit segment bounds - capstone
+FILE=malloc://1024k
+CMDS=<<EOF
+e asm.arch=x86
+e anal.arch=x86
+e asm.bits=16
+e anal.hasnext=0
+wx e9c300 @ f000:ffaa
+s f000:ffaa
+pi 1
+EOF
+EXPECT=<<EOF
+jmp 0xf0070
+EOF
+BROKEN=1
+RUN
+
+NAME=16bit segment bounds 2
+FILE=malloc://1024k
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+e io.va=1
+wx e97ae7 @ f000:1911
+s f000:1911
+ao 1~jump
+EOF
+EXPECT=<<EOF
+description: jump
+jump: 0x000f008e
+EOF
+RUN
+
+NAME=x86-16 les,lds arg anal
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+wx 558becc57606c47e0a5dc3
+af
+pdf
+EOF:
+EXPECT=<<EOF
+/ 11: fcn.00000000 (int16_t arg_6h, int16_t arg_ah);
+|           ; arg int16_t arg_6h @ bp+0x6
+|           ; arg int16_t arg_ah @ bp+0xa
+|           0000:0000     55             push bp
+|           0000:0001     8bec           mov bp, sp
+|           0000:0003     c57606         lds si, [arg_6h]
+|           0000:0006     c47e0a         les di, [arg_ah]
+|           0000:0009     5d             pop bp
+\           0000:000a     c3             ret
+EOF
+RUN
+
+NAME=x86-16 seg:off call addr replace with analysed func name
+BROKEN=1
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+wx 9090558bec9a0d0000005dc390558bec5dc3
+af funcA @ 0xd
+af funcB @ 0x2
+pdf @ 0x2
+EOF
+EXPECT=<<EOF
+/ 10: funcB ();
+|           0000:0002     55             push bp
+|           0000:0003     8bec           mov bp, sp
+|           0000:0005     9a0d000000     lcall funcA
+|           0000:000a     5d             pop bp
+\           0000:000b     c3             ret
+EOF
+RUN
+
+
+NAME=x86-16 seg:off lcall addr replace with non-analysed func
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+wx 9090558bec9a0d0000005dc390558bec5dc3
+pd 1 @ 0x5
+EOF
+EXPECT=<<EOF
+            0000:0005     9a0d000000     lcall 0:0xd
+EOF
+RUN
+
+NAME=x86-16 seg:off ljmp addr replace with non-analysed func
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+wx 9090558becea0d0000005dc390558bec5dc3
+pd 1 @ 0x5
+EOF
+EXPECT=<<EOF
+        ,=< 0000:0005     ea0d000000     ljmp 0:0xd
+EOF
+RUN
+
+NAME=x86-16 seg:off ljmp addr replace with analysed func
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+wx 9090558becea0d0000005dc390558bec5dc3
+af funcA @ 0xd
+pd 1 @ 0x5
+EOF
+EXPECT=<<EOF
+        ,=< 0000:0005     ea0d000000     ljmp funcA
+EOF
+RUN
+
+NAME=x86-16 seg:off ljmp addr replace with non-analysed func higher segment
+FILE=malloc://2048
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+e asm.seggrn=8
+s 0x400
+wx 9090558becea000004005dc3
+pd 1 @ 0x405
+EOF
+EXPECT=<<EOF
+        `=< 0000:0405     ea00000400     ljmp 4:0
+EOF
+RUN
+
+NAME=x86-16 seg:off ljmp addr replace with analysed func higher segment
+FILE=malloc://2048
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+e asm.seggrn=8
+s 0x400
+wx 558becea000004005dc3
+af funcA @ 0x400
+pd 1 @ 0x403
+EOF
+EXPECT=<<EOF
+\       `=< 0000:0403     ea00000400     ljmp funcA
+EOF
+RUN
+
+NAME=x86-16 seg:off lcall addr replace with non-analysed func higher segment
+FILE=malloc://2048
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+e asm.seggrn=8
+s 0x400
+wx 9090558bec9a000004005dc3
+pd 1 @ 0x405
+EOF
+EXPECT=<<EOF
+            0000:0405     9a00000400     lcall 4:0
+EOF
+RUN
+
+NAME=x86-16 seg:off lcall addr replace with analysed func higher segment
+FILE=malloc://2048
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=16
+e asm.seggrn=8
+s 0x400
+wx 558bec9a000004005dc3
+af funcA @ 0x400
+pd 1 @ 0x403
+EOF
+EXPECT=<<EOF
+|           0000:0403     9a00000400     lcall funcA
+EOF
+RUN
+
+

@@ -1,4 +1,4 @@
-.Dd Jul 28, 2017
+.Dd Dec 28, 2020
 .Dt RAX2 1
 .Sh NAME
 .Nm rax2
@@ -21,6 +21,10 @@ Keep the same base as the input data
 Swap endian.
 .It Fl F
 Read C strings from stdin and output in hexpairs. Useful to load shellcodes
+.It Fl i
+Dump stdin to C array in stdout (xxd replacement)
+.It Fl I
+Convert LONG to/from IP ADDRESS
 .It Fl l
 Append newline to the decoded output for human friendly-ness
 .It Fl K
@@ -41,6 +45,8 @@ Show program version
 Convert a string into a hash
 .It Fl h
 Show usage help message
+.It Fl o
+Convert from octal string to char (rax2 -o 162 62)
 .El
 .Sh USAGE
 .Pp
@@ -91,14 +97,7 @@ It is a very useful tool for scripting, so you can read floating point values, o
 .Pp
 .Sh SEE ALSO
 .Pp
-.Xr radare2(1) ,
-.Xr rahash2(1) ,
-.Xr rafind2(1) ,
-.Xr rabin2(1) ,
-.Xr radiff2(1) ,
-.Xr ragg2(1) ,
-.Xr rarun2(1) ,
-.Xr rasm2(1)
+.Xr radare2(1)
 .Sh AUTHORS
 .Pp
 Written by pancake <pancake@nopcode.org>.

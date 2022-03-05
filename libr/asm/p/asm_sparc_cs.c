@@ -1,8 +1,8 @@
-/* radare2 - LGPL - Copyright 2014-2017 - pancake */
+/* radare2 - LGPL - Copyright 2014-2021 - pancake */
 
 #include <r_asm.h>
 #include <r_lib.h>
-#include <capstone/capstone.h>
+#include "cs_version.h"
 static csh cd = 0;
 #include "cs_mnemonics.c"
 
@@ -34,7 +34,7 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 		n = cs_disasm (cd, buf, len, a->pc, 1, &insn);
 	}
 	if (n < 1) {
-		strcpy (op->buf_asm, "invalid");
+		r_asm_op_set_asm (op, "invalid");
 		op->size = 4;
 		ret = -1;
 		goto beach;
@@ -45,10 +45,11 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 		goto beach;
 	}
 	op->size = insn->size;
-	snprintf (op->buf_asm, R_ASM_BUFSIZE, "%s%s%s",
+	r_strf_var (buf_asm, 256, "%s%s%s",
 		insn->mnemonic, insn->op_str[0]? " ": "",
 		insn->op_str);
-	r_str_replace_char (op->buf_asm, '%', 0);
+	r_str_replace_char (buf_asm, '%', 0);
+	r_asm_op_set_asm (op, buf_asm);
 	// TODO: remove the '$'<registername> in the string
 	cs_free (insn, n);
 	beach:
@@ -59,7 +60,7 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 
 RAsmPlugin r_asm_plugin_sparc_cs = {
 	.name = "sparc",
-	.desc = "Capstone SPARC disassembler",
+	.desc = "Capstone "CAPSTONE_VERSION_STRING" SPARC disassembler",
 	.license = "BSD",
 	.arch = "sparc",
 	.cpus = "v9",
@@ -69,8 +70,8 @@ RAsmPlugin r_asm_plugin_sparc_cs = {
 	.mnemonics = mnemonics
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ASM,
 	.data = &r_asm_plugin_sparc_cs,
 	.version = R2_VERSION

@@ -7,7 +7,9 @@
 /* HACK_FOR_PLUGIN_LINKAGE */
 R_API RDebugPid *__r_debug_pid_new(const char *path, int pid, char status, ut64 pc) {
 	RDebugPid *p = R_NEW0 (RDebugPid);
-	if (!p) return NULL;
+	if (!p) {
+		return NULL;
+	}
 	p->path = strdup (path);
 	p->pid = pid;
 	p->status = status;
@@ -30,24 +32,26 @@ static libqnxr_t *desc = NULL;
 static ut8 *reg_buf = NULL;
 static int buf_size = 0;
 
-static void pidlist_cb (void *ctx, pid_t pid, char *name) {
+static void pidlist_cb(void *ctx, pid_t pid, char *name) {
 	RList *list = ctx;
 	r_list_append (list, __r_debug_pid_new (name, pid, 's', 0));
 }
 
-static int r_debug_qnx_select (int pid, int tid) {
+static bool r_debug_qnx_select(RDebug *dbg, int pid, int tid) {
 	return qnxr_select (desc, pid, tid);
 }
 
-static RList *r_debug_qnx_tids (RDebug *dbg, int pid) {
+static RList *r_debug_qnx_tids(RDebug *dbg, int pid) {
 	eprintf ("%s: TODO: Threads\n", __func__);
 	return NULL;
 }
 
 
-static RList *r_debug_qnx_pids (RDebug *dbg, int pid) {
+static RList *r_debug_qnx_pids(RDebug *dbg, int pid) {
 	RList *list = r_list_new ();
-	if (!list) return NULL;
+	if (!list) {
+		return NULL;
+	}
 	list->free = (RListFree)&__r_debug_pid_free;
 
 	/* TODO */
@@ -60,14 +64,16 @@ static RList *r_debug_qnx_pids (RDebug *dbg, int pid) {
 	return list;
 }
 
-static int r_debug_qnx_reg_read (RDebug *dbg, int type, ut8 *buf, int size) {
+static int r_debug_qnx_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 	int copy_size;
 	int buflen = 0;
 	if (!desc) {
 		return -1;
 	}
 	int len = qnxr_read_registers (desc);
-	if (len <= 0) return -1;
+	if (len <= 0) {
+		return -1;
+	}
 	// read the len of the current area
 	free (r_reg_get_bytes (dbg->reg, type, &buflen));
 	if (size < len) {
@@ -79,16 +85,18 @@ static int r_debug_qnx_reg_read (RDebug *dbg, int type, ut8 *buf, int size) {
 	if (reg_buf) {
 		if (buf_size < copy_size) {
 			ut8 *new_buf = realloc (reg_buf, copy_size);
-			if (!new_buf)
+			if (!new_buf) {
 				return -1;
+			}
 			reg_buf = new_buf;
 			buflen = copy_size;
 			buf_size = len;
 		}
 	} else {
 		reg_buf = calloc (buflen, 1);
-		if (!reg_buf)
+		if (!reg_buf) {
 			return -1;
+		}
 		buf_size = buflen;
 	}
 	memset ((void *)(volatile void *) buf, 0, size);
@@ -99,11 +107,11 @@ static int r_debug_qnx_reg_read (RDebug *dbg, int type, ut8 *buf, int size) {
 	return len;
 }
 
-static RList *r_debug_qnx_map_get (RDebug *dbg) {
+static RList *r_debug_qnx_map_get(RDebug *dbg) {
 	return NULL;
 }
 
-static int r_debug_qnx_reg_write (RDebug *dbg, int type, const ut8 *buf, int size) {
+static int r_debug_qnx_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 	int buflen = 0;
 	int bits = dbg->anal->bits;
 	const char *pcname = r_reg_get_name (dbg->anal->reg, R_REG_NAME_PC);
@@ -113,8 +121,9 @@ static int r_debug_qnx_reg_write (RDebug *dbg, int type, const ut8 *buf, int siz
 		return -1;
 	}
 	if (reg) {
-		if (dbg->anal->bits != reg->size)
+		if (dbg->anal->bits != reg->size) {
 			bits = reg->size;
+		}
 	}
 	free (r_reg_get_bytes (dbg->reg, type, &buflen));
 	// some implementations of the gdb protocol are acting weird.
@@ -135,7 +144,9 @@ static int r_debug_qnx_reg_write (RDebug *dbg, int type, const ut8 *buf, int siz
 	RRegItem *current = NULL;
 	for (;;) {
 		current = r_reg_next_diff (dbg->reg, type, reg_buf, buflen, current, bits);
-		if (!current) break;
+		if (!current) {
+			break;
+		}
 		ut64 val = r_reg_get_value (dbg->reg, current);
 		int bytes = bits / 8;
 		qnxr_write_reg (desc, current->name, (char *)&val, bytes);
@@ -143,17 +154,17 @@ static int r_debug_qnx_reg_write (RDebug *dbg, int type, const ut8 *buf, int siz
 	return true;
 }
 
-static int r_debug_qnx_continue (RDebug *dbg, int pid, int tid, int sig) {
+static bool r_debug_qnx_continue(RDebug *dbg, int pid, int tid, int sig) {
 	qnxr_continue (desc, -1);
 	return true;
 }
 
-static int r_debug_qnx_step (RDebug *dbg) {
+static bool r_debug_qnx_step(RDebug *dbg) {
 	qnxr_step (desc, -1);
 	return true;
 }
 
-static int r_debug_qnx_wait (RDebug *dbg, int pid) {
+static RDebugReasonType r_debug_qnx_wait(RDebug *dbg, int pid) {
 	ptid_t ptid = qnxr_wait (desc, pid);
 	if (!ptid_equal (ptid, null_ptid)) {
 		dbg->reason.signum = desc->signal;
@@ -162,12 +173,12 @@ static int r_debug_qnx_wait (RDebug *dbg, int pid) {
 	return 0;
 }
 
-static int r_debug_qnx_stop (RDebug *dbg) {
+static int r_debug_qnx_stop(RDebug *dbg) {
 	qnxr_stop (desc);
 	return true;
 }
 
-static int r_debug_qnx_attach (RDebug *dbg, int pid) {
+static bool r_debug_qnx_attach(RDebug *dbg, int pid) {
 	RIODesc *d = dbg->iob.io->desc;
 	dbg->swstep = false;
 
@@ -176,7 +187,7 @@ static int r_debug_qnx_attach (RDebug *dbg, int pid) {
 			RIOQnx *g = d->data;
 			int arch = r_sys_arch_id (dbg->arch);
 			int bits = dbg->anal->bits;
-			if ((desc = &g->desc))
+			if ((desc = &g->desc)) {
 				switch (arch) {
 				case R_SYS_ARCH_X86:
 					if (bits == 16 || bits == 32) {
@@ -195,8 +206,10 @@ static int r_debug_qnx_attach (RDebug *dbg, int pid) {
 					}
 					break;
 				}
-			if (pid)
+			}
+			if (pid) {
 				qnxr_attach (desc, pid);
+			}
 		} else {
 			eprintf ("%s: error: underlying IO descriptor isn't a QNX one\n", __func__);
 			return false;
@@ -207,13 +220,13 @@ static int r_debug_qnx_attach (RDebug *dbg, int pid) {
 	return true;
 }
 
-static int r_debug_qnx_detach (RDebug *dbg, int pid) {
+static bool r_debug_qnx_detach(RDebug *dbg, int pid) {
 	qnxr_disconnect (desc);
 	free (reg_buf);
 	return true;
 }
 
-static const char *r_debug_qnx_reg_profile (RDebug *dbg) {
+static const char *r_debug_qnx_reg_profile(RDebug *dbg) {
 	int arch = r_sys_arch_id (dbg->arch);
 	int bits = dbg->anal->bits;
 	switch (arch) {
@@ -246,7 +259,7 @@ static const char *r_debug_qnx_reg_profile (RDebug *dbg) {
 #endif
 			);
 	case R_SYS_ARCH_ARM:
-		if (bits == 32)
+		if (bits == 32) {
 			return strdup (
 				"=PC	r15\n"
 				"=SP	r14\n" // XXX
@@ -307,12 +320,13 @@ static const char *r_debug_qnx_reg_profile (RDebug *dbg) {
 				"mmx	d30	.64	308	0\n" // neon
 				"mmx	d31	.64	316	0\n" // neon
 				"mmx	fpscr	.32	324	0\n" // neon
-				);
+			);
+		}
 	}
 	return NULL;
 }
 
-static int r_debug_qnx_breakpoint (RBreakpoint *bp, RBreakpointItem *b, bool set) {
+static int r_debug_qnx_breakpoint(RBreakpoint *bp, RBreakpointItem *b, bool set) {
 	if (!b) {
 		return false;
 	}
@@ -342,14 +356,14 @@ RDebugPlugin r_debug_plugin_qnx = {
 	.canstep = 1,
 	.wait = &r_debug_qnx_wait,
 	.map_get = r_debug_qnx_map_get,
-	.breakpoint = (RBreakpointCallback)&r_debug_qnx_breakpoint,
+	.breakpoint = r_debug_qnx_breakpoint,
 	.reg_read = &r_debug_qnx_reg_read,
 	.reg_write = &r_debug_qnx_reg_write,
 	.reg_profile = (void *)r_debug_qnx_reg_profile,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_DBG,
 	.data = &r_debug_plugin_qnx,
 	.version = R2_VERSION};

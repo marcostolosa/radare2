@@ -3,6 +3,15 @@ _INCLUDE_GLOBAL_MK_=1
 DESTDIR=
 COMPILER?=gcc
 
+SPACE:=
+SPACE+=
+ifneq (,$(findstring $(SPACE),$(PREFIX)))
+$(error PREFIX cannot contain spaces)
+endif
+ifneq (,$(findstring $(SPACE),$(shell pwd)))
+$(error Current working directory cannot contain spaces)
+endif
+
 TOP:=$(dir $(lastword $(MAKEFILE_LIST)))
 LTOP:=$(TOP)/libr
 STOP:=$(TOP)/shlr
@@ -20,15 +29,7 @@ else
 GIT_PREFIX=git://
 endif
 
-# verbose error messages everywhere
-STATIC_DEBUG=0
-
-PREFIX=/usr/local
-
 rmdblslash=$(subst //,/,$(subst //,/,$(subst /$$,,$1)))
-
-LIBDIR=${PREFIX}/lib
-WWWROOT=${DATADIR}/radare2/${VERSION}/www
 
 .c:
 ifneq ($(SILENT),)
@@ -38,11 +39,15 @@ endif
 
 .c.o:
 ifneq ($(SILENT),)
-	@echo "CC $(shell basename $<)"
-endif
+	@echo "[$(shell $(LIBR)/count.sh)] CC $<"
+	@$(CC) -c $(CFLAGS) -o $@ $<
+else
 	$(CC) -c $(CFLAGS) -o $@ $<
+endif
 
 -include $(TOP)/config-user.mk
 -include $(TOP)/mk/platform.mk
 -include $(TOP)/mk/${COMPILER}.mk
+
+WWWROOT=${DATADIR}/radare2/${VERSION}/www
 endif

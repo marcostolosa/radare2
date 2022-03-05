@@ -11,7 +11,6 @@
 #include <r_list.h>
 #include <r_bin.h>
 #include <sdb.h>
-#include "dsojson.h"
 
 #if defined(_MSC_VER) && !defined(R_API_BIN_ONLY)
 #undef R_API
@@ -640,6 +639,7 @@ typedef struct r_bin_java_attr_t {
 	ut16 name_idx; //	ut16 attribute_name_idx;
 	ut32 length;   //ut16 attribute_length;
 	ut64 loadaddr;
+	bool is_attr_in_old_format;
 	union {
 		RBinJavaAnnotationDefaultAttr annotation_default_attr;
 		RBinJavaBootstrapMethodsAttr bootstrap_methods_attr;
@@ -765,6 +765,8 @@ typedef struct r_bin_java_obj_t {
 	Sdb *kv;
 	Sdb *AllJavaBinObjs;
 	ut32 id;
+
+	RStrConstPool constpool;
 } RBinJavaObj;
 
 R_API RList * U(r_bin_java_get_interface_names)(RBinJavaObj * bin);
@@ -782,8 +784,8 @@ R_API RList* r_bin_java_get_symbols(RBinJavaObj* bin);
 R_API RList* r_bin_java_get_strings(RBinJavaObj* bin);
 R_API void* r_bin_java_free(RBinJavaObj* bin);
 R_API RBinJavaObj* r_bin_java_new(const char* file, ut64 baddr, Sdb * kv);
-R_API RBinJavaObj* r_bin_java_new_buf(struct r_buf_t* buf, ut64 baddr, Sdb * kv);
-R_API int r_bin_java_valid_class (const ut8 * buf, ut64 buf_sz);
+R_API RBinJavaObj* r_bin_java_new_buf(RBuffer* buf, ut64 baddr, Sdb * kv);
+R_API int r_bin_java_valid_class(const ut8 *buf, ut64 buf_sz);
 
 // Stuff used to manage Java Class File Constant Information
 typedef struct r_bin_java_object_allocs_t {
@@ -796,7 +798,7 @@ typedef struct r_bin_java_object_allocs_t {
 
 typedef struct r_bin_java_attr_allocs_t {
 	//void (*new_obj) (RBinJavaObj *bin, RBinJavaAttrInfo *obj, ut64 offset) ;
-	RBinJavaAttrInfo* (*new_obj)(ut8* buffer, ut64 sz, ut64 buf_offset);
+	RBinJavaAttrInfo* (*new_obj)(RBinJavaObj *bin, ut8* buffer, ut64 sz, ut64 buf_offset);
 	void (*delete_obj) (void /*RBinJavaAttrInfo*/ *obj);
 	void (*print_summary) (RBinJavaAttrInfo *obj);
 	ut64 (*calc_size)(RBinJavaAttrInfo *obj);
@@ -928,7 +930,7 @@ R_API char * r_bin_java_print_class_cp_stringify(RBinJavaCPTypeObj* obj);
 R_API RBinSymbol* r_bin_java_create_new_symbol_from_field_with_access_flags(RBinJavaField *fm_type);
 R_API RBinSymbol* r_bin_java_create_new_symbol_from_cp_idx(ut32 cp_idx, ut64 baddr);
 R_API RBinSymbol* r_bin_java_create_new_symbol_from_invoke_dynamic(RBinJavaCPTypeObj *obj, ut64 baddr);
-R_API RBinSymbol* r_bin_java_create_new_symbol_from_ref(RBinJavaCPTypeObj *obj, ut64 baddr);
+R_API RBinSymbol* r_bin_java_create_new_symbol_from_ref(RBinJavaObj *bin, RBinJavaCPTypeObj *obj, ut64 baddr);
 R_API RBinSymbol* r_bin_java_create_new_symbol_from_method(RBinJavaField *fm_type);
 
 R_API ut64 r_bin_java_get_method_code_offset(RBinJavaField *fm_type);
@@ -1050,17 +1052,17 @@ R_API ut8 * U(r_bin_java_cp_append_field_ref)(RBinJavaObj *bin, ut32 *out_sz, ut
 R_API char * U(r_bin_java_unmangle_without_flags) (const char *name, const char *descriptor);
 R_API char * r_bin_java_unmangle (const char *flags, const char *name, const char *descriptor);
 
-R_API DsoJsonObj * r_bin_java_get_field_json_definitions(RBinJavaObj *bin);
-R_API DsoJsonObj * r_bin_java_get_method_json_definitions(RBinJavaObj *bin);
-R_API DsoJsonObj * r_bin_java_get_import_json_definitions(RBinJavaObj *bin);
-R_API DsoJsonObj * r_bin_java_get_interface_json_definitions(RBinJavaObj *bin);
+R_API void r_bin_java_get_field_json_definitions(RBinJavaObj *bin, PJ *pj);
+R_API void r_bin_java_get_method_json_definitions(RBinJavaObj *bin, PJ *pj);
+R_API void r_bin_java_get_import_json_definitions(RBinJavaObj *bin, PJ *pj);
+R_API void r_bin_java_get_interface_json_definitions(RBinJavaObj *bin, PJ *pj);
 
-R_API DsoJsonObj * r_bin_java_get_fm_type_definition_json(RBinJavaObj *bin, RBinJavaField *fm_type, int is_method);
-R_API DsoJsonObj * r_bin_java_get_field_json_definition(RBinJavaObj *bin, RBinJavaField *fm_type);
-R_API DsoJsonObj * r_bin_java_get_method_json_definition(RBinJavaObj *bin, RBinJavaField *fm_type);
-R_API DsoJsonObj * r_bin_java_get_class_info_json(RBinJavaObj *bin);
+R_API void r_bin_java_get_fm_type_definition_json(RBinJavaObj *bin, RBinJavaField *fm_type, PJ *pj, int is_method);
+R_API void r_bin_java_get_field_json_definition(RBinJavaObj *bin, RBinJavaField *fm_type, PJ *pj);
+R_API void r_bin_java_get_method_json_definition(RBinJavaObj *bin, RBinJavaField *fm_type, PJ *pj);
+R_API void r_bin_java_get_class_info_json(RBinJavaObj *bin, PJ *pj);
 
-R_API DsoJsonObj * r_bin_java_get_bin_obj_json (RBinJavaObj *bin);
+R_API char *r_bin_java_get_bin_obj_json (RBinJavaObj *bin);
 R_API ut64 r_bin_java_calc_class_size(ut8* bytes, ut64 size);
 R_API int r_bin_java_valid_class (const ut8 * buf, ut64 buf_sz);
 #endif

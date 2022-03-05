@@ -4,34 +4,80 @@ MAKE=make
 gmake --help >/dev/null 2>&1
 [ $? = 0 ] && MAKE=gmake
 
+${MAKE} --help 2>&1 | grep -q gnu
+if [ $? != 0 ]; then
+	echo "You need GNU Make to build me"
+	exit 1
+fi
+
 # find root
-cd "$(dirname "$PWD/$0")" ; cd ..
+cd "$(dirname "$0")" ; cd ..
+
+export WITHOUT_PULL=0
+ROOT=
+
+abspath() {
+	echo "$1" | grep -q ^/
+	if [ $? = 0 ]; then
+		echo "$1"
+	else
+		echo "`pwd`/$1"
+	fi
+}
+
+while [ $# -gt 0 ]
+do
+	case "$1" in
+		"--without-pull")
+			WITHOUT_PULL=1
+			;;
+		"--install-path")
+			shift
+			if [ -n "$1" ]; then
+				ROOT="`abspath $1`"
+				BINDIR="$ROOT/bin"
+			else
+				echo "ERROR: install-path must not be empty"
+				exit 1
+			fi
+			;;
+		*)
+			echo "WARNING: unknown argument \"$1\""
+	esac
+	shift
+done
 
 # update
-if [ "$1" != "--without-pull" ]; then
+if [ $WITHOUT_PULL -eq 0 ]; then
 	if [ -d .git ]; then
 		git branch | grep "^\* master" > /dev/null
 		if [ $? = 0 ]; then
 			echo "WARNING: Updating from remote repository"
-			git pull
+			# Attempt to update from an existing remote
+			UPSTREAM_REMOTE=$(git remote -v | grep 'radareorg/radare2 (fetch)' | cut -f1 | head -n1)
+			if [ -n "$UPSTREAM_REMOTE" ]; then
+				git pull "$UPSTREAM_REMOTE" master
+			else
+				git pull https://github.com/radareorg/radare2 master
+			fi
 		fi
 	fi
-else
-	export WITHOUT_PULL=1
-	shift
 fi
 
-if [ -z "${HOME}" ]; then
-	echo "HOME not set"
-	exit 1
+if [ -z "${ROOT}" ]; then
+	if [ -z "${HOME}" ]; then
+		echo "HOME not set"
+		exit 1
+	fi
+
+	if [ ! -d "${HOME}" ]; then
+		echo "HOME is not a directory"
+		exit 1
+	fi
+	ROOT="${HOME}/bin/prefix/radare2"
+	BINDIR="${HOME}/bin"
 fi
 
-if [ ! -d "${HOME}" ]; then
-	echo "HOME is not a directory"
-	exit 1
-fi
-
-ROOT="${HOME}/bin/prefix/radare2"
 mkdir -p "${ROOT}/lib"
 
 if [ "${M32}" = 1 ]; then
@@ -47,7 +93,7 @@ if [ $? != 0 ]; then
 fi
 ${MAKE} user-install
 echo
-echo "radare2 is now installed in ${HOME}/bin"
+echo "radare2 is now installed in ${BINDIR}"
 echo
-echo "Now add ${HOME}/bin to your PATH"
+echo "Now add ${BINDIR} to your PATH"
 echo

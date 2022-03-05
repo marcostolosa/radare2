@@ -22,7 +22,6 @@
 #include <grub/mm.h>
 #include <grub/misc.h>
 #include <grub/disk.h>
-#include <grub/dl.h>
 #include <grub/types.h>
 #include <grub/charset.h>
 #include <r_types.h>
@@ -147,7 +146,7 @@ struct grub_jfs_leaf_dirent
 
   /* The size of the name.  */
   grub_uint8_t len;
-  grub_uint16_t namepart[11];
+  grub_unaligned_uint16_t namepart[11];
   grub_uint32_t index;
 });
 
@@ -159,7 +158,7 @@ struct grub_jfs_leaf_next_dirent
 {
   grub_uint8_t next;
   grub_uint8_t len;
-  grub_uint16_t namepart[15];
+  grub_unaligned_uint16_t namepart[15];
 });
 
 R_PACKED (
@@ -179,7 +178,7 @@ struct grub_jfs_inode
   {
     /* The tree describing the extents of the file.  */
 	R_PACKED (
-	struct 
+	struct
     {
       struct grub_jfs_treehead tree;
       struct grub_jfs_tree_extent extents[16];
@@ -245,9 +244,6 @@ struct grub_jfs_diropen
   char name[255];
   grub_uint32_t ino;
 });
-
-
-static grub_dl_t my_mod;
 
 static grub_err_t grub_jfs_lookup_symlink (struct grub_jfs_data *data,
 					   int ino);
@@ -523,7 +519,6 @@ grub_jfs_getent (struct grub_jfs_diropen *diro)
     }
 
   leaf = &diro->leaf[(int) diro->sorted[diro->index]];
-  next_leaf = &diro->next_leaf[diro->index];
 
   len = leaf->len;
   if (!len)
@@ -624,11 +619,7 @@ grub_jfs_read_file (struct grub_jfs_data *data,
 static grub_err_t
 grub_jfs_find_file (struct grub_jfs_data *data, const char *path)
 {
-#ifndef _MSC_VER
-  char fpath[grub_strlen (path)];
-#else
   char * fpath = grub_malloc(grub_strlen (path));
-#endif  
   char *name = fpath;
   char *next;
   struct grub_jfs_diropen *diro;
@@ -636,14 +627,20 @@ grub_jfs_find_file (struct grub_jfs_data *data, const char *path)
   grub_strncpy (fpath, path, grub_strlen (path) + 1);
 
   if (grub_jfs_read_inode (data, GRUB_JFS_AGGR_INODE, &data->currinode))
-    return grub_errno;
+    {
+      grub_free (fpath);
+      return grub_errno;
+    }
 
   /* Skip the first slashes.  */
   while (*name == '/')
     {
       name++;
       if (!*name)
-	return 0;
+        {
+          grub_free (fpath);
+          return 0;
+        }
     }
 
   /* Extract the actual part from the pathname.  */
@@ -658,12 +655,18 @@ grub_jfs_find_file (struct grub_jfs_data *data, const char *path)
     }
   diro = grub_jfs_opendir (data, &data->currinode);
   if (!diro)
-    return grub_errno;
+    {
+      grub_free (fpath);
+      return grub_errno;
+    }
 
   for (;;)
     {
       if (grub_strlen (name) == 0)
-	return GRUB_ERR_NONE;
+        {
+          grub_free (fpath);
+          return GRUB_ERR_NONE;
+        }
 
       if (grub_jfs_getent (diro) == GRUB_ERR_OUT_OF_RANGE)
 	break;
@@ -687,11 +690,17 @@ grub_jfs_find_file (struct grub_jfs_data *data, const char *path)
 	    {
 	      grub_jfs_lookup_symlink (data, dirino);
 	      if (grub_errno)
-		return grub_errno;
+                {
+                  grub_free (fpath);
+                  return grub_errno;
+                }
 	    }
 
 	  if (!next)
-	    return 0;
+            {
+              grub_free (fpath);
+	      return 0;
+            }
 
 	  name = next;
 	  next = grub_strchr (name, '/');
@@ -704,7 +713,10 @@ grub_jfs_find_file (struct grub_jfs_data *data, const char *path)
 	  /* Open this directory for reading dirents.  */
 	  diro = grub_jfs_opendir (data, &data->currinode);
 	  if (!diro)
-	    return grub_errno;
+            {
+              grub_free (fpath);
+              return grub_errno;
+            }
 
 	  continue;
 	}
@@ -712,6 +724,7 @@ grub_jfs_find_file (struct grub_jfs_data *data, const char *path)
 
   grub_jfs_closedir (diro);
   grub_error (GRUB_ERR_FILE_NOT_FOUND, "file not found");
+  grub_free (fpath);
   return grub_errno;
 }
 
@@ -761,8 +774,6 @@ grub_jfs_dir (grub_device_t device, const char *path,
   struct grub_jfs_data *data = 0;
   struct grub_jfs_diropen *diro = 0;
 
-  grub_dl_ref (my_mod);
-
   data = grub_jfs_mount (device->disk);
   if (!data)
     goto fail;
@@ -778,7 +789,7 @@ grub_jfs_dir (grub_device_t device, const char *path,
   if (hook)
   while (grub_jfs_getent (diro) != GRUB_ERR_OUT_OF_RANGE)
     {
-      struct grub_jfs_inode inode;
+      struct grub_jfs_inode inode = {0};
       struct grub_dirhook_info info;
       grub_memset (&info, 0, sizeof (info));
 
@@ -799,8 +810,6 @@ grub_jfs_dir (grub_device_t device, const char *path,
   grub_jfs_closedir (diro);
   grub_free (data);
 
-  grub_dl_unref (my_mod);
-
   return grub_errno;
 }
 
@@ -810,8 +819,6 @@ static grub_err_t
 grub_jfs_open (struct grub_file *file, const char *name)
 {
   struct grub_jfs_data *data;
-
-  grub_dl_ref (my_mod);
 
   data = grub_jfs_mount (file->device->disk);
   if (!data)
@@ -835,9 +842,6 @@ grub_jfs_open (struct grub_file *file, const char *name)
   return 0;
 
  fail:
-
-  grub_dl_unref (my_mod);
-
   grub_free (data);
 
   return grub_errno;
@@ -860,8 +864,6 @@ grub_jfs_close (grub_file_t file)
 {
   grub_free (file->data);
 
-  grub_dl_unref (my_mod);
-
   return GRUB_ERR_NONE;
 }
 
@@ -870,8 +872,6 @@ grub_jfs_uuid (grub_device_t device, char **uuid)
 {
   struct grub_jfs_data *data;
   grub_disk_t disk = device->disk;
-
-  grub_dl_ref (my_mod);
 
   data = grub_jfs_mount (disk);
   if (data)
@@ -889,8 +889,6 @@ grub_jfs_uuid (grub_device_t device, char **uuid)
     }
   else
     *uuid = NULL;
-
-  grub_dl_unref (my_mod);
 
   grub_free (data);
 

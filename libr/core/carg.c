@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2018 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <r_core.h>
 
@@ -8,34 +8,40 @@ static void set_fcn_args_info(RAnalFuncArg *arg, RAnal *anal, const char *fcn_na
 	if (!fcn_name || !arg || !anal) {
 		return;
 	}
-	arg->name = r_anal_type_func_args_name (anal, fcn_name, arg_num);
-	arg->orig_c_type = r_anal_type_func_args_type (anal, fcn_name, arg_num);
+	Sdb *TDB = anal->sdb_types;
+	arg->name = r_type_func_args_name (TDB, fcn_name, arg_num);
+	arg->orig_c_type = r_type_func_args_type (TDB, fcn_name, arg_num);
+	if (!arg->name || !arg->orig_c_type) {
+		eprintf ("Missing type for function argument (%s)\n", fcn_name);
+		return;
+	}
 	if (!strncmp ("const ", arg->orig_c_type, 6)) {
 		arg->c_type = arg->orig_c_type + 6;
 	} else {
 		arg->c_type = arg->orig_c_type;
 	}
-	const char *query = sdb_fmt ("type.%s", arg->c_type);
-	arg->fmt = sdb_const_get (anal->sdb_types, query, 0);
-	const char *t_query = sdb_fmt ("type.%s.size", arg->c_type);
-	arg->size = sdb_num_get (anal->sdb_types, t_query, 0) / 8;
-	arg->cc_source = r_anal_cc_arg (anal, cc, arg_num + 1);
+	r_strf_buffer (256);
+	const char *query = r_strf ("type.%s", arg->c_type);
+	arg->fmt = sdb_const_get (TDB, query, 0);
+	const char *t_query = r_strf ("type.%s.size", arg->c_type);
+	arg->size = sdb_num_get (TDB, t_query, 0) / 8;
+	arg->cc_source = r_anal_cc_arg (anal, cc, arg_num);
 }
 
-static char *resolve_fcn_name(RAnal *anal, const char *func_name) {
+R_API char *resolve_fcn_name(RAnal *anal, const char *func_name) {
 	const char *str = func_name;
 	const char *name = func_name;
-	if (r_anal_type_func_exist (anal, func_name)) {
+	if (r_type_func_exist (anal->sdb_types, func_name)) {
 		return strdup (func_name);
 	}
 	while ((str = strchr (str, '.'))) {
 		name = str + 1;
 		str++;
 	}
-	if (r_anal_type_func_exist (anal, name)) {
+	if (r_type_func_exist (anal->sdb_types, name)) {
 		return strdup (name);
 	}
-	return r_anal_type_func_guess (anal, (char*)func_name);
+	return r_type_func_guess (anal->sdb_types, (char*)func_name);
 }
 
 static ut64 get_buf_val(ut8 *buf, int endian, int width) {
@@ -76,12 +82,12 @@ static void print_format_values(RCore *core, const char *fmt, bool onstack, ut64
 		} else {
 			r_cons_printf ("0x%08"PFMT64x" --> ", bval);
 		}
-        	r_core_read_at (core, bval, buf, bsize);
+		r_io_read_at (core->io, bval, buf, bsize);
 	}
 	if (onstack) { // Fetch value from stack
 		bval = get_buf_val (buf, endian, width);
 		if (opt != 'd' && opt != 'x') {
-			r_core_read_at (core, bval, buf, bsize); // update buf with val from stack
+			r_io_read_at (core->io, bval, buf, bsize); // update buf with val from stack
 		}
 	}
 	r_cons_print (color? Color_BGREEN: "");
@@ -137,35 +143,30 @@ static void print_format_values(RCore *core, const char *fmt, bool onstack, ut64
 	free (buf);
 }
 
-/* This functon display list of arg with some colors */
+/* This function display list of arg with some colors */
 
 R_API void r_core_print_func_args(RCore *core) {
-	RListIter *iter;
+	r_return_if_fail (core && core->anal && core->anal->reg);
+
+
 	bool color = r_config_get_i (core->config, "scr.color");
-	if (!core->anal) {
-		return;
-	}
-	if (!core->anal->reg) {
-		return;
-	}
 	const char *pc = r_reg_get_name (core->anal->reg, R_REG_NAME_PC);
 	ut64 cur_addr = r_reg_getv (core->anal->reg, pc);
-	RAnalOp *op = r_core_anal_op (core, cur_addr);
+	RListIter *iter;
+	RAnalOp *op = r_core_anal_op (core, cur_addr, R_ANAL_OP_MASK_BASIC);
 	if (!op) {
 		return;
 	}
 	if (op->type == R_ANAL_OP_TYPE_CALL) {
 		RAnalFunction *fcn;
 		RAnalFuncArg *arg;
-		int i;
-		int nargs = 0;
 		bool onstack = false;
 		const char *fcn_name = NULL;
 		ut64 pcv = op->jump;
 		if (pcv == UT64_MAX) {
 			pcv = op->ptr;
 		}
-		fcn = r_anal_get_fcn_at (core->anal, pcv, 0);
+		fcn = r_anal_get_function_at (core->anal, pcv);
 		if (fcn) {
 			fcn_name = fcn->name;
 		} else {
@@ -188,22 +189,30 @@ R_API void r_core_print_func_args(RCore *core) {
 				argcnt++;
 			}
 		} else {
-			if (fcn) {
-				nargs = fcn->nargs;
-			}
-			if (nargs > 0) {
+			int nargs = 4; // TODO: use a correct value here when available
+			//if (nargs > 0) {
+				int i;
+				const char *cc = r_anal_cc_default (core->anal); // or use "reg" ?
 				for (i = 0; i < nargs; i++) {
-					ut64 v = r_debug_arg_get (core->dbg, R_ANAL_CC_TYPE_STDCALL, i);
+					ut64 v = r_debug_arg_get (core->dbg, cc, i);
 					print_arg_str (i, "", color);
 					r_cons_printf ("0x%08" PFMT64x, v);
 					r_cons_newline ();
 				}
-			} else {
-				print_arg_str (0, "void", color);
-			}
+			//} else {
+			//	print_arg_str (0, "void", color);
+			//}
 		}
 	}
 	r_anal_op_fini (op);
+}
+
+static void r_anal_function_arg_free(RAnalFuncArg *arg) {
+	if (!arg) {
+		return;
+	}
+	free (arg->orig_c_type);
+	free (arg);
 }
 
 /* Returns a list of RAnalFuncArg */
@@ -211,19 +220,24 @@ R_API RList *r_core_get_func_args(RCore *core, const char *fcn_name) {
 	if (!fcn_name || !core->anal) {
 		return NULL;
 	}
-	RList *list = r_list_new ();
+	Sdb *TDB = core->anal->sdb_types;
 	char *key = resolve_fcn_name (core->anal, fcn_name);
 	if (!key) {
 		return NULL;
 	}
 	const char *sp = r_reg_get_name (core->anal->reg, R_REG_NAME_SP);
-	int nargs = r_anal_type_func_args_count (core->anal, key);
-	const char *cc = r_anal_type_func_cc (core->anal, key);
-	const char *src = r_anal_cc_arg (core->anal, cc, 1); // src of first argument
-	if (!cc) {
-		// unsupported calling convention
+	int nargs = r_type_func_args_count (TDB, key);
+	if (!r_anal_cc_func (core->anal, key)){
 		return NULL;
 	}
+	char *cc = strdup (r_anal_cc_func (core->anal, key));
+	const char *src = r_anal_cc_arg (core->anal, cc, 0); // src of first argument
+	if (!cc) {
+		// unsupported calling convention
+		free (key);
+		return NULL;
+	}
+	RList *list = r_list_newf ((RListFree)r_anal_function_arg_free);
 	int i;
 	ut64 spv = r_reg_getv (core->anal->reg, sp);
 	ut64 s_width = (core->anal->bits == 64)? 8: 4;
@@ -239,6 +253,7 @@ R_API RList *r_core_get_func_args(RCore *core, const char *fcn_name) {
 		for (i = 0; i < nargs; i++) {
 			RAnalFuncArg *arg = R_NEW0 (RAnalFuncArg);
 			if (!arg) {
+				r_list_free (list);
 				return NULL;
 			}
 			set_fcn_args_info (arg, core->anal, key, cc, i);
@@ -249,10 +264,18 @@ R_API RList *r_core_get_func_args(RCore *core, const char *fcn_name) {
 				}
 				spv += arg->size;
 			} else {
-				arg->src = r_reg_getv (core->anal->reg, arg->cc_source);
+				const char *cs = arg->cc_source;
+				if (!cs) {
+					cs = r_anal_cc_default (core->anal);
+				}
+				if (cs) {
+					arg->src = r_reg_getv (core->anal->reg, cs);
+				}
 			}
 			r_list_append (list, arg);
 		}
 	}
+	free (key);
+	free (cc);
 	return list;
 }

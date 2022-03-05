@@ -44,9 +44,6 @@ static int __read(RIO* io, RIODesc* fd, ut8* buf, int count) {
 		return -1;
 	}
 	null = (RIONull*) fd->data;
-	if (!null) {
-		return -1;
-	}
 	if ((null->offset + count) > null->size) {
 		int ret = null->size - null->offset;
 		memset (buf, 0x00, ret);
@@ -58,9 +55,9 @@ static int __read(RIO* io, RIODesc* fd, ut8* buf, int count) {
 	return count;
 }
 
-static int __close(RIODesc* fd) {
+static bool __close(RIODesc* fd) {
 	R_FREE (fd->data);
-	return 0;
+	return true;
 }
 
 static ut64 __lseek(RIO* io, RIODesc* fd, ut64 offset, int whence) {
@@ -75,16 +72,13 @@ static ut64 __lseek(RIO* io, RIODesc* fd, ut64 offset, int whence) {
 			return null->offset = null->size - 1;
 		}
 		return null->offset = offset;
-		break;
 	case SEEK_CUR:
 		if ((null->offset + offset) >= null->size) {
 			return null->offset = null->size - 1;
 		}
 		return null->offset += offset;
-		break;
 	case SEEK_END:
 		return null->offset = null->size - 1;
-		break;
 	}
 	return offset;
 }
@@ -108,19 +102,20 @@ static RIODesc* __open(RIO* io, const char* pathname, int rw, int mode) {
 
 RIOPlugin r_io_plugin_null = {
 	.name = "null",
-	.desc = "null-plugin (null://23)",
+	.desc = "Null plugin",
 	.license = "LGPL3",
+	.uris = "null://",
 	.open = __open,
 	.close = __close,
 	.read = __read,
 	.check = __plugin_open,
-	.lseek = __lseek,
+	.seek = __lseek,
 	.write = __write,
 	.resize = __resize,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_IO,
 	.data = &r_io_plugin_null,
 	.version = R2_VERSION

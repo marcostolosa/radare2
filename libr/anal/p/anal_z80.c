@@ -1,5 +1,4 @@
-/* radare - LGPL - Copyright 2012 - pancake<nopcode.org>
-				2013 - condret		*/
+/* radare - LGPL - Copyright 2012-2021 - pancake, condret */
 
 #include <string.h>
 #include <r_types.h>
@@ -8,25 +7,30 @@
 #include <r_anal.h>
 #include "../../asm/arch/z80/z80_tab.h"
 
-static void z80_op_size(const ut8 *data, int *size, int *size_prefix) {
-	int type;
-	switch(data[0]) {
+static void z80_op_size(const ut8 *_data, int len, int *size, int *size_prefix) {
+	ut8 data[4] = {0};
+	int type = 0;
+	if (len < 1) {
+		return;
+	}
+	memcpy (data, _data, R_MIN (len, 4));
+	switch (data[0]) {
 	case 0xed:
-//		type = dd[data[1]].type;
-		type = ed[data[1]].type;
+		{
+			int idx = z80_ed_branch_index_res (data[1]);
+			type = ed[idx].type;
+		}
 		break;
 	case 0xcb:
 		type = Z80_OP16;
 		break;
 	case 0xdd:
-		type = dd[data[1]].type;
+		type = dd[z80_fddd_branch_index_res(data[1])].type;
 		break;
 	case 0xfd:
-//		type = dd[data[1]].type;
-		type = fd[data[1]].type;
+		type = fd[z80_fddd_branch_index_res(data[1])].type;
 		break;
 	default:
-//		type = dd[data[0]].type;
 		type = z80_op[data[0]].type;
 		break;
 	}
@@ -38,7 +42,6 @@ static void z80_op_size(const ut8 *data, int *size, int *size_prefix) {
 	} else if (type & Z80_OP24) {
 		*size_prefix = 3;
 	}
-
 	if (type & Z80_ARG16) {
 		*size = *size_prefix + 2;
 	} else if (type & Z80_ARG8) {
@@ -48,11 +51,12 @@ static void z80_op_size(const ut8 *data, int *size, int *size_prefix) {
 	}
 }
 
-static int z80_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len) {
-	int ilen;
-	z80_op_size (data, &ilen, &op->nopcode);
+static int z80_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *_data, int len, RAnalOpMask mask) {
+	int ilen = 0;
+	ut8 data[4] = {0};
+	memcpy (data, _data, R_MIN (len, 4));
+	z80_op_size (data, len, &ilen, &op->nopcode);
 
-	memset (op, '\0', sizeof (RAnalOp));
 	op->addr = addr;
 	op->size = ilen;
 	op->type = R_ANAL_OP_TYPE_UNK;
@@ -100,7 +104,7 @@ static int z80_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int
 	case 0x97:
 	case 0xd6:
 		op->type = R_ANAL_OP_TYPE_SUB;
-                break;
+		break;
 	case 0x22: // ld (**), hl
 		op->type = R_ANAL_OP_TYPE_STORE;
 		op->refptr = 2;
@@ -232,10 +236,9 @@ static int z80_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int
 	case 0x30:
 	case 0x38:
 		op->type = R_ANAL_OP_TYPE_CJMP;
-		op->jump = addr + (st8)data[1] + ilen;
+		op->jump = addr + ((len>1)? (st8)data[1]:0) + ilen;
 		op->fail = addr + ilen;
 		break;
-
 	// conditional jumps
 	case 0xc2:
 	case 0xca:
@@ -251,7 +254,7 @@ static int z80_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int
 		break;
 	case 0xc3: // jp xx
 		op->type = R_ANAL_OP_TYPE_JMP;
-		op->jump = data[1] | data[2] << 8;
+		op->jump = data[1] | (data[2] << 8);
 		break;
 	case 0xe9: // jp (HL)
 		op->type = R_ANAL_OP_TYPE_UJMP;
@@ -301,7 +304,7 @@ static int z80_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int
 	case 0xec: // pe
 	case 0xfc: // m
 		op->type = R_ANAL_OP_TYPE_CCALL;
-		op->jump = data[1] | data[2] << 8;
+		op->jump = (len>2)? data[1] | data[2] << 8: 0;
 		op->fail = addr + ilen;
 		break;
 
@@ -313,7 +316,7 @@ static int z80_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int
 		op->jump = data[1] | data[2] << 8;
 		break;
 	case 0xcb:			//the same as for gameboy
-		switch(data[1]/8) {
+		switch (data[1] / 8) {
 		case 0:
 		case 2:
 		case 4:
@@ -362,7 +365,7 @@ static int z80_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int
 	return ilen;
 }
 
-static int set_reg_profile(RAnal *anal) {
+static bool set_reg_profile(RAnal *anal) {
 	const char *p =
 		"=PC	mpc\n"
 		"=SP	sp\n"
@@ -405,6 +408,16 @@ static int set_reg_profile(RAnal *anal) {
 }
 
 static int archinfo(RAnal *anal, int q) {
+	switch (q) {
+	case R_ANAL_ARCHINFO_ALIGN:
+		return 0;
+	case R_ANAL_ARCHINFO_MAX_OP_SIZE:
+		return 3;
+	case R_ANAL_ARCHINFO_INV_OP_SIZE:
+		return 1;
+	case R_ANAL_ARCHINFO_MIN_OP_SIZE:
+		return 1;
+	}
 	return 1;
 }
 
@@ -419,8 +432,8 @@ RAnalPlugin r_anal_plugin_z80 = {
 	.op = &z80_anal_op,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_z80,
 	.version = R2_VERSION

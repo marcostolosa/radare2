@@ -28,8 +28,6 @@
 #include <errno.h>
 #include <ctype.h>
 #include <stdarg.h>
-//#include <getopt.h>
-#include <unistd.h>
 
 /* defines which are not function-specific */
 #ifndef BUFLEN
@@ -88,7 +86,7 @@ struct label
   char name[1];			/* space with name in it */
 };
 
-/* files that were given on the commandline */
+/* files that were given on the command-line */
 struct infile
 {
   const char *name;
@@ -170,17 +168,17 @@ struct reference
 };
 
 /* print an error message, including current line and file */
-static void printerr (int error, const char *fmt, ...);
+static void printerr(int error, const char *fmt, ...);
 
 /* skip over spaces in string */
-static const char *delspc (const char *ptr);
+static const char *delspc(const char *ptr);
 
-static int rd_expr (const char **p, char delimiter, int *valid, int level,
+static int rd_expr(const char **p, char delimiter, int *valid, int level,
 	     int print_errors);
-static int rd_label (const char **p, int *exists, struct label **previous, int level,
+static int rd_label(const char **p, int *exists, struct label **previous, int level,
 	      int print_errors);
-static int rd_character (const char **p, int *valid, int print_errors);
+static int rd_character(const char **p, int *valid, int print_errors);
 
-static int compute_ref (struct reference *ref, int allow_invalid);
+static int compute_ref(struct reference *ref, int allow_invalid);
 
 #endif

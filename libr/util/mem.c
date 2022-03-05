@@ -1,7 +1,6 @@
-/* radare - LGPL - Copyright 2007-2016 - pancake */
+/* radare - LGPL - Copyright 2007-2021 - pancake */
 
 #include <r_util.h>
-#include <stdlib.h>
 #if __UNIX__
 #include <sys/mman.h>
 #endif
@@ -38,22 +37,21 @@ R_API void r_mem_copyloop(ut8 *dest, const ut8 *orig, int dsize, int osize) {
 }
 
 R_API int r_mem_cmp_mask(const ut8 *dest, const ut8 *orig, const ut8 *mask, int len) {
-	int i, ret = -1;
-	ut8 *mdest, *morig;
-	mdest = malloc (len);
+	ut8 *mdest = malloc (len);
 	if (!mdest) {
-		return ret;
+		return -1;
 	}
-	morig = malloc (len);
+	ut8 *morig = malloc (len);
 	if (!morig) {
 		free (mdest);
-		return ret;
+		return -1;
 	}
+	int i;
 	for (i = 0; i < len; i++) {
 		mdest[i] = dest[i] & mask[i];
 		morig[i] = orig[i] & mask[i];
 	}
-	ret = memcmp (mdest, morig, len);
+	int ret = memcmp (mdest, morig, len);
 	free (mdest);
 	free (morig);
 	return ret;
@@ -79,18 +77,18 @@ R_API void r_mem_copybits(ut8 *dst, const ut8 *src, int bits) {
 	}
 }
 
-static char readbit(const ut8 *src, int bitoffset) {
+static inline char readbit(const ut8 *src, int bitoffset) {
 	const int wholeBytes = bitoffset / 8;
 	const int remainingBits = bitoffset % 8;
 	// return (src[wholeBytes] >> remainingBits) & 1;
 	return (src[wholeBytes] & 1<< remainingBits);
 }
 
-static void writebit (ut8 *dst, int i, bool c) {
-	int byte = i / 8;
-	int bit = (i % 8);
-// eprintf ("Write %d %d = %d\n", byte, bit, c);
-dst += byte;
+static inline void writebit(ut8 *dst, int i, bool c) {
+	const int byte = i / 8;
+	const int bit = (i % 8);
+	// eprintf ("Write %d %d = %d\n", byte, bit, c);
+	dst += byte;
 	if (c) {
 		//dst[byte] |= (1 << bit);
 		R_BIT_SET (dst , bit);
@@ -100,7 +98,6 @@ dst += byte;
 	}
 }
 
-// TODO: this method is ugly as shit.
 R_API void r_mem_copybits_delta(ut8 *dst, int doff, const ut8 *src, int soff, int bits) {
 	int i;
 	if (doff < 0 || soff < 0 || !dst || !src) {
@@ -108,7 +105,6 @@ R_API void r_mem_copybits_delta(ut8 *dst, int doff, const ut8 *src, int soff, in
 	}
 	for (i = 0; i < bits; i++) {
 		bool c = readbit (src, i + soff);
-// eprintf ("%d %d\n", i, c);
 		writebit (dst, i + doff, c);
 	}
 }
@@ -154,11 +150,21 @@ R_API int r_mem_set_num(ut8 *dest, int dest_size, ut64 num) {
 // This function either swaps or copies len bytes depending on bool big_endian
 // TODO: Remove completely
 R_API void r_mem_swaporcopy(ut8 *dest, const ut8 *src, int len, bool big_endian) {
+#if R_SYS_ENDIAN
+	// on big endian machine
+	if (big_endian) {
+		memcpy (dest, src, len);
+	} else {
+		r_mem_swapendian (dest, src, len);
+	}
+#else
+	// on little endian machine
 	if (big_endian) {
 		r_mem_swapendian (dest, src, len);
 	} else {
 		memcpy (dest, src, len);
 	}
+#endif
 }
 
 // This function unconditionally swaps endian of size bytes of orig -> dest
@@ -205,6 +211,18 @@ R_API void r_mem_swapendian(ut8 *dest, const ut8 *orig, int size) {
 	}
 }
 
+R_API void r_mem_swap(ut8 *buf, size_t buf_len) {
+	size_t pos = 0;
+	buf_len--;
+	while (pos < buf_len) {
+		int x = buf[pos];
+		buf[pos] = buf[buf_len];
+		buf[buf_len] = x;
+		pos++;
+		buf_len--;
+	}
+}
+
 // R_DOC r_mem_mem: Finds the needle of nlen size into the haystack of hlen size
 // R_UNIT printf("%s\n", r_mem_mem("food is pure lame", 20, "is", 2));
 R_API const ut8 *r_mem_mem(const ut8 *haystack, int hlen, const ut8 *needle, int nlen) {
@@ -240,8 +258,10 @@ R_API const ut8 *r_mem_mem_aligned(const ut8 *haystack, int hlen, const ut8 *nee
 	return NULL;
 }
 
-R_API int r_mem_protect(void *ptr, int size, const char *prot) {
-#if __UNIX__
+R_API bool r_mem_protect(void *ptr, int size, const char *prot) {
+#if __wasi__
+	return false;
+#elif __UNIX__
 	int p = 0;
 	if (strchr (prot, 'x')) {
 		p |= PROT_EXEC;
@@ -255,7 +275,7 @@ R_API int r_mem_protect(void *ptr, int size, const char *prot) {
 	if (mprotect (ptr, size, p) == -1) {
 		return false;
 	}
-#elif __WINDOWS__ || __CYGWIN__
+#elif __WINDOWS__
 	int r, w, x;
 	DWORD p = PAGE_NOACCESS;
 	r = strchr (prot, 'r')? 1: 0;
@@ -280,12 +300,11 @@ R_API int r_mem_protect(void *ptr, int size, const char *prot) {
 	return true;
 }
 
-R_API void *r_mem_dup(void *s, int l) {
+R_API void *r_mem_dup(const void *s, int l) {
 	void *d = malloc (l);
-	if (!d) {
-		return NULL;
+	if (d) {
+		memcpy (d, s, l);
 	}
-	memcpy (d, s, l);
 	return d;
 }
 
@@ -325,4 +344,43 @@ R_API void *r_mem_alloc(int sz) {
 
 R_API void r_mem_free(void *p) {
 	free (p);
+}
+
+R_API void r_mem_memzero(void *dst, size_t l) {
+#ifdef _MSC_VER
+	RtlSecureZeroMemory (dst, l);
+#elif __MINGW32__
+	memset (dst, 0, l);
+#elif HAVE_EXPLICIT_BZERO
+	explicit_bzero (dst, l);
+#elif HAVE_EXPLICIT_MEMSET
+	(void)explicit_memset (dst, 0, l);
+#else
+	memset (dst, 0, l);
+	__asm__ volatile ("" :: "r"(dst) : "memory");
+#endif
+}
+
+R_API void *r_mem_mmap_resize(RMmap *m, ut64 newsize) {
+#if __WINDOWS__
+	if (m->fm != INVALID_HANDLE_VALUE) {
+		CloseHandle (m->fm);
+	}
+	if (m->fh != INVALID_HANDLE_VALUE) {
+		CloseHandle (m->fh);
+	}
+	if (m->buf) {
+		UnmapViewOfFile (m->buf);
+	}
+#elif __UNIX__ && !__wasi__
+	if (munmap (m->buf, m->len) != 0) {
+		return NULL;
+	}
+#endif
+	if (!r_sys_truncate (m->filename, newsize)) {
+		return NULL;
+	}
+	m->len = newsize;
+	r_file_mmap_arch (m, m->filename, m->fd);
+	return m->buf;
 }

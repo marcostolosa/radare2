@@ -2,10 +2,9 @@ include ../config.mk
 
 NAME=r_lang
 OBJS=lang.o
-DEPS=r_util r_cons
+R2DEPS=r_util r_cons
 
 include ../rules.mk
-
-pop:
-	make
-	r2 -c '#!rust' -
+# LDFLAGS+=$(LIBR)/util/libr_util.$(EXT_SO)
+# include $(LIBR)/util/spp.mk
+# CFLAGS+=-I$(SHLR)/spp

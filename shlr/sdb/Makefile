@@ -4,6 +4,8 @@ VALADIR=bindings/vala
 PWD=$(shell pwd)
 PFX=${DESTDIR}${PREFIX}
 HGFILES=`find sdb-${SDBVER} -type f | grep -v hg | grep -v swp`
+ASANOPTS=address undefined signed-integer-overflow leak
+CFLAGS_ASAN=$(addprefix -fsanitize=,$(ASANOPTS))
 MKDIR=mkdir
 
 all: pkgconfig src/sdb_version.h
@@ -14,19 +16,38 @@ endif
 
 vala:
 ifneq (${HAVE_VALA},)
-	cd ${VALADIR} && ${MAKE}
-	cd ${VALADIR}/types && ${MAKE}
+	$(MAKE) -C $(VALADIR)
+	$(MAKE) -C $(VALADIR)/types
 else
 	@echo Nothing to do.
 endif
 
-.PHONY: test sdb.js pkgconfig
+.PHONY: test sdb.js pkgconfig dist w32dista asan
+
+include wasi.mk
+
+x xxx cxx:
+	# $(MAKE) CC="gcc -x c++ -Wall -fpermissive"
+	$(MAKE) CC=g++ CFLAGS="-fPIC -x c++ -Wall -fpermissive"
+
+o xo xoxo ox:
+	g++ -o sdb src/*.c  -I src/
+
+wasi wasm: $(WASI_SDK)
+	${MAKE} src/sdb_version.h
+	CC=$(WASI_CC) CFLAGS="$(WASI_CFLAGS)" $(MAKE) CC=$(WASI_CC) -C src all WITHPIC=0
+	mv src/sdb src/sdb.wasm
+	file src/sdb.wasm
+
 test:
 	${MAKE} -C test
 
+asantest:
+	CC=gcc CFLAGS="$(CFLAGS_ASAN)" ${MAKE} -C test
+
 asan:
 	${MAKE} src/sdb_version.h
-	${MAKE} -C src CC="gcc -fsanitize=address" all
+	CC=gcc LDFLAGS="$(CFLAGS_ASAN)" CFLAGS="$(CFLAGS_ASAN)" ${MAKE} -C src all
 
 pkgconfig:
 	[ -d pkgconfig ] && ${MAKE} -C pkgconfig || true
@@ -34,20 +55,21 @@ pkgconfig:
 src/sdb_version.h:
 	echo '#define SDB_VERSION "${SDBVER}"' > src/sdb_version.h
 
-CFILES=cdb.c buffer.c cdb_make.c ls.c ht.c sdb.c num.c base64.c
+CFILES=cdb.c buffer.c cdb_make.c ls.c ht.c sdb.c num.c base64.c text.c
 CFILES+=json.c ns.c lock.c util.c disk.c query.c array.c fmt.c main.c
 EMCCFLAGS=-O2 -s EXPORTED_FUNCTIONS="['_sdb_querys','_sdb_new0']"
 #EMCCFLAGS+=--embed-file sdb.data
+
 sdb.js: src/sdb_version.h
 	cd src ; emcc ${EMCCFLAGS} -I. -o ../sdb.js ${CFILES}
 
 clean:
 	rm -f src/sdb_version.h
-	cd src && ${MAKE} clean
-	cd memcache && ${MAKE} clean
-	cd test && ${MAKE} clean
+	$(MAKE) -C src clean
+	$(MAKE) -C memcache clean
+	$(MAKE) -C test clean
 ifneq (${HAVE_VALA},)
-	cd ${VALADIR} && ${MAKE} clean
+	${MAKE} -C $(VALADIR) clean
 endif
 
 dist:
@@ -71,18 +93,19 @@ install-dirs:
 	$(INSTALL_DIR) ${DESTDIR}${MANDIR} ${DESTDIR}${LIBDIR}/pkgconfig ${DESTDIR}${BINDIR} 
 	$(INSTALL_DIR) ${DESTDIR}${DATADIR}/vala/vapi ${DESTDIR}${INCDIR}/sdb
 
-INCFILES=src/sdb.h src/sdb_version.h src/cdb.h src/ht.h src/types.h
-INCFILES+=src/ls.h src/cdb_make.h src/buffer.h src/config.h
+INCFILES=src/sdb.h src/sdb_version.h src/cdb.h src/ht_uu.h src/ht_up.h src/ht_pp.h src/types.h
+INCFILES+=src/ls.h src/cdb_make.h src/buffer.h src/config.h src/sdbht.h
+INCFILES+=src/dict.h src/set.h src/ht_inc.h
 
 install: pkgconfig install-dirs
 	$(INSTALL_MAN) src/sdb.1 ${DESTDIR}${MANDIR}
-	$(INSTALL_LIB) src/libsdb.${EXT_SO} ${DESTDIR}${LIBDIR}
-	$(INSTALL_DATA) src/libsdb.a ${DESTDIR}${LIBDIR}
+	$(INSTALL_LIB) src/libsdb$(EXT_SO) ${DESTDIR}${LIBDIR}
+	$(INSTALL_DATA) src/libsdb$(EXT_AR) ${DESTDIR}${LIBDIR}
 	-if [ "$(EXT_SO)" != "$(SOVER)" ]; then \
 	  cd ${DESTDIR}${LIBDIR} ; \
-	  mv libsdb.$(EXT_SO) libsdb.$(SOVER) ; \
-	  ln -s libsdb.$(SOVER) libsdb.$(EXT_SO) ; \
-	  ln -s libsdb.$(SOVER) libsdb.$(EXT_SO).$(SOVERSION) ; \
+	  mv libsdb$(EXT_SO) libsdb$(SOVER) ; \
+	  ln -s libsdb$(SOVER) libsdb$(EXT_SO) ; \
+	  ln -s libsdb$(SOVER) libsdb$(EXT_SO).$(SOVERSION) ; \
 	fi
 	$(INSTALL_DATA) $(INCFILES) ${DESTDIR}${INCDIR}/sdb
 	$(INSTALL_PROGRAM) src/sdb ${DESTDIR}${BINDIR}
@@ -127,7 +150,9 @@ symstall: install-dirs
 	ln -fs ${PWD}/src/sdb.h ${DESTDIR}${INCDIR}/sdb
 	ln -fs ${PWD}/src/sdb_version.h ${DESTDIR}${INCDIR}/sdb
 	ln -fs ${PWD}/src/cdb.h ${DESTDIR}${INCDIR}/sdb
-	ln -fs ${PWD}/src/ht.h ${DESTDIR}${INCDIR}/sdb
+	ln -fs ${PWD}/src/ht_uu.h ${DESTDIR}${INCDIR}/sdb
+	ln -fs ${PWD}/src/ht_up.h ${DESTDIR}${INCDIR}/sdb
+	ln -fs ${PWD}/src/ht_pp.h ${DESTDIR}${INCDIR}/sdb
 	ln -fs ${PWD}/src/types.h ${DESTDIR}${INCDIR}/sdb
 	ln -fs ${PWD}/src/ls.h ${DESTDIR}${INCDIR}/sdb
 	ln -fs ${PWD}/src/cdb_make.h ${DESTDIR}${INCDIR}/sdb
@@ -159,7 +184,10 @@ IOS_CC=$(shell xcrun --sdk iphoneos --find clang) -isysroot $(shell xcrun --sdk 
 IOS_AR=$(shell xcrun --sdk iphoneos --find ar)
 IOS_RL=$(shell xcrun --sdk iphoneos --find ranlib)
 ios: src/sdb_version.h
-	${MAKE} OS=Darwin ARCH=arm CC="${IOS_CC}" AR="${IOS_AR}" RANLIB="${IOS_RL}" HAVE_VALA= all
+	${MAKE} CFLAGS=-DUSE_DLSYSTEM=1 OS=Darwin ARCH=arm CC="${IOS_CC}" AR="${IOS_AR}" RANLIB="${IOS_RL}" HAVE_VALA= all
 
-.PHONY: all ${VALADIR} clean dist w32 ios
+v version:
+	@echo $(SDBVER)
+
+.PHONY: all ${VALADIR} clean dist w32 ios v version
 .PHONY: install-dirs install uninstall deinstall symstall

@@ -3,7 +3,7 @@
  * Copyright (c) Ian F. Darwin 1986-1995.
  * Software written by Ian F. Darwin and others;
  * maintained 1995-present by Christos Zoulas and others.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -13,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *  
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -63,21 +63,23 @@ static int from_oct(int digs, const char *where) {
 	int value = 0;
 	while (isspace ((ut8)*where)) {	/* Skip spaces */
 		where++;
-		if (--digs <= 0)
-			return -1;		/* All blank field */
+		if (--digs <= 0) {
+			return -1; /* All blank field */
+		}
 	}
 	while (digs > 0 && isodigit(*where)) {	/* Scan til nonoctal */
 		value = (value << 3) | (*where++ - '0');
 		--digs;
 	}
-	if (digs > 0 && *where && !isspace((ut8)*where))
-		return -1;			/* Ended on non-space/nul */
+	if (digs > 0 && *where && !isspace ((ut8)*where)) {
+		return -1; /* Ended on non-space/nul */
+	}
 	return value;
 }
 
 /*
- * Return 
- *	0 if the checksum is bad (i.e., probably not a tar archive), 
+ * Return
+ *	0 if the checksum is bad (i.e., probably not a tar archive),
  *	1 for old UNIX tar file,
  *	2 for Unix Std (POSIX) tar file,
  *	3 for GNU tar file.
@@ -87,8 +89,9 @@ static int is_tar(const ut8 *buf, size_t nbytes) {
 	int i, sum, recsum;
 	const char *p;
 
-	if (nbytes < sizeof(union record))
+	if (nbytes < sizeof (union record)) {
 		return 0;
+	}
 
 	recsum = from_oct (8, header->header.chksum);
 
@@ -103,14 +106,19 @@ static int is_tar(const ut8 *buf, size_t nbytes) {
 	}
 
 	/* Adjust checksum to count the "chksum" field as blanks. */
-	for (i = sizeof header->header.chksum; --i >= 0;)
+	for (i = sizeof header->header.chksum; --i >= 0;) {
 		sum -= 0xFF & header->header.chksum[i];
-	sum += ' ' * sizeof header->header.chksum;	
-	if (sum != recsum) return 0;	/* Not a tar archive */
-	if (strcmp (header->header.magic, GNUTMAGIC) == 0) 
-		return 3;		/* GNU Unix Standard tar archive */
-	if (strcmp (header->header.magic, TMAGIC) == 0) 
-		return 2;		/* Unix Standard tar archive */
+	}
+	sum += ' ' * sizeof header->header.chksum;
+	if (sum != recsum) {
+		return 0; /* Not a tar archive */
+	}
+	if (strcmp (header->header.magic, GNUTMAGIC) == 0) {
+		return 3; /* GNU Unix Standard tar archive */
+	}
+	if (strcmp (header->header.magic, TMAGIC) == 0) {
+		return 2; /* Unix Standard tar archive */
+	}
 	return 1;			/* Old fashioned tar archive */
 }
 
@@ -122,13 +130,15 @@ int file_is_tar(RMagic *ms, const ut8 *buf, size_t nbytes) {
 	int tar = is_tar(buf, nbytes);
 	int mime = ms->flags & R_MAGIC_MIME;
 
-	if (tar < 1 || tar > 3)
+	if (tar < 1 || tar > 3) {
 		return 0;
-	if (mime == R_MAGIC_MIME_ENCODING)
+	}
+	if (mime == R_MAGIC_MIME_ENCODING) {
 		return 0;
-	if (file_printf (ms, mime ? "application/x-tar" :
-	    tartype[tar - 1]) == -1)
+	}
+	if (file_printf (ms, mime ? "application/x-tar" : tartype[tar - 1]) == -1) {
 		return -1;
+	}
 	return 1;
 }
 #endif

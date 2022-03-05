@@ -1,4 +1,3 @@
-
 #ifndef _INCLUDE_R_BIN_MACH0_SPECS_H_
 #define _INCLUDE_R_BIN_MACH0_SPECS_H_
 
@@ -228,6 +227,13 @@ typedef struct {
 } cache_hdr_t;
 
 typedef struct {
+	uint8_t uuid[16];
+	uint64_t loadAddress;
+	uint32_t textSegmentSize;
+	uint32_t pathOffset;
+} cache_text_info_t;
+
+typedef struct {
 	uint64_t address;
 	uint64_t size;
 	uint64_t fileOffset;
@@ -243,4 +249,102 @@ typedef struct {
 	uint32_t pad;
 } cache_img_t;
 
+typedef struct {
+	uint32_t version;
+	uint32_t page_size;
+	uint32_t page_starts_count;
+	uint32_t padding;
+	uint64_t auth_value_add;
+} cache_slide3_t;
+
+typedef struct {
+	uint32_t version;
+	uint32_t page_size;
+	uint32_t page_starts_offset;
+	uint32_t page_starts_count;
+	uint32_t page_extras_offset;
+	uint32_t page_extras_count;
+	uint64_t delta_mask;
+	uint64_t value_add;
+} cache_slide2_t;
+
+typedef struct {
+	uint32_t version;
+	uint32_t toc_offset;
+	uint32_t toc_count;
+	uint32_t entries_offset;
+	uint32_t entries_count;
+	uint32_t entries_size;
+} cache_slide1_t;
+
+typedef struct {
+	uint32_t version;
+	uint32_t imageExtrasCount;
+	uint32_t imagesExtrasOffset;
+	uint32_t bottomUpListOffset;
+	uint32_t dylibTrieOffset;
+	uint32_t dylibTrieSize;
+	uint32_t initializersOffset;
+	uint32_t initializersCount;
+	uint32_t dofSectionsOffset;
+	uint32_t dofSectionsCount;
+	uint32_t reExportListOffset;
+	uint32_t reExportCount;
+	uint32_t depListOffset;
+	uint32_t depListCount;
+	uint32_t rangeTableOffset;
+	uint32_t rangeTableCount;
+	uint64_t dyldSectionAddr;
+} cache_accel_t;
+
+typedef struct {
+	uint64_t exportsTrieAddr;
+	uint64_t weakBindingsAddr;
+	uint32_t exportsTrieSize;
+	uint32_t weakBindingsSize;
+	uint32_t dependentsStartArrayIndex;
+	uint32_t reExportsStartArrayIndex;
+} cache_imgxtr_t;
+
+typedef struct {
+	uint32_t nlistOffset;
+	uint32_t nlistCount;
+	uint32_t stringsOffset;
+	uint32_t stringsSize;
+	uint32_t entriesOffset;
+	uint32_t entriesCount;
+} cache_locsym_info_t;
+
+typedef struct {
+	uint32_t dylibOffset;
+	uint32_t nlistStartIndex;
+	uint32_t nlistCount;
+} cache_locsym_entry_t;
+
+typedef struct {
+	uint64_t dylibOffset;
+	uint32_t nlistStartIndex;
+	uint32_t nlistCount;
+} cache_locsym_entry_large_t;
+
+typedef struct {
+	uint64_t address;
+	uint64_t size;
+	uint64_t fileOffset;
+	uint64_t slideInfoOffset;
+	uint64_t slideInfoSize;
+	uint64_t unknown;
+	uint32_t maxProt;
+	uint32_t initProt;
+} cache_mapping_slide;
+
+typedef struct {
+	uint64_t sel_string_base;
+} objc_cache_opt_info;
+
+#define DYLD_CACHE_SLIDE_PAGE_ATTRS 0xC000
+#define DYLD_CACHE_SLIDE_PAGE_ATTR_EXTRA 0x8000
+#define DYLD_CACHE_SLIDE_PAGE_ATTR_NO_REBASE 0x4000
+#define DYLD_CACHE_SLIDE_PAGE_ATTR_END 0x8000
+#define DYLD_CACHE_SLIDE_V3_PAGE_ATTR_NO_REBASE 0xFFFF
 #endif

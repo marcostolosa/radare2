@@ -141,7 +141,7 @@ static unsigned char x86_w32_tcp4444[] =
    "\x7e\xe5\x98\xec\xac\x45\x1b\x13";
 
 
-static RBuffer *build (REgg *egg) {
+static RBuffer *build(REgg *egg) {
 	RBuffer *buf = r_buf_new ();
 	const ut8 *sc = NULL;
 	int cd = 0;
@@ -204,8 +204,8 @@ REggPlugin r_egg_plugin_bind = {
 	.build = (void *)build
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_EGG,
 	.data = &r_egg_plugin_bind,
 	.version = R2_VERSION

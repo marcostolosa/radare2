@@ -46,7 +46,7 @@ PREFIX="/usr"
 if [ ! -d sys/ios-include ]; then
 (
 	cd sys && \
-	wget http://lolcathost.org/b/ios-include.tar.gz && \
+	wget -c https://lolcathost.org/b/ios-include.tar.gz && \
 	tar xzvf ios-include.tar.gz
 )
 fi
@@ -59,32 +59,31 @@ export CC="$(pwd)/sys/ios-sdk-gcc"
 export IOSVER=10.2
 export IOSINC=/
 #$(pwd)/sys/ios-include
-export CFLAGS=-O2
+export CFLAGS="${CFLAGS} -O2"
 export USE_SIMULATOR=1
 export RANLIB="xcrun --sdk iphoneos ranlib"
 
 if [ "$1" = "-s" ]; then
-	exec sys/ios-shell.sh
+sh
 	exit $?
 fi
 
 if true; then
 make mrproper
 cp -f ${PLGCFG} plugins.cfg
-./configure --prefix=${PREFIX} --with-ostype=darwin \
-	--without-fork --without-pic --with-nonpic \
-	--disable-debugger --with-compiler=ios-sdk \
-	--target=arm-unknown-darwin
+./configure --prefix=${PREFIX} --with-ostype=darwin --with-libr \
+	--without-fork --without-libuv --disable-debugger --with-compiler=ios-sdk \
+	--target=arm-unknown-darwin || exit 1
 fi
 
 if [ $? = 0 ]; then
-	time make -j4
+	time make -j4 || exit 1
 	( cd libr ; make libr.dylib )
 	if [ $? = 0 ]; then
 		( cd binr/radare2 ; make ios_sdk_sign )
 		rm -rf /tmp/r2ios
 		make install DESTDIR=/tmp/r2ios
-		rm -rf /tmp/r2ios/usr/share/radare2/*/www/enyo/node_modules
+		rm -rf /tmp/r2ios/usr/share/radare2/*/www/*/node_modules
 		( cd /tmp/r2ios && tar czvf ../r2ios-${CPU}.tar.gz ./* )
 		rm -rf sys/cydia/radare2/root
 		mkdir -p sys/cydia/radare2/root

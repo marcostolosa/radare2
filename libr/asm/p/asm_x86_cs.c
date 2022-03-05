@@ -1,13 +1,13 @@
-/* radare2 - LGPL - Copyright 2013-2016 - pancake */
+/* radare2 - LGPL - Copyright 2013-2022 - pancake */
 
 #include <r_asm.h>
 #include <r_lib.h>
-#include <capstone/capstone.h>
+#include "cs_version.h"
 
-#define USE_ITER_API 0
+#define USE_ITER_API 1
 
-static csh cd = 0;
-static int n = 0;
+static R_TH_LOCAL csh cd = 0;
+static R_TH_LOCAL int n = 0;
 
 static bool the_end(void *p) {
 #if 0
@@ -25,18 +25,43 @@ static bool the_end(void *p) {
 	return true;
 }
 
-static int check_features(RAsm *a, cs_insn *insn);
-
 #include "cs_mnemonics.c"
 
 #include "asm_x86_vm.c"
 
+static bool check_features(RAsm *a, cs_insn *insn) {
+	if (!insn || !insn->detail) {
+		return false;
+	}
+	int i;
+	for (i = 0; i < insn->detail->groups_count; i++) {
+		int id = insn->detail->groups[i];
+		if (id < 128) {
+			continue;
+		}
+		if (id == X86_GRP_MODE32) {
+			continue;
+		}
+		if (id == X86_GRP_MODE64) {
+			continue;
+		}
+		const char *name = cs_group_name (cd, id);
+		if (!name) {
+			return true;
+		}
+		if (!strstr (a->features, name)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
-	static int omode = 0;
+	static R_TH_LOCAL int omode = 0;
 	int mode, ret;
 	ut64 off = a->pc;
 
-	mode =  (a->bits == 64)? CS_MODE_64: 
+	mode =  (a->bits == 64)? CS_MODE_64:
 		(a->bits == 32)? CS_MODE_32:
 		(a->bits == 16)? CS_MODE_16: 0;
 	if (cd && mode != omode) {
@@ -78,71 +103,52 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 	op->size = 1;
 	cs_insn *insn = NULL;
 #if USE_ITER_API
-	{
-		size_t size = len;
-		if (!insn || cd < 1) {
-			insn = cs_malloc (cd);
-		}
-		if (!insn) {
-			cs_free (insn, n);
-			return 0;
-		}
-		memset (insn, 0, insn->size);
-		insn->size = 1;
-		n = cs_disasm_iter (cd, (const uint8_t**)&buf, &size, (uint64_t*)&off, insn);
-	}
+	cs_insn insnack = {0};
+	cs_detail insnack_detail = {0};
+	insnack.detail = &insnack_detail;
+	size_t size = len;
+	insn = &insnack;
+	n = cs_disasm_iter (cd, (const uint8_t**)&buf, &size, (uint64_t*)&off, insn);
 #else
 	n = cs_disasm (cd, (const ut8*)buf, len, off, 1, &insn);
 #endif
+        //XXX: capstone lcall seg:off workaround, remove when capstone will be fixed
+	if (n >= 1 && mode == CS_MODE_16 && !strncmp (insn->mnemonic, "lcall", 5)) {
+		(void) r_str_replace (insn->op_str, ", ", ":", 0);
+	}
 	if (op) {
 		op->size = 0;
 	}
 	if (a->features && *a->features) {
 		if (!check_features (a, insn)) {
 			op->size = insn->size;
-			strcpy (op->buf_asm, "illegal");
+			r_asm_op_set_asm (op, "illegal");
 		}
 	}
 	if (op->size == 0 && n > 0 && insn->size > 0) {
-		char *ptrstr;
 		op->size = insn->size;
-		snprintf (op->buf_asm, R_ASM_BUFSIZE, "%s%s%s",
+		char *buf_asm = r_str_newf ("%s%s%s",
 				insn->mnemonic, insn->op_str[0]?" ":"",
 				insn->op_str);
-		ptrstr = strstr (op->buf_asm, "ptr ");
-		if (ptrstr) {
-			memmove (ptrstr, ptrstr + 4, strlen (ptrstr + 4) + 1);
+		if (a->syntax != R_ASM_SYNTAX_MASM) {
+			char *ptrstr = strstr (buf_asm, "ptr ");
+			if (ptrstr) {
+				memmove (ptrstr, ptrstr + 4, strlen (ptrstr + 4) + 1);
+			}
 		}
+		r_asm_op_set_asm (op, buf_asm);
+		free (buf_asm);
 	} else {
 		decompile_vm (a, op, buf, len);
 	}
 	if (a->syntax == R_ASM_SYNTAX_JZ) {
-		if (!strncmp (op->buf_asm, "je ", 3)) {
-			memcpy (op->buf_asm, "jz", 2);
-		} else if (!strncmp (op->buf_asm, "jne ", 4)) {
-			memcpy (op->buf_asm, "jnz", 3);
+		char *buf_asm = r_strbuf_get (&op->buf_asm);
+		if (!strncmp (buf_asm, "je ", 3)) {
+			memcpy (buf_asm, "jz", 2);
+		} else if (!strncmp (buf_asm, "jne ", 4)) {
+			memcpy (buf_asm, "jnz", 3);
 		}
 	}
-#if 0
-	// [eax + ebx*4]  =>  [eax + ebx * 4]
-	char *ast = strchr (op->buf_asm, '*');
-	if (ast && ast > op->buf_asm) {
-		ast--;
-		if (ast[0] != ' ') {
-			char *tmp = strdup (ast + 1);
-			if (tmp) {
-				ast[0] = ' ';
-				if (tmp[0] && tmp[1] && tmp[1] != ' ') {
-					strcpy (ast, " * ");
-					strcpy (ast + 3, tmp + 1);
-				} else {
-					strcpy (ast + 1, tmp);
-				}
-				free (tmp);
-			}
-		}
-	}
-#endif
 #if USE_ITER_API
 	/* do nothing because it should be allocated once and freed in the_end */
 #else
@@ -155,7 +161,7 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 
 RAsmPlugin r_asm_plugin_x86_cs = {
 	.name = "x86",
-	.desc = "Capstone X86 disassembler",
+	.desc = "Capstone "CAPSTONE_VERSION_STRING" X86 disassembler",
 	.license = "BSD",
 	.arch = "x86",
 	.bits = 16|32|64,
@@ -168,38 +174,14 @@ RAsmPlugin r_asm_plugin_x86_cs = {
 		"sse3,sse41,sse42,sse4a,ssse3,pclmul,xop"
 };
 
-static int check_features(RAsm *a, cs_insn *insn) {
-	const char *name;
-	int i;
-	if (!insn || !insn->detail) {
-		return 1;
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct *radare_plugin_function(void) {
+	RLibStruct *rp = R_NEW0 (RLibStruct);
+	if (rp) {
+		rp->type = R_LIB_TYPE_ASM;
+		rp->data = &r_asm_plugin_x86_cs;
+		rp->version = R2_VERSION;
 	}
-	for (i = 0; i < insn->detail->groups_count; i++) {
-		int id = insn->detail->groups[i];
-		if (id < 128) {
-			continue;
-		}
-		if (id == X86_GRP_MODE32) {
-			continue;
-		}
-		if (id == X86_GRP_MODE64) {
-			continue;
-		}
-		name = cs_group_name (cd, id);
-		if (!name) {
-			return 1;
-		}
-		if (!strstr (a->features, name)) {
-			return 0;
-		}
-	}
-	return 1;
+	return rp;
 }
-
-#ifndef CORELIB
-RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_ASM,
-	.data = &r_asm_plugin_x86_cs,
-	.version = R2_VERSION
-};
 #endif

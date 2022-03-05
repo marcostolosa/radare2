@@ -3,10 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
-#include <unistd.h>
-//#include <err.h>
 #include <string.h>
-#define assert(x) if (!(x)) { eprintf("assert ##x##\n"); return; }
 #include <stdarg.h>
 #include <stdint.h>
 #include "dis.h"
@@ -14,6 +11,7 @@
 static struct state _state;
 
 #include <r_types.h>
+#include <r_util/r_assert.h>
 
 static inline struct state *get_state(void) {
 	memset (&_state, 0, sizeof (struct state));
@@ -523,7 +521,7 @@ static void own(struct state *s)
 		}
 
 		if (s->s_nop) {
-			assert(!s->s_nopd);
+			r_return_if_fail (!s->s_nopd);
 			s->s_nopd = d;
 		} else {
 			last->d_next = d;
@@ -563,7 +561,7 @@ static void own(struct state *s)
 	}
 	if (l) {
 		print_label(s, l);
-		assert(!l->l_next);
+		r_return_if_fail (!l->l_next);
 	}
 
 	output(s, "\n\tENDMOD\n");

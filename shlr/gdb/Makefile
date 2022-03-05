@@ -9,7 +9,7 @@ AR?=$(CC_AR)
 RANLIB?=ranlib
 LIBNAME=libgdbr
 LIBFILE=$(LIBNAME).$(EXT_SO)
-CFLAGS+=-I$(LIBR)/include $(PIC_CFLAGS)
+CFLAGS:=-I$(LIBR)/include -I$(LIBR)/include/sdb $(PIC_CFLAGS) $(CFLAGS)
 CFLAGS+=-Iinclude -I${LIBR}/include
 MAJOR=0
 MINOR=1
@@ -32,6 +32,7 @@ endif
 
 #OSTYPE=windows
 include ../../libr/socket/deps.mk
+include ../../shlr/sdb.mk
 
 # Test variables
 TEST_D= $(PWD)/test

@@ -25,7 +25,7 @@
 
 /* Register names used by gas and objdump.  */
 
-static const char * const riscv_gpr_names_numeric[NGPR] =
+static const char *const riscv_gpr_names_numeric[NGPR] =
 {
   "x0",   "x1",   "x2",   "x3",   "x4",   "x5",   "x6",   "x7",
   "x8",   "x9",   "x10",  "x11",  "x12",  "x13",  "x14",  "x15",
@@ -33,14 +33,14 @@ static const char * const riscv_gpr_names_numeric[NGPR] =
   "x24",  "x25",  "x26",  "x27",  "x28",  "x29",  "x30",  "x31"
 };
 
-static const char * const riscv_gpr_names_abi[NGPR] = {
+static const char *const riscv_gpr_names_abi[NGPR] = {
   "zero", "ra", "sp",  "gp",  "tp", "t0",  "t1",  "t2",
   "s0",   "s1", "a0",  "a1",  "a2", "a3",  "a4",  "a5",
   "a6",   "a7", "s2",  "s3",  "s4", "s5",  "s6",  "s7",
   "s8",   "s9", "s10", "s11", "t3", "t4",  "t5",  "t6"
 };
 
-static const char * const riscv_fpr_names_numeric[NFPR] =
+static const char *const riscv_fpr_names_numeric[NFPR] =
 {
   "f0",   "f1",   "f2",   "f3",   "f4",   "f5",   "f6",   "f7",
   "f8",   "f9",   "f10",  "f11",  "f12",  "f13",  "f14",  "f15",
@@ -48,7 +48,7 @@ static const char * const riscv_fpr_names_numeric[NFPR] =
   "f24",  "f25",  "f26",  "f27",  "f28",  "f29",  "f30",  "f31"
 };
 
-static const char * const riscv_fpr_names_abi[NFPR] = {
+static const char *const riscv_fpr_names_abi[NFPR] = {
   "ft0", "ft1", "ft2",  "ft3",  "ft4", "ft5", "ft6",  "ft7",
   "fs0", "fs1", "fa0",  "fa1",  "fa2", "fa3", "fa4",  "fa5",
   "fa6", "fa7", "fs2",  "fs3",  "fs4", "fs5", "fs6",  "fs7",
@@ -69,9 +69,9 @@ static const char * const riscv_fpr_names_abi[NFPR] = {
 #define MASK_RS2 (OP_MASK_RS2 << OP_SH_RS2)
 #define MASK_RD (OP_MASK_RD << OP_SH_RD)
 #define MASK_CRS2 (OP_MASK_CRS2 << OP_SH_CRS2)
-#define MASK_IMM ENCODE_ITYPE_IMM (-1U)
-#define MASK_RVC_IMM ENCODE_RVC_IMM (-1U)
-#define MASK_UIMM ENCODE_UTYPE_IMM (-1U)
+#define MASK_IMM ENCODE_ITYPE_IMM ((unsigned int)-1)
+#define MASK_RVC_IMM ENCODE_RVC_IMM ((unsigned int)-1)
+#define MASK_UIMM ENCODE_UTYPE_IMM ((unsigned int)-1)
 #define MASK_RM (OP_MASK_RM << OP_SH_RM)
 #define MASK_PRED (OP_MASK_PRED << OP_SH_PRED)
 #define MASK_SUCC (OP_MASK_SUCC << OP_SH_SUCC)
@@ -84,8 +84,7 @@ static int match_opcode(const struct riscv_opcode *op, insn_t insn)
   return ((insn ^ op->match) & op->mask) == 0;
 }
 
-static int match_never(const struct riscv_opcode *op,
-		       insn_t insn)
+static int match_never(const struct riscv_opcode *op, insn_t insn)
 {
   return 0;
 }
@@ -115,7 +114,7 @@ static int match_c_lui(const struct riscv_opcode *op, insn_t insn)
 static const struct riscv_opcode riscv_builtin_opcodes[] =
 {
 /* name,      isa,   operands, match, mask, match_func, pinfo.  */
-{"unimp",     "C",   "",  0, 0xffffU,  match_opcode, 0 },
+{"illegal",   "C",   "",  0, 0xffffU,  match_opcode, 0 },
 {"unimp",     "I",   "",  MATCH_CSRRW | (CSR_CYCLE << OP_SH_CSR), 0xffffffffU,  match_opcode, 0 }, /* csrw cycle, x0 */
 {"ebreak",    "C",   "",  MATCH_C_EBREAK, MASK_C_EBREAK, match_opcode, INSN_ALIAS },
 {"ebreak",    "I",   "",    MATCH_EBREAK, MASK_EBREAK, match_opcode, 0 },
@@ -618,19 +617,19 @@ static const struct riscv_opcode riscv_builtin_opcodes[] =
 {"c.li",      "C",   "d,Cj",  MATCH_C_LI, MASK_C_LI, match_rd_nonzero, 0 },
 {"c.addi4spn","C",   "Ct,Cc,CK", MATCH_C_ADDI4SPN, MASK_C_ADDI4SPN, match_opcode, 0 },
 {"c.addi16sp","C",   "Cc,CL", MATCH_C_ADDI16SP, MASK_C_ADDI16SP, match_opcode, 0 },
-{"c.addi",    "C",   "d,Cj",  MATCH_C_ADDI, MASK_C_ADDI, match_rd_nonzero, 0 },
-{"c.add",     "C",   "d,CV",  MATCH_C_ADD, MASK_C_ADD, match_c_add, 0 },
-{"c.sub",     "C",   "Cs,Ct",  MATCH_C_SUB, MASK_C_SUB, match_opcode, 0 },
-{"c.and",     "C",   "Cs,Ct",  MATCH_C_AND, MASK_C_AND, match_opcode, 0 },
-{"c.or",      "C",   "Cs,Ct",  MATCH_C_OR, MASK_C_OR, match_opcode, 0 },
-{"c.xor",     "C",   "Cs,Ct",  MATCH_C_XOR, MASK_C_XOR, match_opcode, 0 },
-{"c.slli",    "C",   "d,C>",  MATCH_C_SLLI, MASK_C_SLLI, match_rd_nonzero, 0 },
-{"c.srli",    "C",   "Cs,C>",  MATCH_C_SRLI, MASK_C_SRLI, match_opcode, 0 },
-{"c.srai",    "C",   "Cs,C>",  MATCH_C_SRAI, MASK_C_SRAI, match_opcode, 0 },
-{"c.andi",    "C",   "Cs,Cj",  MATCH_C_ANDI, MASK_C_ANDI, match_opcode, 0 },
-{"c.addiw",   "64C", "d,Cj",  MATCH_C_ADDIW, MASK_C_ADDIW, match_rd_nonzero, 0 },
-{"c.addw",    "64C", "Cs,Ct",  MATCH_C_ADDW, MASK_C_ADDW, match_opcode, 0 },
-{"c.subw",    "64C", "Cs,Ct",  MATCH_C_SUBW, MASK_C_SUBW, match_opcode, 0 },
+{"c.addi",    "C",   "d,Cj,CU",  MATCH_C_ADDI, MASK_C_ADDI, match_rd_nonzero, 0 },
+{"c.add",     "C",   "d,CV,CU",  MATCH_C_ADD, MASK_C_ADD, match_c_add, 0 },
+{"c.sub",     "C",   "Cs,Cs,Ct",  MATCH_C_SUB, MASK_C_SUB, match_opcode, 0 },
+{"c.and",     "C",   "Cs,Cs,Ct",  MATCH_C_AND, MASK_C_AND, match_opcode, 0 },
+{"c.or",      "C",   "Cs,Cs,Ct",  MATCH_C_OR, MASK_C_OR, match_opcode, 0 },
+{"c.xor",     "C",   "Cs,Cs,Ct",  MATCH_C_XOR, MASK_C_XOR, match_opcode, 0 },
+{"c.slli",    "C",   "d,CU,C>",  MATCH_C_SLLI, MASK_C_SLLI, match_rd_nonzero, 0 },
+{"c.srli",    "C",   "Cs,Cs,C>",  MATCH_C_SRLI, MASK_C_SRLI, match_opcode, 0 },
+{"c.srai",    "C",   "Cs,Cs,C>",  MATCH_C_SRAI, MASK_C_SRAI, match_opcode, 0 },
+{"c.andi",    "C",   "Cs,Cj,Cs",  MATCH_C_ANDI, MASK_C_ANDI, match_opcode, 0 },
+{"c.addiw",   "64C", "d,Cj,CU",  MATCH_C_ADDIW, MASK_C_ADDIW, match_rd_nonzero, 0 },
+{"c.addw",    "64C", "Cs,Ct,Cs",  MATCH_C_ADDW, MASK_C_ADDW, match_opcode, 0 },
+{"c.subw",    "64C", "Cs,Cs,Ct",  MATCH_C_SUBW, MASK_C_SUBW, match_opcode, 0 },
 {"c.ldsp",    "64C", "d,Cn(Cc)",  MATCH_C_LDSP, MASK_C_LDSP, match_rd_nonzero, 0 },
 {"c.ld",      "64C", "Ct,Cl(Cs)",  MATCH_C_LD, MASK_C_LD, match_opcode, 0 },
 {"c.sdsp",    "64C", "CV,CN(Cc)",  MATCH_C_SDSP, MASK_C_SDSP, match_opcode, 0 },

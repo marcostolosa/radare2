@@ -33,17 +33,17 @@
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*a))
 
 // TODO : an conf to chose between abi or numeric
-static const char * const *riscv_gpr_names = riscv_gpr_names_abi;
-static const char * const *riscv_fpr_names = riscv_fpr_names_abi;
+static const char *const *riscv_gpr_names = riscv_gpr_names_abi;
+static const char *const *riscv_fpr_names = riscv_fpr_names_abi;
 static int init = 0;
 
-static void arg_p (char *buf, unsigned long val, const char* const* array, size_t size) {
-	const char *s = val >= size || array[val] ? array[val] : "unknown";
+static void arg_p(char *buf, unsigned long val, const char* const* array, size_t size) {
+	const char *s = (val >= size || array[val]) ? array[val] : "unknown";
 	sprintf (buf+strlen (buf), "%s", s);
 }
 
 /* Print insn arguments for 32/64-bit code.  */
-static void get_insn_args (char *buf, const char *d, insn_t l, uint64_t pc) {
+static void get_insn_args(char *buf, const char *d, insn_t l, uint64_t pc) {
 	int rs1 = (l >> OP_SH_RS1) & OP_MASK_RS1;
 	int rd = (l >> OP_SH_RD) & OP_MASK_RD;
 	uint64_t target;
@@ -267,7 +267,7 @@ static void get_insn_args (char *buf, const char *d, insn_t l, uint64_t pc) {
 	}
 }
 
-static struct riscv_opcode *get_opcode (insn_t word) {
+static struct riscv_opcode *get_opcode(insn_t word) {
 	struct riscv_opcode *op;
 	static const struct riscv_opcode *riscv_hash[OP_MASK_OP + 1] = {0};
 
@@ -278,44 +278,38 @@ static struct riscv_opcode *get_opcode (insn_t word) {
 			if (!riscv_hash[OP_HASH_IDX (op->match)]) {
 				riscv_hash[OP_HASH_IDX (op->match)] = op;
 			}
-		} 
+		}
 		init = 1;
 	}
 
 	return (struct riscv_opcode *)riscv_hash[OP_HASH_IDX (word)];
 }
 
-static int
-riscv_disassemble(RAsm *a, RAsmOp *rop, insn_t word, int xlen, int len) {
+static int riscv_disassemble(RAsm *a, RAsmOp *rop, insn_t word, int xlen, int len) {
 	const bool no_alias = false;
 	const struct riscv_opcode *op = get_opcode (word);
 	if (!op) {
 		return -1;
 	}
-
-	for(; op < &riscv_opcodes[NUMOPCODES]; op++) {
+	for (; op < &riscv_opcodes[NUMOPCODES]; op++) {
 		if ( !(op->match_func)(op, word) ) {
 			continue;
 		}
-
 		if (no_alias && (op->pinfo & INSN_ALIAS)) {
 			continue;
 		}
-
 		if (isdigit ((ut8)op->subset[0]) && atoi (op->subset) != xlen ) {
 			continue;
 		}
-
 		if (op->name && op->args) {
-			snprintf (rop->buf_asm, sizeof (rop->buf_asm), "%s", op->name);
-			get_insn_args (rop->buf_asm, op->args, word, a->pc);
+			r_asm_op_set_asm (rop, op->name);
+			get_insn_args (r_asm_op_get_asm (rop), op->args, word, a->pc);
 			return 0;
-		} else {
-			sprintf (rop->buf_asm, "invalid word(%"PFMT64x")", (ut64)word);
-			return -1;
 		}
+		r_strf_buffer (32);
+		r_asm_op_set_asm (rop, r_strf ("invalid word(%"PFMT64x")", (ut64)word));
+		return -1;
 	}
-
 	return 0;
 }
 

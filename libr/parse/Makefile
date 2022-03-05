@@ -1,12 +1,14 @@
 include ../config.mk
 
 NAME=r_parse
-DEPS=r_flag r_util r_syscall r_reg
+R2DEPS=r_flag r_util r_syscall r_reg
 # indirect dependencies
-DEPS+=r_cons
+R2DEPS+=r_cons
 
-LINK+=$(STOP)/tcc/libr_tcc.a
-CFLAGS+=-I$(STOP)/tcc/
+CFLAGS+=-Ic
+
+# LINK+=$(STOP)/mpc/libmpc.a
+# CFLAGS+=-I$(STOP)/mpc/
 
 include $(SHLR)/zip/deps.mk
 
@@ -15,23 +17,29 @@ foo:
 	libr_parse.${EXT_AR} plugins bins ; do \
 	    ${MAKE} $$TARGET ; done
 
-CFLAGS+=-DCORELIB
+CFLAGS+=-DR2_PLUGIN_INCORE
 -include ${STATIC_PARSE_PLUGINS}
 STATIC_OBJS=$(subst ..,p/..,$(subst parse_,p/parse_,$(STATIC_OBJ)))
-OBJS=parse.o code.o ${STATIC_OBJS}
+OBJS=parse.o filter.o code.o ${STATIC_OBJS}
+# OBJS+=c/tccgen.o c/tccpp.o c/libtcc.o
+
+pre:
 
 bins:
 #	@cd t && ${MAKE} all
 
-pre:
-ifeq ($(WITHNONPIC),1)
-	@if [ ! -e libr_parse.${EXT_AR} ]; then rm -f ${STATIC_OBJS} ; fi
-endif
-ifeq ($(WITHPIC),1)
-	@if [ ! -e libr_parse.${EXT_SO} ]; then rm -f ${STATIC_OBJS} ; fi
-endif
-
 plugins:
 	@cd p && ${MAKE} all
+
+.PHONY: sdb-sync sync-sdb sdbclean
+tcc-sync sync-tcc:
+	rm -rf _
+	git clone --depth 1 git://repo.or.cz/tinycc.git _
+	cd _ ; ./configure --prefix=${PREFIX}
+	mkdir -p tcc
+	for FILE in ${CFILES} ${HFILES} ; do cp -f _/$$FILE tcc ; done
+	cp -f _/VERSION _/COPYING _/stab.def tcc
+	git add tcc
+	rm -rf _
 
 include ../rules.mk

@@ -1,8 +1,5 @@
 /* Public domain. */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include "sdb.h"
 #include "cdb.h"
 #include "cdb_make.h"
@@ -12,17 +9,13 @@
 char *cdb_alloc(ut32 n) {
 #if __APPLE__ && !__POWERPC__
 	void *ret = NULL;
-	return posix_memalign (&ret, ALIGNMENT, n)? NULL: ret;
+	return (char *)(posix_memalign (&ret, ALIGNMENT, n)? NULL: ret);
 #elif __SDB_WINDOWS__ && !__CYGWIN__
-	return _aligned_malloc (n, ALIGNMENT);
+	return (char *)_aligned_malloc (n, ALIGNMENT);
 #else
-	return malloc (n);
+	return (char *)malloc (n);
 #endif
 }
-
-#if __SDB_WINDOWS__ && !__CYGWIN__
-extern void _aligned_free(void *memblock);
-#endif
 
 void cdb_alloc_free(void *x) {
 #if __SDB_WINDOWS__ && !__CYGWIN__

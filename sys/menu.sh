@@ -75,7 +75,7 @@ SelectPluginShared () {
 }
 
 SelectPluginStatic() {
-	. ./plugins.def.cfg
+	. ./dist/plugins-cfg/plugins.def.cfg
 	PLUGINS="${STATIC} ${SHARED}"
 	ARGS=""
 	for a in ${PLUGINS} ; do
@@ -210,14 +210,17 @@ BuildAndInstall() {
 		"Windows")
 			sys/mingw32.sh
 			;;
+		"Android ARM64")
+			sys/android-build.sh arm64
+			;;
 		"Android ARM")
-			sys/android-target.sh arm
+			sys/android-build.sh arm
 			;;
 		"Android MIPS")
-			sys/android-target.sh mips
+			sys/android-build.sh mips
 			;;
 		"Android X86")
-			sys/android-target.sh x86
+			sys/android-build.sh x86
 			;;
 		esac
 	done

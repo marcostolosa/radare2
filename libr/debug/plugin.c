@@ -16,7 +16,7 @@ R_API void r_debug_plugin_init(RDebug *dbg) {
 }
 
 R_API bool r_debug_use(RDebug *dbg, const char *str) {
-	if (str) {
+	if (dbg && str) {
 		RDebugPlugin *h;
 		RListIter *iter;
 		r_list_foreach (dbg->plugins, iter, h) {
@@ -50,18 +50,31 @@ R_API bool r_debug_use(RDebug *dbg, const char *str) {
 	return (dbg && dbg->h);
 }
 
-R_API int r_debug_plugin_list(RDebug *dbg, int mode) {
+R_API bool r_debug_plugin_list(RDebug *dbg, int mode) {
 	char spaces[16];
 	int count = 0;
 	memset (spaces, ' ', 15);
 	spaces[15] = 0;
 	RDebugPlugin *h;
 	RListIter *iter;
+	PJ *pj = NULL;
+	if (mode == 'j') {
+		pj = dbg->pj;
+		if (!pj) {
+			return false;
+		}
+		pj_a (pj);
+	}
 	r_list_foreach (dbg->plugins, iter, h) {
 		int sp = 8-strlen (h->name);
 		spaces[sp] = 0;
 		if (mode == 'q') {
 			dbg->cb_printf ("%s\n", h->name);
+		} else if (mode == 'j') {
+			pj_o (pj);
+			pj_ks (pj, "name", h->name);
+			pj_ks (pj, "license", h->license);
+			pj_end (pj);
 		} else {
 			dbg->cb_printf ("%d  %s  %s %s%s\n",
 					count, (h == dbg->h)? "dbg": "---",
@@ -70,7 +83,11 @@ R_API int r_debug_plugin_list(RDebug *dbg, int mode) {
 		spaces[sp] = ' ';
 		count++;
 	}
-	return false;
+	if (mode == 'j') {
+		pj_end (pj);
+		dbg->cb_printf ("%s\n", pj_string (pj));
+	}
+	return true;
 }
 
 R_API bool r_debug_plugin_add(RDebug *dbg, RDebugPlugin *foo) {
@@ -81,4 +98,17 @@ R_API bool r_debug_plugin_add(RDebug *dbg, RDebugPlugin *foo) {
 	memcpy (dp, foo, sizeof (RDebugPlugin));
 	r_list_append (dbg->plugins, dp);
 	return true;
+}
+
+R_API bool r_debug_plugin_set_reg_profile(RDebug *dbg, const char *profile) {
+	char *str = r_file_slurp (profile, NULL);
+	if (!str) {
+		eprintf ("r_debug_plugin_set_reg_profile: Cannot find '%s'\n", profile);
+		return false;
+	}
+	if (dbg && dbg->h && dbg->h->set_reg_profile) {
+		return dbg->h->set_reg_profile (str);
+	}
+	free (str);
+	return false;
 }

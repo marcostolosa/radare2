@@ -8,7 +8,7 @@ following some sane and basic OO concepts.
   - Instances are used to keep states
   - Enforces instance recycling
   - Reduce creation/destruction of objects
-  - Easily interfaced with Vala thru the VAPIs
+  - Easily interfaced with Vala through the VAPIs
 
 Global picture
 --------------
@@ -26,7 +26,7 @@ Global picture
   - simplify code
 
 A library implements a set of functionalities, those ones are mainly
-the lifecycle of the class containing the state of 
+the lifecycle of the class containing the state of
 
 Plugins are singletons. Or we will have to create factories for every class.
 

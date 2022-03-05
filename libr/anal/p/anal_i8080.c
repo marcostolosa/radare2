@@ -11,10 +11,9 @@
 // hack
 #include "../../asm/arch/i8080/i8080dis.c"
 
-static int i8080_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len) {
+static int i8080_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len, RAnalOpMask mask) {
 	char out[32];
 	int ilen = i8080_disasm (data, out, len);
-	memset (op, '\0', sizeof (RAnalOp));
 	op->addr = addr;
 	op->type = R_ANAL_OP_TYPE_UNK;
 	switch (data[0]) {
@@ -197,8 +196,8 @@ RAnalPlugin r_anal_plugin_i8080 = {
 	.op = &i8080_op,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_i8080,
 	.version = R2_VERSION

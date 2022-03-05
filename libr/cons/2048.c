@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2008-2016 - pancake */
+/* radare2 - LGPL - Copyright 2008-2020 - pancake */
 
 #include <r_cons.h>
 
@@ -6,15 +6,17 @@ static ut8 twok_buf[4][4];
 static int score = 0;
 static int moves = 0;
 
-static void twok_init() {
+static void twok_init(void) {
 	int i, j;
 	score = 0;
-	for (i = 0; i < 4; i++)
-		for (j = 0; j < 4; j++)
+	for (i = 0; i < 4; i++) {
+		for (j = 0; j < 4; j++) {
 			twok_buf[i][j] = 0;
+		}
+	}
 }
 
-static void twok_add() {
+static void twok_add(void) {
 	int i, j;
 	while (true) {
 		i = r_num_rand (4);
@@ -26,20 +28,29 @@ static void twok_add() {
 	}
 }
 
-static bool twok_fin() {
+static bool twok_fin(void) {
 	int i, j;
-	for (i = 0; i < 4; i++)
-		for (j = 0; j < 4; j++)
-			if (!twok_buf[i][j])
+	for (i = 0; i < 4; i++) {
+		for (j = 0; j < 4; j++) {
+			if (!twok_buf[i][j]) {
 				return true;
-	for (i = 0; i < 4; i++)
-		for (j = 0; j < 3; j++)
-			if (twok_buf[i][j] == twok_buf[i][j + 1])
+			}
+		}
+	}
+	for (i = 0; i < 4; i++) {
+		for (j = 0; j < 3; j++) {
+			if (twok_buf[i][j] == twok_buf[i][j + 1]) {
 				return true;
-	for (i = 0; i < 3; i++)
-		for (j = 0; j < 4; j++)
-			if (twok_buf[i][j] == twok_buf[i + 1][j])
+			}
+		}
+	}
+	for (i = 0; i < 3; i++) {
+		for (j = 0; j < 4; j++) {
+			if (twok_buf[i][j] == twok_buf[i + 1][j]) {
 				return true;
+			}
+		}
+	}
 	return false;
 }
 
@@ -47,11 +58,14 @@ static void twok_move(int u, int v) {
 	int i, j, k;
 	int nKI = 0, nKJ = 0, nIK = 0, nJK = 0;
 	int moved = 0;
-	for (k = 0; k < 4; ++k) {
-		for (i = 0; i < 4; ++i) {
-			for (j = i + 1; j < 4 && !twok_buf[nKJ = u? k: v? j: 3 - j][nJK = !u? k: v? j: 3 - j]; ++j)
+	for (k = 0; k < 4; k++) {
+		for (i = 0; i < 4; i++) {
+			for (j = i + 1; j < 4 && !twok_buf[nKJ = u ? k : v ? j : 3 - j][nJK = !u ? k : v ? j : 3 - j]; j++) {
 				;
-			if (j == 4) continue;
+			}
+			if (j == 4) {
+				continue;
+			}
 			nKI = u? k: v? i: 3 - i;
 			nIK = !u? k: v? i: 3 - i;
 			if (!twok_buf[nKI][nIK]) {
@@ -164,7 +178,9 @@ R_API void r_cons_2048(bool color) {
 			twok_move (1, 0);
 			break;
 		}
-		if (ch < 1 || ch == 'q') break;
+		if (ch < 1 || ch == 'q') {
+			break;
+		}
 	}
 	r_cons_clear00 ();
 	r_cons_printf ("[r2048] score: %d\n", score);

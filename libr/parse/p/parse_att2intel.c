@@ -13,8 +13,8 @@
 static int replace(int argc, const char *argv[], char *newstr) {
 	int i,j,k;
 	struct {
-		char *op;
-		char *str;
+		const char *op;
+		const char *str;
 	} ops[] = {
 		{ "cmpl",  "cmp 2, 1"},
 		{ "testl", "test 2, 1"},
@@ -35,17 +35,19 @@ static int replace(int argc, const char *argv[], char *newstr) {
 		{ NULL }
 	};
 
-	for (i=0; ops[i].op != NULL; i++) {
+	for (i = 0; ops[i].op != NULL; i++) {
 		if (!strcmp (ops[i].op, argv[0])) {
 			if (newstr != NULL) {
-				for (j=k=0;ops[i].str[j]!='\0';j++,k++) {
-					if (ops[i].str[j]>='0' && ops[i].str[j]<='9') {
-						const char *w = argv[ ops[i].str[j]-'0' ];
+				for (j = k = 0; ops[i].str[j] != '\0'; j++, k++) {
+					if (ops[i].str[j] >= '0' && ops[i].str[j] <= '9') {
+						const char *w = argv[ops[i].str[j] - '0'];
 						if (w != NULL) {
-							strcpy(newstr+k, w);
-							k += strlen(w)-1;
+							strcpy (newstr + k, w);
+							k += strlen (w) - 1;
 						}
-					} else newstr[k] = ops[i].str[j];
+					} else {
+						newstr[k] = ops[i].str[j];
+					}
 				}
 				newstr[k]='\0';
 			}
@@ -75,7 +77,9 @@ static int parse(RParse *p, const char *data, char *str) {
 
 	// malloc can be slow here :?
 	buf = strdup (data);
-	if (!buf) return false;
+	if (!buf) {
+		return false;
+	}
 	r_str_trim_head (buf);
 
 	ptr = strchr (buf, '#');
@@ -97,30 +101,36 @@ static int parse(RParse *p, const char *data, char *str) {
 	if (ptr) {
 		*ptr = 0;
 		num = (char*)r_str_lchr (buf, ' ');
-		if (!num)
-			num = (char*)r_str_lchr (buf, ',');
+		if (!num) {
+			num = (char *)r_str_lchr (buf, ',');
+		}
 		if (num) {
-			n = atoi (num+1);
+			n = atoi (num + 1);
 			*ptr = '[';
-			memmove (num+1, ptr, strlen (ptr)+1);
+			r_str_cpy (num + 1, ptr);
 			ptr = (char*)r_str_lchr (buf, ']');
 			if (n && ptr) {
 				char *rest = strdup (ptr+1);
-				if(n>0) sprintf (ptr, "+%d]%s", n, rest);
-				else sprintf (ptr, "%d]%s", n, rest);
+				size_t dist = strlen (data) + 1 - (ptr - buf);
+				snprintf (ptr, dist, "%+d]%s", n, rest);
 				free (rest);
 			}
-		} else *ptr = '[';
+		} else {
+			*ptr = '[';
+		}
 	}
 
 	if (*buf) {
 		*w0 = *w1 = *w2 = *w3 = 0;
 		ptr = strchr (buf, ' ');
-		if (!ptr)
+		if (!ptr) {
 			ptr = strchr (buf, '\t');
+		}
 		if (ptr) {
 			*ptr = '\0';
-			for (++ptr; *ptr==' '; ptr++);
+			for (++ptr; *ptr == ' '; ptr++) {
+				;
+			}
 			strncpy (w0, buf, sizeof(w0) - 1);
 			strncpy (w1, ptr, sizeof(w1) - 1);
 
@@ -128,13 +138,17 @@ static int parse(RParse *p, const char *data, char *str) {
 			ptr = strchr (ptr, ',');
 			if (ptr) {
 				*ptr = '\0';
-				for (++ptr; *ptr==' '; ptr++);
+				for (++ptr; *ptr == ' '; ptr++) {
+					;
+				}
 				strncpy (w1, optr, sizeof(w1)-1);
 				strncpy (w2, ptr, sizeof(w2)-1);
 				ptr = strchr (ptr, ',');
 				if (ptr) {
 					*ptr = '\0';
-					for (++ptr; *ptr==' '; ptr++);
+					for (++ptr; *ptr == ' '; ptr++) {
+						;
+					}
 					strncpy (w2, optr, sizeof(w2)-1);
 					strncpy (w3, ptr, sizeof(w3)-1);
 				}
@@ -144,8 +158,9 @@ static int parse(RParse *p, const char *data, char *str) {
 			const char *wa[] = { w0, w1, w2, w3 };
 			int nw = 0;
 			for (i=0; i<4; i++) {
-				if (wa[i][0] != '\0')
-				nw++;
+				if (wa[i][0] != '\0') {
+					nw++;
+				}
 			}
 			replace (nw, wa, str);
 		}
@@ -162,8 +177,8 @@ RParsePlugin r_parse_plugin_att2intel = {
 	.parse = &parse,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_PARSE,
 	.data = &r_parse_plugin_att2intel,
 	.version = R2_VERSION

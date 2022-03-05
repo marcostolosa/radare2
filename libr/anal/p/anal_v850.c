@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2012-2013 - pancake
+/* radare - LGPL - Copyright 2012-2021 - pancake
 	2014 - Fedor Sakharov <fedor.sakharov@gmail.com> */
 
 #include <string.h>
@@ -11,21 +11,160 @@
 
 #include <v850_disas.h>
 
+// Format I
+#define F1_REG1(instr) ((instr) & 0x1F)
+#define F1_REG2(instr) (((instr) & 0xF800) >> 11)
+
+#define F1_RN1(instr) (V850_REG_NAMES[F1_REG1(instr)])
+#define F1_RN2(instr) (V850_REG_NAMES[F1_REG2(instr)])
+
+// Format II
+#define F2_IMM(instr) F1_REG1(instr)
+#define F2_REG2(instr) F1_REG2(instr)
+
+#define F2_RN2(instr) (V850_REG_NAMES[F2_REG2(instr)])
+
+// Format III
+#define F3_COND(instr) ((instr) & 0xF)
+#define F3_DISP(instr) (((instr) & 0x70) >> 4) | (((instr) & 0xF800) >> 7)
+
+// Format IV
+#define F4_DISP(instr) ((instr) & 0x3F)
+#define F4_REG2(instr) F1_REG2(instr)
+
+#define F4_RN2(instr) (V850_REG_NAMES[F4_REG2(instr)])
+
+// Format V
+#define F5_REG2(instr) F1_REG2(instr)
+#define F5_DISP(instr) ((((ut32)(instr) & 0xffff) << 31) | (((ut32)(instr) & 0xffff0000) << 1))
+#define F5_RN2(instr) (V850_REG_NAMES[F5_REG2(instr)])
+
+// Format VI
+#define F6_REG1(instr) F1_REG1(instr)
+#define F6_REG2(instr) F1_REG2(instr)
+#define F6_IMM(instr) (((instr) & 0xFFFF0000) >> 16)
+
+#define F6_RN1(instr) (V850_REG_NAMES[F6_REG1(instr)])
+#define F6_RN2(instr) (V850_REG_NAMES[F6_REG2(instr)])
+
+// Format VII
+#define F7_REG1(instr) F1_REG1(instr)
+#define F7_REG2(instr) F1_REG2(instr)
+#define F7_DISP(instr) F6_IMM(instr)
+
+#define F7_RN1(instr) (V850_REG_NAMES[F7_REG1(instr)])
+#define F7_RN2(instr) (V850_REG_NAMES[F7_REG2(instr)])
+
+// Format VIII
+#define F8_REG1(instr) F1_REG1(instr)
+#define F8_DISP(instr) F6_IMM(instr)
+#define F8_BIT(instr) (((instr) & 0x3800) >> 11)
+#define F8_SUB(instr) (((instr) & 0xC000) >> 14)
+
+#define F8_RN1(instr) (V850_REG_NAMES[F8_REG1(instr)])
+#define F8_RN2(instr) (V850_REG_NAMES[F8_REG2(instr)])
+
+// Format IX
+// Also regID/cond
+#define F9_REG1(instr) F1_REG1(instr)
+#define F9_REG2(instr) F1_REG2(instr)
+#define F9_SUB(instr) (((instr) & 0x7E00000) >> 21)
+
+#define F9_RN1(instr) (V850_REG_NAMES[F9_REG1(instr)])
+#define F9_RN2(instr) (V850_REG_NAMES[F9_REG2(instr)])
+// TODO: Format X
+
+// Format XI
+#define F11_REG1(instr) F1_REG1(instr)
+#define F11_REG2(instr) F1_REG2(instr)
+#define F11_REG3(instr) (((instr) & 0xF8000000) >> 27)
+#define F11_SUB(instr) ((((instr) & 0x7E00000) >> 20) | (((instr) & 2) >> 1))
+
+#define F11_RN1(instr) (V850_REG_NAMES[F11_REG1(instr)])
+#define F11_RN2(instr) (V850_REG_NAMES[F11_REG2(instr)])
+// Format XII
+#define F12_IMM(instr) (F1_REG1(instr) | (((instr) & 0x7C0000) >> 13))
+#define F12_REG2(instr) F1_REG2(instr)
+#define F12_REG3(instr) (((instr) & 0xF8000000) >> 27)
+#define F12_SUB(instr) ((((instr) & 0x7800001) >> 22) | (((instr) & 2) >> 1))
+
+#define F12_RN2(instr) (V850_REG_NAMES[F12_REG2(instr)])
+#define F12_RN3(instr) (V850_REG_NAMES[F12_REG3(instr)])
+
+// Format XIII
+#define F13_IMM(instr) (((instr) & 0x3E) >> 1)
+// Also a subopcode
+#define F13_REG2(instr) (((instr) & 0x1F0000) >> 16)
+#define F13_LIST(instr) (((instr) && 0xFFE00000) >> 21)
+
+#define F13_RN2(instr) (V850_REG_NAMES[F13_REG2(instr)])
+
+static const char* V850_REG_NAMES[] = {
+	"zero",
+	"r1",
+	"r2",
+	"r3",
+	"r4",
+	"r5",
+	"r6",
+	"r7",
+	"r8",
+	"r9",
+	"r10",
+	"r11",
+	"r12",
+	"r13",
+	"r14",
+	"r15",
+	"r16",
+	"r17",
+	"r18",
+	"r19",
+	"r20",
+	"r21",
+	"r22",
+	"r23",
+	"r24",
+	"r25",
+	"r26",
+	"r27",
+	"r28",
+	"r29",
+	"ep",
+	"lp",
+};
+
 static void update_flags(RAnalOp *op, int flags) {
-	if (flags & V850_FLAG_CY) r_strbuf_append (&op->esil, ",$c31,cy,=");
-	if (flags & V850_FLAG_OV) r_strbuf_append (&op->esil, ",$o,ov,=");
-	if (flags & V850_FLAG_S) r_strbuf_append (&op->esil, ",$s,s,=");
-	if (flags & V850_FLAG_Z) r_strbuf_append (&op->esil, ",$z,z,=");
+	if (flags & V850_FLAG_CY) {
+		r_strbuf_append (&op->esil, "31,$c,cy,:=");
+	}
+	if (flags & V850_FLAG_OV) {
+		r_strbuf_append (&op->esil, ",31,$o,ov,:=");
+	}
+	if (flags & V850_FLAG_S) {
+		r_strbuf_append (&op->esil, ",31,$s,s,:=");
+	}
+	if (flags & V850_FLAG_Z) {
+		r_strbuf_append (&op->esil, ",$z,z,:=");
+	}
 }
 
 static void clear_flags(RAnalOp *op, int flags) {
-	if (flags & V850_FLAG_CY) r_strbuf_append (&op->esil, ",0,cy,=");
-	if (flags & V850_FLAG_OV) r_strbuf_append (&op->esil, ",0,ov,=");
-	if (flags & V850_FLAG_S) r_strbuf_append (&op->esil, ",0,s,=");
-	if (flags & V850_FLAG_Z) r_strbuf_append (&op->esil, ",0,z,=");
+	if (flags & V850_FLAG_CY) {
+		r_strbuf_append (&op->esil, ",0,cy,=");
+	}
+	if (flags & V850_FLAG_OV) {
+		r_strbuf_append (&op->esil, ",0,ov,=");
+	}
+	if (flags & V850_FLAG_S) {
+		r_strbuf_append (&op->esil, ",0,s,=");
+	}
+	if (flags & V850_FLAG_Z) {
+		r_strbuf_append (&op->esil, ",0,z,=");
+	}
 }
 
-static int v850_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len) {
+static int v850_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
 	int ret = 0;
 	ut8 opcode = 0;
 	const char *reg1 = NULL;
@@ -36,20 +175,19 @@ static int v850_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len)
 	ut16 word1 = 0, word2 = 0;
 	struct v850_cmd cmd;
 
+	if (len < 1 || (len > 0 && !memcmp (buf, "\xff\xff\xff\xff\xff\xff", R_MIN (len, 6)))) {
+		return -1;
+	}
+
 	memset (&cmd, 0, sizeof (cmd));
-	memset (op, 0, sizeof (RAnalOp));
-	r_strbuf_init (&op->esil);
-	r_strbuf_set (&op->esil, "");
 
-	ret = op->size = v850_decode_command (buf, &cmd);
+	ret = op->size = v850_decode_command (buf, len, &cmd);
 
-	if (ret <= 0) {
+	if (ret < 1) {
 		return ret;
 	}
 
 	op->addr = addr;
-	op->jump = op->fail = -1;
-	op->ptr = op->val = -1;
 
 	word1 = r_read_le16 (buf);
 	if (ret == 4) {
@@ -70,7 +208,7 @@ static int v850_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len)
 		break;
 	case V850_MOVEA:
 		op->type = R_ANAL_OP_TYPE_MOV;
-		// FIXME: to decide about reading 16/32 bit and use only macroses to access
+		// FIXME: to decide about reading 16/32 bit and use only macros to access
 		r_strbuf_appendf (&op->esil, "%s,0xffff,&,%u,+,%s,=", F6_RN1(word1), word2, F6_RN2(word1));
 		break;
 	case V850_SLDB:
@@ -120,7 +258,7 @@ static int v850_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len)
 		op->type = R_ANAL_OP_TYPE_JMP;
 		op->jump = addr + F5_DISP(((ut32)word2 << 16) | word1);
 		op->fail = addr + 4;
-		r_strbuf_appendf (&op->esil, "pc,%s,=,pc,%hu,+=", F5_RN2(word1), F5_DISP(((ut32)word2 << 16) | word1));
+		r_strbuf_appendf (&op->esil, "pc,%s,=,pc,%u,+=", F5_RN2(word1), F5_DISP(((ut32)word2 << 16) | word1));
 		break;
 #if 0 // WTF - same opcode as JARL?
 	case V850_JR:
@@ -337,8 +475,8 @@ static int v850_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len)
 			break;
 		case V850_EXT_SAR:
 			op->type = R_ANAL_OP_TYPE_SAR;
-			reg1 = F9_RN1(word1);
-			reg2 = F9_RN2(word1);
+			reg1 = F9_RN1 (word1);
+			reg2 = F9_RN2 (word1);
 			r_strbuf_appendf (&op->esil, "31,%s,>>,?{,%s,32,-,%s,1,<<,--,<<,}{,0,},%s,%s,>>,|,%s,=", reg2, reg1, reg1, reg1, reg2, reg2);
 			update_flags (op, V850_FLAG_CY | V850_FLAG_S | V850_FLAG_Z);
 			clear_flags (op, V850_FLAG_OV);
@@ -354,17 +492,27 @@ static char *get_reg_profile(RAnal *anal) {
 	const char *p =
 		"=PC	pc\n"
 		"=SP	r3\n"
+		"=SN	r1\n"
 		"=ZF	z\n"
+		"=A0	r1\n"
+		"=A1	r5\n"
+		"=A2	r6\n"
+		"=A3	r7\n"
+		"=A4	r8\n"
 		"=SF	s\n"
 		"=OF	ov\n"
 		"=CF	cy\n"
 
+		"gpr	zero	.32	?   0\n"
 		"gpr	r0	.32	0   0\n"
 		"gpr	r1	.32	4   0\n"
 		"gpr	r2	.32	8   0\n"
 		"gpr	r3	.32	12  0\n"
+		"gpr	sp	.32	12  0\n"
 		"gpr	r4	.32	16  0\n"
+		"gpr	gp	.32	16  0\n"
 		"gpr	r5	.32	20  0\n"
+		"gpr	tp	.32	20  0\n"
 		"gpr	r6	.32	24  0\n"
 		"gpr	r7	.32	28  0\n"
 		"gpr	r8	.32	32  0\n"
@@ -390,34 +538,60 @@ static char *get_reg_profile(RAnal *anal) {
 		"gpr	r28	.32	112 0\n"
 		"gpr	r29	.32	116 0\n"
 		"gpr	r30	.32	120 0\n"
+		"gpr	ep	.32	120 0\n"
 		"gpr	r31	.32	124 0\n"
+		"gpr	lp	.32	124 0\n"
 		"gpr	pc	.32	128 0\n"
 
-		"gpr	psw .32 132 0\n"
-		"gpr	np  .1 132.16 0\n"
-		"gpr	ep  .1 132.17 0\n"
-		"gpr	ae  .1 132.18 0\n"
-		"gpr	id  .1 132.19 0\n"
-		"flg	cy  .1 132.28 0\n"
-		"flg	ov  .1 132.29 0\n"
-		"flg	s   .1 132.30 0\n"
-		"flg	z   .1 132.31 0\n";
+		// 32bit [   RFU   ][NP EP ID SAT CY OV S Z]
+		"gpr	psw .32 132 0\n" // program status word
+		"gpr	npi  .1 132.16 0\n" // non maskerable interrupt (NMI)
+		"gpr	epi  .1 132.17 0\n" // exception processing interrupt
+		"gpr	id   .1 132.18 0\n" // :? should be id
+		"gpr	sat  .1 132.19 0\n" // saturation detection
+		"flg	cy  .1 132.28 0\n" // carry or borrow
+		"flg	ov  .1 132.29 0\n" // overflow
+		"flg	s   .1 132.30 0\n" // signed result
+		"flg	z   .1 132.31 0\n"; // zero result
 	return strdup (p);
+}
+
+static RList *anal_preludes(RAnal *anal) {
+#define KW(d,ds,m,ms) r_list_append (l, r_search_keyword_new((const ut8*)d,ds,(const ut8*)m, ms, NULL))
+	RList *l = r_list_newf ((RListFree)r_search_keyword_free);
+	KW ("\x80\x07", 2, "\xf0\xff", 2);
+	KW ("\x50\x1a\x63\x0f", 4, "\xf0\xff\xff\x0f", 4);
+	return l;
+}
+
+static int archinfo(RAnal *anal, int q) {
+	switch (q) {
+	case R_ANAL_ARCHINFO_ALIGN:
+	case R_ANAL_ARCHINFO_DATA_ALIGN:
+		return 2;
+	case R_ANAL_ARCHINFO_MAX_OP_SIZE:
+		return 8;
+	case R_ANAL_ARCHINFO_MIN_OP_SIZE:
+		return 2;
+	}
+	return 0;
 }
 
 RAnalPlugin r_anal_plugin_v850 = {
 	.name = "v850",
 	.desc = "V850 code analysis plugin",
 	.license = "LGPL3",
+	.preludes = anal_preludes,
 	.arch = "v850",
 	.bits = 32,
 	.op = v850_op,
 	.esil = true,
+	.archinfo = archinfo,
 	.get_reg_profile = get_reg_profile,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_v850,
 	.version = R2_VERSION

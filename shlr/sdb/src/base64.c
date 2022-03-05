@@ -1,16 +1,12 @@
-/* base64 enc/dec - MIT - Copyright 2011-2016 - pancake */
+/* base64 enc/dec - MIT - Copyright 2011-2022 - pancake */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 #include "sdb.h"
 
 #define SZ 1024
 static const char cb64[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static const char cd64[]="|$$$}rstuvwxyz{$$$$$$$>?@ABCDEFGHIJKLMNOPQRSTUVW$$$$$$XYZ[\\]^_`abcdefghijklmnopq";
 
-static void b64_encode(const ut8 in[3], char out[4], int len) {
+static void sdb_b64_encode(const ut8 in[3], char out[4], int len) {
 	if (len < 1) {
 		return;
 	}
@@ -20,7 +16,7 @@ static void b64_encode(const ut8 in[3], char out[4], int len) {
 	out[3] = (len > 2 ? cb64[ in[2] & 0x3f ] : '=');
 }
 
-static int b64_decode(const char in[4], ut8 out[3]) {
+static int sdb_b64_decode(const char in[4], ut8 out[3]) {
 	int len = 3;
 	ut8 i, v[4] = {0};
 	for (i = 0; i < 4; i++) {
@@ -43,7 +39,7 @@ static int b64_decode(const char in[4], ut8 out[3]) {
 SDB_API void sdb_encode_raw(char *bout, const ut8 *bin, int len) {
 	int in, out;
 	for (in = out = 0; in < len; in += 3,out+=4) {
-		b64_encode (bin + in, bout + out,
+		sdb_b64_encode (bin + in, bout + out,
 			(len - in) > 3? 3: (len - in));
 	}
 	bout[out] = 0;
@@ -52,7 +48,7 @@ SDB_API void sdb_encode_raw(char *bout, const ut8 *bin, int len) {
 SDB_API int sdb_decode_raw(ut8 *bout, const char *bin, int len) {
 	int in, out, ret;
 	for (in = out = 0; in < len; in += 4) {
-		ret = b64_decode (bin + in, bout + out);
+		ret = sdb_b64_decode (bin + in, bout + out);
 		if (ret < 1) {
 			break;
 		}
@@ -72,7 +68,7 @@ SDB_API char *sdb_encode(const ut8 *bin, int len) {
 	if (!len) {
 		return strdup ("");
 	}
-	out = calloc (8 + (len * 2), sizeof (char));
+	out = (char *)calloc (8 + (len * 2), sizeof (char));
 	if (!out) {
 		return NULL;
 	}
@@ -80,7 +76,7 @@ SDB_API char *sdb_encode(const ut8 *bin, int len) {
 	return out;
 }
 
-SDB_API ut8 *sdb_decode (const char *in, int *len) {
+SDB_API ut8 *sdb_decode(const char *in, int *len) {
 	ut8 *out;
 	ut32 size;
 	int olen, ilen;
@@ -90,7 +86,7 @@ SDB_API ut8 *sdb_decode (const char *in, int *len) {
 	if (!in) {
 		return NULL;
 	}
-	ilen = strlen (in);
+	ilen = (int)strlen (in);
 	if (!ilen) {
 		return NULL;
 	}
@@ -98,7 +94,7 @@ SDB_API ut8 *sdb_decode (const char *in, int *len) {
 	if (size < (ut32)ilen) {
 		return NULL;
 	}
-	out = calloc (1, size);
+	out = (ut8 *)calloc (1, size);
 	if (!out) {
 		return NULL;
 	}

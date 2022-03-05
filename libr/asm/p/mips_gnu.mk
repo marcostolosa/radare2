@@ -2,8 +2,12 @@ OBJ_MIPS=asm_mips_gnu.o
 # gnu mips-dis
 OBJ_MIPS+=../arch/mips/gnu/mips-dis.o
 OBJ_MIPS+=../arch/mips/gnu/mips16-opc.o
+OBJ_MIPS+=../arch/mips/gnu/micromips-opc.o
 OBJ_MIPS+=../arch/mips/gnu/mips-opc.o
+
+ifeq ($(WANT_CAPSTONE),0)
 OBJ_MIPS+=../arch/mips/mipsasm.o
+endif
 
 TARGET_MIPS=asm_mips_gnu.${EXT_SO}
 STATIC_OBJ+=${OBJ_MIPS}

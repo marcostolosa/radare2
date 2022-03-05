@@ -258,8 +258,9 @@ char *get_reg_pair(ut32 idx) {
 	default: res = NULL;
 	}
 
-	if(res != NULL)
-		res = strdup(res);
+	if (res != NULL) {
+		res = strdup (res);
+	}
 
 	return res;
 }
@@ -322,8 +323,9 @@ char *get_reg_name_3(ut32 idx) {
 	default: res = NULL;
 	}
 
-	if (res != NULL)
-		res = strdup(res);
+	if (res != NULL) {
+		res = strdup (res);
+	}
 	return res;
 }
 
@@ -377,8 +379,9 @@ char *get_reg_name_2(ut32 idx) {
 	default: res = NULL;
 	}
 
-	if(res != NULL)
-		res = strdup(res);
+	if (res != NULL) {
+		res = strdup (res);
+	}
 
 	return res;
 }
@@ -631,68 +634,69 @@ char *get_reg_name_1(ut32 idx) {
 	default: res = NULL;
 	}
 
-	if(res != NULL)
-		res = strdup(res);
+	if (res != NULL) {
+		res = strdup (res);
+	}
 
 	return res;
 }
 
 
 char *get_status_regs_and_bits(char *reg_arg, int reg_bit) {
-  char *res = NULL;
-  if(!strncmp(reg_arg, "ST0", 3)) {
-    switch(reg_bit) {
-	case 0:
-		res = "st0_dp07";
-		break;
-	case 1:
-		res = "st0_dp08";
-		break;
-	case 2:
-		res = "st0_dp09";
-		break;
-	case 3:
-		res = "st0_dp10";
-		break;
-	case 4:
-		res = "st0_dp11";
-		break;
-	case 5:
-		res = "st0_dp12";
-		break;
-	case 6:
-		res = "st0_dp13";
-		break;
-	case 7:
-		res = "st0_dp14";
-		break;
-	case 8:
-		res = "st0_dp15";
-		break;
-	case 9:
-		res = "st0_acov1";
-		break;
-	case 10:
-		res = "st0_acov0";
-		break;
-	case 11:
-		res = "st0_carry";
-		break;
-	case 12:
-		res = "st0_tc2";
-		break;
-	case 13:
-		res = "st0_tc1";
-		break;
-	case 14:
-		res = "st0_acov3";
-		break;
-	case 15:
-		res = "st0_acov2";
-		break;
-    }
-  } else if(!strncmp(reg_arg, "ST1", 3)) {
-		switch(reg_bit) {
+	char *res = NULL;
+	if (!strncmp (reg_arg, "ST0", 3)) {
+		switch (reg_bit) {
+		case 0:
+			res = "st0_dp07";
+			break;
+		case 1:
+			res = "st0_dp08";
+			break;
+		case 2:
+			res = "st0_dp09";
+			break;
+		case 3:
+			res = "st0_dp10";
+			break;
+		case 4:
+			res = "st0_dp11";
+			break;
+		case 5:
+			res = "st0_dp12";
+			break;
+		case 6:
+			res = "st0_dp13";
+			break;
+		case 7:
+			res = "st0_dp14";
+			break;
+		case 8:
+			res = "st0_dp15";
+			break;
+		case 9:
+			res = "st0_acov1";
+			break;
+		case 10:
+			res = "st0_acov0";
+			break;
+		case 11:
+			res = "st0_carry";
+			break;
+		case 12:
+			res = "st0_tc2";
+			break;
+		case 13:
+			res = "st0_tc1";
+			break;
+		case 14:
+			res = "st0_acov3";
+			break;
+		case 15:
+			res = "st0_acov2";
+			break;
+		}
+	} else if (!strncmp (reg_arg, "ST1", 3)) {
+		switch (reg_bit) {
 		case 0:
 			res = "st1_dr2_00";
 			break;
@@ -741,9 +745,9 @@ char *get_status_regs_and_bits(char *reg_arg, int reg_bit) {
 		case 15:
 			res = "st1_braf";
 			break;
-      }
-  } else if(!strncmp(reg_arg, "ST2", 3)) {
-		switch ( reg_bit ) {
+		}
+	} else if (!strncmp (reg_arg, "ST2", 3)) {
+		switch (reg_bit) {
 		case 0:
 			res = "st2_ar0lc";
 			break;
@@ -792,8 +796,8 @@ char *get_status_regs_and_bits(char *reg_arg, int reg_bit) {
 		case 15:
 			res = "st2_arms";
 			break;
-       }
-  } else if (!strncmp(reg_arg, "ST3", 3)) {
+		}
+	} else if (!strncmp (reg_arg, "ST3", 3)) {
 		switch (reg_bit) {
 		case 0:
 			res = "st3_sst";
@@ -843,13 +847,14 @@ char *get_status_regs_and_bits(char *reg_arg, int reg_bit) {
 		case 15:
 			res = "st3_cafrz";
 			break;
-        }
-  }
+		}
+	}
 
-  if(res != NULL)
-	res = strdup(res);
+	if (res != NULL) {
+	        res = strdup (res);
+	}
 
-  return res;
+	return res;
 }
 
 
@@ -946,143 +951,104 @@ char *get_reg_name_4(ut32 idx) {
 }
 
 char *get_opers(ut8 oper_byte) {
-	char *res = NULL;
-	ut8 oper_type = 0x00;
-	char *reg_name = NULL;
-
 	switch (oper_byte) {
 	case 0xE0u:
-		res = strdup ("overflow(ac0)");
-		break;
+		return strdup ("overflow(ac0)");
 	case 0xE1u:
-		res = strdup ("overflow(ac1)");
-		break;
+		return strdup ("overflow(ac1)");
 	case 0xE2u:
-		res = strdup ("overflow(ac2)");
-		break;
+		return strdup ("overflow(ac2)");
 	case 0xE3u:
-		res = strdup ("overflow(ac3)");
-		break;
+		return strdup ("overflow(ac3)");
 	case 0xE4u:
-		res = strdup ("tc1");
-		break;
+		return strdup ("tc1");
 	case 0xE5u:
-		res = strdup ("tc2");
-		break;
+		return strdup ("tc2");
 	case 0xE6u:
-		res = strdup ("carry");
-		break;
+		return strdup ("carry");
 	case 0xE7u:
-		res = strdup ("overflow(govf)");
-		break;
+		return strdup ("overflow(govf)");
 	case 0xE8u:
-		res = strdup ("tc1 & tc2");
-		break;
+		return strdup ("tc1 & tc2");
 	case 0xE9u:
-		res = strdup ("tc1 & !tc2");
-		break;
+		return strdup ("tc1 & !tc2");
 	case 0xEAu:
-		res = strdup ("!tc1 & tc2");
-		break;
+		return strdup ("!tc1 & tc2");
 	case 0xEBu:
-		res = strdup ("!tc1 & !tc2");
-		break;
+		return strdup ("!tc1 & !tc2");
 	case 0xECu:
-		res = strdup ("word_mode");
-		break;
+		return strdup ("word_mode");
 	case 0xEDu:
-		res = strdup ("byte_mode");
-		break;
+		return strdup ("byte_mode");
 	case 0xF0u:
-		res = strdup ("!overflow(ac0)");
-		break;
+		return strdup ("!overflow(ac0)");
 	case 0xF1u:
-		res = strdup ("!overflow(ac1)");
-		break;
+		return strdup ("!overflow(ac1)");
 	case 0xF2u:
-		res = strdup ("!overflow(ac2)");
-		break;
+		return strdup ("!overflow(ac2)");
 	case 0xF3u:
-		res = strdup ("!overflow(ac3)");
-		break;
+		return strdup ("!overflow(ac3)");
 	case 0xF4u:
-		res = strdup ("!tc1");
-		break;
+		return strdup ("!tc1");
 	case 0xF5u:
-		res = strdup ("!tc2");
-		break;
+		return strdup ("!tc2");
 	case 0xF6u:
-		res = strdup ("!carry");
-		break;
+		return strdup ("!carry");
 	case 0xF7u:
-		res = strdup ("!overflow(govf)");
-		break;
+		return strdup ("!overflow(govf)");
 	case 0xF8u:
-		res = strdup ("tc1 | tc2");
-		break;
+		return strdup ("tc1 | tc2");
 	case 0xF9u:
-		res = strdup ("tc1 | !tc2");
-		break;
+		return strdup ("tc1 | !tc2");
 	case 0xFAu:
-		res = strdup ("!tc1 | tc2");
-		break;
+		return strdup ("!tc1 | tc2");
 	case 0xFBu:
-		res = strdup ("!tc1 | !tc2");
-		break;
+		return strdup ("!tc1 | !tc2");
 	case 0xFCu:
-		res = strdup ("tc1 ^ tc2");
-		break;
+		return strdup ("tc1 ^ tc2");
 	case 0xFDu:
-		res = strdup ("tc1 ^ !tc2");
-		break;
+		return strdup ("tc1 ^ !tc2");
 	case 0xFEu:
-		res = strdup ("!tc1 ^ tc2");
-		break;
+		return strdup ("!tc1 ^ tc2");
 	case 0xFFu:
-		res = strdup("!tc1 ^ !tc2");
-		break;
-	default:
-		oper_type = oper_byte >> 5;
-		if (oper_type != 6 ) {
-			reg_name = get_reg_name_4 (oper_byte & 0x1F);
+		return strdup("!tc1 ^ !tc2");
+	default: {
+		ut8 oper_type = oper_byte >> 5;
+		if (oper_type != 6) {
+			char *reg_name = get_reg_name_4 (oper_byte & 0x1F);
 			switch (oper_type) {
 			case 1u:
-				res = strcat_dup (reg_name, " != #0", 1);
-				break;
+				return strcat_dup (reg_name, " != #0", 1);
 			case 0u:
-				res = strcat_dup (reg_name, " == #0", 1);
-				break;
+				return strcat_dup (reg_name, " == #0", 1);
 			case 2u:
-				res =  strcat_dup (reg_name, " < #0", 1);
-				break;
+				return strcat_dup (reg_name, " < #0", 1);
 			case 3u:
-				res =  strcat_dup (reg_name, " >= #0", 1);
-				break;
+				return strcat_dup (reg_name, " >= #0", 1);
 			case 4u:
-				res =  strcat_dup (reg_name, " > #0", 1);
-				break;
+				return strcat_dup (reg_name, " > #0", 1);
 			case 5u:
-				res =  strcat_dup (reg_name, " <= #0", 1);
+				return strcat_dup (reg_name, " <= #0", 1);
+			default:
+				free (reg_name);
+				return NULL;
 			}
-			//TODO: still can leak
-			return res;
 		}
-		reg_name = get_reg_name_1 ((oper_byte & 0xF) + 128);
+		char *reg_name = get_reg_name_1 ((oper_byte & 0xF) + 128);
 		oper_type = (oper_byte >> 4) - 12;
 		if (oper_type) {
 			if (oper_type != 1) {
 				free (reg_name);
 				return NULL;
 			}
-			res = strcat_dup (reg_name, " != #0", 1);
+			return strcat_dup (reg_name, " != #0", 1);
 		} else {
 			// coverity may complain but strcat_dup set to null
 			// reg_name when free
-			res = strcat_dup (reg_name, " == #0", 1);
+			return strcat_dup (reg_name, " == #0", 1);
 		}
 	}
-	free (reg_name);
-	return res;
+	}
 }
 
 char *get_cmp_op(ut32 idx) {

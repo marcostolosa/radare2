@@ -1,29 +1,45 @@
-files = [
-  'aes-find.c',
+r_search_sources = [
+  'aes_find.c',
   'bytepat.c',
   'keyword.c',
-  # 'old_xrefs.c',
   'regexp.c',
-  'rsa-find.c',
+  'uds.c',
+  'privkey_find.c',
+  'rabin_karp.c',
   'search.c',
-  'strings.c',
-  'xrefs.c',
+  'strings.c'
 ]
 
-r_search = library('r_search', files,
+r_search = library('r_search', r_search_sources,
   include_directories: [platform_inc],
-  link_with: [r_util],
+  c_args: library_cflags,
+  dependencies: [r_util_dep],
   install: true,
   implicit_include_directories: false,
-  soversion: r2libversion
+  install_rpath: rpath_lib,
+  soversion: r2_libversion
 )
 
-pkgconfig_mod.generate(
-  libraries: [r_search],
+r_search_dep = declare_dependency(link_with: r_search,
+  include_directories: [platform_inc])
+
+r_search_static = static_library('r_search_static', r_search_sources,
+  include_directories: [platform_inc],
+  c_args: library_cflags,
+  dependencies: [r_util_static_dep],
+  install: true,
+  implicit_include_directories: false,
+)
+
+r_search_static_dep = declare_dependency(link_with: r_search_static,
+  include_directories: [platform_inc])
+
+pkgconfig_mod.generate(r_search,
   subdirs: 'libr',
-  version: r2version,
+  version: r2_version,
   name: 'r_search',
   filebase: 'r_search',
+  libraries: pkgcfg_sanitize_libs,
   requires: [
     'r_util'
   ],

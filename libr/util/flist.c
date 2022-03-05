@@ -18,9 +18,9 @@ void** r_flist_get(void **x) {
 #if 1
 #define r_flist_t void**
 #define RFList void**
-#define r_flist_rewind(it) for (; it!=*it; it--) {} it++
-#define r_flist_next(it) *it!=0
-#define r_flist_get(it) *(it++)
+#define r_flist_rewind(it) for (; (it)!=*(it); (it)--) {} (it)++
+#define r_flist_next(it) *(it)!=0
+#define r_flist_get(it) *((it)++)
 #define r_flist_iterator(x) x
 #define r_flist_unref(x) x
 #endif
@@ -31,7 +31,7 @@ R_API void **r_flist_new(int n) {
 		return NULL;
 	}
 	*it = it;
-	memset (++it, 0, (n+1) * sizeof (void*));
+	memset (++it, 0, (n + 1) * sizeof (void*));
 	return it;
 }
 
@@ -58,25 +58,29 @@ R_API void r_flist_delete(void **it, int idx) {
 	r_flist_rewind (it);
 	free (it[idx]);
 	it[idx] = NULL;
-	for (it += idx; *it; it++) *it = *(it+1);
+	for (it += idx; *it; it++) {
+		*it = *(it + 1);
+	}
 }
 
 #define r_flist_foreach(it, pos) \
 	r_flist_rewind(it); \
-	while (r_flist_next (it) && (pos = r_flist_get (it)))
+	while (r_flist_next (it) && ((pos) = r_flist_get (it)))
 
 R_API void r_flist_free(void **it) {
 	void *pos;
-	r_flist_foreach (it, pos)
+	r_flist_foreach (it, pos) {
 		free (pos);
+	}
 	r_flist_rewind (it);
 	free (--it);
 }
 
-R_API int r_flist_length (void **it) {
+R_API int r_flist_length(void **it) {
 	void *pos;
 	int len = 0;
-	r_flist_foreach (it, pos)
+	r_flist_foreach (it, pos) {
 		len++;
+	}
 	return len;
 }

@@ -1,96 +1,45 @@
-/* radare - LGPL - Copyright 2011-2015 pancake */
+/* radare - LGPL - Copyright 2011-2020 pancake */
 
-#include <r_types.h>
-#include <r_util.h>
 #include <r_lib.h>
-#include <r_asm.h>
+#include "../binutils_as.h"
 
-#ifndef O_BINARY
-#define O_BINARY 0
-#endif
+#define ASSEMBLER "R2_X86_AS"
 
 static int assemble(RAsm *a, RAsmOp *op, const char *buf) {
-	char *ipath, *opath;
-	int ifd, ofd;
+#if __i386__ || __x86_64__
+	const char *as = "as";
+#else
+	const char *as = "";
+#endif
 	const char *syntaxstr = "";
-	char asm_buf[R_ASM_BUFSIZE];
-	int len = 0;
-
-	ifd = r_file_mkstemp ("r_as", &ipath);
-	if (ifd == -1)
-		return -1;
-
-	ofd = r_file_mkstemp ("r_as", &opath);
-	if (ofd == -1) {
-		free (ipath);
-		return -1;
-	}
-
-	if (a->syntax == R_ASM_SYNTAX_INTEL)
+	switch (a->syntax) {
+	case R_ASM_SYNTAX_INTEL:
 		syntaxstr = ".intel_syntax noprefix\n";
-
-	if (a->syntax == R_ASM_SYNTAX_ATT)
+		break;
+	case R_ASM_SYNTAX_ATT:
 		syntaxstr = ".att_syntax\n";
-
-	len = snprintf (asm_buf, sizeof (asm_buf),
-			"%s.code%i\n" //.org 0x%"PFMT64x"\n"
-			".ascii \"BEGINMARK\"\n"
-			"%s\n"
-			".ascii \"ENDMARK\"\n",
-			syntaxstr, a->bits, buf); // a->pc ??
-	write (ifd, asm_buf, len);
-	//write (1, asm_buf, len);
-	close (ifd);
-
-	if (!r_sys_cmdf ("as %s -o %s", ipath, opath)) {
-		const ut8 *begin, *end;
-		close (ofd);
-		ofd = open (opath, O_BINARY|O_RDONLY);
-		if (ofd < 0) {
-			free (ipath);
-			free (opath);
-			return -1;
-		}
-		len = read (ofd, op->buf, R_ASM_BUFSIZE);
-		begin = r_mem_mem (op->buf, len, (const ut8*)"BEGINMARK", 9);
-		end = r_mem_mem (op->buf, len, (const ut8*)"ENDMARK", 7);
-		if (!begin || !end) {
-			eprintf ("Cannot find water marks\n");
-			len = 0;
-		} else {
-			len = (int)(size_t)(end-begin-9);
-			if (len>0) memcpy (op->buf, begin+9, len);
-			else len = 0;
-		}
-	} else {
-		eprintf ("Error running: as %s -o %s", ipath, opath);
-		len = 0;
+		break;
 	}
 
-	close (ofd);
-
-	unlink (ipath);
-	unlink (opath);
-	free (ipath);
-	free (opath);
-
-	op->size = len;
-	return len;
+	char header[4096];
+	snprintf (header, sizeof (header), "%s.code%i\n", // .org 0x%"PFMT64x"\n"
+		syntaxstr, a->bits);
+	return binutils_assemble (a, op, buf, as, ASSEMBLER, header, "");
 }
 
 RAsmPlugin r_asm_plugin_x86_as = {
 	.name = "x86.as",
-	.desc = "Intel X86 GNU Assembler",
+	.desc = "Intel X86 GNU Assembler (Use "ASSEMBLER" env)",
 	.arch = "x86",
 	.license = "LGPL3",
 	// NOTE: 64bits is not supported on OSX's nasm :(
-	.bits = 16|32|64,
+	.bits = 16 | 32 | 64,
 	.endian = R_SYS_ENDIAN_LITTLE,
 	.assemble = &assemble,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ASM,
 	.data = &r_asm_plugin_x86_as,
 	.version = R2_VERSION

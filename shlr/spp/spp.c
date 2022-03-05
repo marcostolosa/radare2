@@ -1,10 +1,16 @@
-/* MIT (C) pancake (at) nopcode (dot) org - 2009-2017 */
+/* MIT pancake <pancake@nopcode.org> (C) 2009-2021 */
 
 #include "spp.h"
+#include "r_api.h"
 #include "config.h"
 
-int spp_run(char *buf, Output *out) {
-	int i, ret = 0;
+#if !USE_R2
+#include "r_api.c"
+#endif
+
+S_API int spp_run(char *buf, Output *out) {
+	size_t i;
+	int ret = 0;
 	char *tok;
 
 	D fprintf (stderr, "SPP_RUN(%s)\n", buf);
@@ -39,7 +45,6 @@ int spp_run(char *buf, Output *out) {
 				break;
 			}
 			if (ret) {
-
 				if (proc->state.ifl < 0 || proc->state.ifl >= MAXIFL) {
 					fprintf (stderr, "Nested conditionals parsing error.\n");
 					break;
@@ -65,30 +70,22 @@ static char *spp_run_str(char *buf, int *rv) {
 	return b;
 }
 
-void lbuf_strcat(SppBuf *dst, char *src) {
+S_API void lbuf_strcat(SppBuf *dst, char *src) {
 	int len = strlen (src);
+	char *nbuf;
 	if (!dst->lbuf || (len + dst->lbuf_n) > dst->lbuf_s) {
-		dst->lbuf = realloc (dst->lbuf, dst->lbuf_s << 1);
+		nbuf = realloc (dst->lbuf, dst->lbuf_s << 1);
+		if (!nbuf) {
+			fprintf (stderr, "Out of memory.\n");
+			return;
+		}
+		dst->lbuf = nbuf;
 	}
 	memcpy (dst->lbuf + dst->lbuf_n, src, len + 1);
 	dst->lbuf_n += len;
 }
 
-void do_printf(Output *out, char *str, ...) {
-	va_list ap;
-	va_start (ap, str);
-	if (out->fout) {
-		vfprintf (out->fout, str, ap);
-	} else {
-		char tmp[4096];
-		vsnprintf (tmp, sizeof (tmp), str, ap);
-		tmp[sizeof (tmp) - 1] = 0;
-		r_strbuf_append (out->cout, tmp);
-	}
-	va_end (ap);
-}
-
-int do_fputs(Output *out, char *str) {
+S_API int do_fputs(Output *out, char *str) {
 	int i;
 	int printed = 0;
 	for (i = 0; i <= proc->state.ifl; i++) {
@@ -109,7 +106,11 @@ int do_fputs(Output *out, char *str) {
 	return printed;
 }
 
-void spp_eval(char *buf, Output *out) {
+S_API void spp_eval(char *buf, Output *out) {
+	spp_proc_eval (proc, buf, out);
+}
+
+S_API void spp_proc_eval(SppProc *proc, char *buf, Output *out) {
 	char *ptr, *ptr2;
 	char *ptrr = NULL;
 	int delta;
@@ -228,7 +229,7 @@ retry:
 }
 
 /* TODO: detect nesting */
-void spp_io(FILE *in, Output *out) {
+S_API void spp_io(FILE *in, Output *out) {
 	char buf[4096];
 	int lines;
 	if (!proc->buf.lbuf) {
@@ -242,12 +243,15 @@ void spp_io(FILE *in, Output *out) {
 	proc->buf.lbuf_s = 1024;
 	while (!feof (in)) {
 		buf[0] = '\0'; // ???
-		fgets (buf, 1023, in);
+		if (!fgets (buf, sizeof (buf) - 1, in)) {
+			break;
+		}
 		if (feof (in)) break;
 		lines = 1;
 		if (!memcmp (buf, "#!", 2)) {
-			fgets (buf, 1023, in);
-			if (feof (in)) break;
+			if (!fgets (buf, sizeof (buf) - 1, in) || feof (in)) {
+				break;
+			}
 			lines++;
 		}
 		if (proc->multiline) {
@@ -255,7 +259,9 @@ void spp_io(FILE *in, Output *out) {
 				char *eol = buf + strlen (buf) - strlen (proc->multiline);
 				if (!strcmp (eol, proc->multiline)) {
 					D fprintf (stderr, "Multiline detected!\n");
-					fgets (eol, 1023, in);
+					if (!fgets (eol, 1023, in)) {
+						break;
+					}
 					if (feof (in)) {
 						break;
 					}
@@ -268,10 +274,10 @@ void spp_io(FILE *in, Output *out) {
 		spp_eval (buf, out);
 		proc->state.lineno += lines;
 	}
-	do_fputs (out, proc->buf.lbuf);
+	(void)do_fputs (out, proc->buf.lbuf);
 }
 
-int spp_file(const char *file, Output *out) {
+S_API int spp_file(const char *file, Output *out) {
 	FILE *in = fopen (file, "r");
 	D fprintf (stderr, "SPP-FILE(%s)\n", file);
 	if (in) {
@@ -283,35 +289,38 @@ int spp_file(const char *file, Output *out) {
 	return 0;
 }
 
-void spp_proc_list_kw() {
+S_API void spp_proc_list_kw() {
 	int i;
 	for (i = 0; tags[i].name; i++) {
 		printf ("%s\n", tags[i].name);
 	}
 }
 
-void spp_proc_list() {
-	int i;
-	for (i=0; procs[i]; i++) {
+S_API void spp_proc_list() {
+	size_t i;
+	for (i = 0; procs[i]; i++) {
 		printf ("%s\n", procs[i]->name);
 	}
 }
 
-void spp_proc_set(struct Proc *p, char *arg, int fail) {
-	int i, j;
-	if (arg)
-	for (j = 0; procs[j]; j++) {
-		if (!strcmp (procs[j]->name, arg)) {
-			proc = procs[j];
-			D printf ("SET PROC:(%s)(%s)\n", arg, proc->name);
-			break;
+S_API void spp_proc_set(SppProc *p, const char *arg, int fail) {
+	size_t i;
+	bool found = false;
+	if (arg) {
+		for (i = 0; procs[i]; i++) {
+			if (!strcmp (procs[i]->name, arg)) {
+				proc = procs[i];
+				found = true;
+				D printf ("SET PROC:(%s)(%s)\n", arg, proc->name);
+				break;
+			}
 		}
 	}
-	if (arg && *arg && !procs[j] && fail) {
+	if (arg && *arg && !procs[i] && fail) {
 		fprintf (stderr, "Invalid preprocessor name '%s'\n", arg);
 		return;
 	}
-	if (!proc) {
+	if (!found || !proc) {
 		proc = p;
 	}
 	if (proc) {
@@ -321,6 +330,45 @@ void spp_proc_set(struct Proc *p, char *arg, int fail) {
 			proc->state.echo[i] = proc->default_echo;
 		}
 		//args = (struct Arg*)proc->args;
-		tags = (struct Tag*)proc->tags;
+		tags = (SppTag*)proc->tags;
 	}
+}
+
+S_API void out_printf(Output *out, char *str, ...) {
+	va_list ap;
+	va_start (ap, str);
+	if (out->fout) {
+		vfprintf (out->fout, str, ap);
+	} else {
+		char tmp[4096];
+		vsnprintf (tmp, sizeof (tmp), str, ap);
+		tmp[sizeof (tmp) - 1] = 0;
+		r_strbuf_append (out->cout, tmp);
+	}
+	va_end (ap);
+}
+
+static void spp_proc_init(SppProc *p) {
+	p->state.lineno = 1;
+	p->state.ifl = 0;
+	size_t i;
+	for (i = 0; i < MAXIFL; i++) {
+		p->state.echo[i] = p->default_echo;
+	}
+}
+
+S_API char *spp_eval_str(SppProc *p, const char *code) {
+	if (p) {
+		spp_proc_init (p);
+	}
+	Output out;
+	out.fout = NULL;
+	out.cout = r_strbuf_new (NULL);
+	r_strbuf_init (out.cout);
+	char *c = strdup (code);
+	if (c) {
+		spp_proc_eval (p, c, &out);
+		free (c);
+	}
+	return r_strbuf_drain (out.cout);
 }

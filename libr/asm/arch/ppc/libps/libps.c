@@ -31,7 +31,7 @@ ps_opcode_t ps_opcodes_array[] = {
 	{ psq_st, "psq_st", OP (60), OP_MASK, { OP_FS, OP_DRA, OP_WB, OP_IB}, "Paired Single Quantized Store"},
 	{ psq_stu, "psq_stu", OP (61), OP_MASK, { OP_FS, OP_DRA, OP_WB, OP_IB}, "Paired Single Quantized Store with update"},
 
-	{ ps_div, "ps_div", OPSC (4, 18, 0), OPS_MASK, { OP_FD, OP_FA, OP_FB}, "Paired Single Divide"}, 
+	{ ps_div, "ps_div", OPSC (4, 18, 0), OPS_MASK, { OP_FD, OP_FA, OP_FB}, "Paired Single Divide"},
 	{ ps_div_dot, "ps_div.", OPSC (4, 18, 1), OPS_MASK_DOT, { OP_FD, OP_FA, OP_FB}, "Paired Single Divide"},
 	{ ps_sub, "ps_sub", OPSC (4, 20, 0), OPS_MASK, { OP_FD, OP_FA, OP_FB}, "Paired Single Subtract"},
 	{ ps_sub_dot, "ps_sub.", OPSC (4, 20, 1), OPS_MASK_DOT, { OP_FD, OP_FA, OP_FB}, "Paired Single Subtract"},
@@ -183,7 +183,7 @@ void libps_snprint(char* str, int size, ut64 addr, ppcps_t* instr) {
 	ut32 i;
 	int bufsize = size, add = 0;
 	add = snprintf (str, bufsize, "%s", instr->name);
-	for (i = 0; add > 0 && i < instr->n && add < bufsize; ++i) {
+	for (i = 0; add > 0 && i < instr->n && add < bufsize; i++) {
 		if (instr->operands[i].type == TYPE_REG) {
 			add += snprintf (str + add, bufsize - add, " fr%u", instr->operands[i].value);
 		} else if (instr->operands[i].type == TYPE_IMM) {

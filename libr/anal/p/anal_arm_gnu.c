@@ -10,6 +10,7 @@
 #include "wine-arm.h"
 #include "../asm/arch/arm/asm-arm.h"
 #include "../asm/arch/arm/winedbg/be_arm.h"
+#include "./anal_arm_hacks.inc"
 
 static unsigned int disarm_branch_offset(unsigned int pc, unsigned int insoff) {
 	unsigned int add = insoff << 2;
@@ -20,13 +21,13 @@ static unsigned int disarm_branch_offset(unsigned int pc, unsigned int insoff) {
 	return add + pc + 8;
 }
 
-#define IS_BRANCH(x)  ((x & ARM_BRANCH_I_MASK) == ARM_BRANCH_I)
-#define IS_BRANCHL(x) (IS_BRANCH (x) && (x & ARM_BRANCH_LINK) == ARM_BRANCH_LINK)
-#define IS_RETURN(x)  ((x & (ARM_DTM_I_MASK | ARM_DTM_LOAD | (1 << 15))) == (ARM_DTM_I | ARM_DTM_LOAD | (1 << 15)))
+#define IS_BRANCH(x)  (((x) & ARM_BRANCH_I_MASK) == ARM_BRANCH_I)
+#define IS_BRANCHL(x) (IS_BRANCH (x) && ((x) & ARM_BRANCH_LINK) == ARM_BRANCH_LINK)
+#define IS_RETURN(x)  (((x) & (ARM_DTM_I_MASK | ARM_DTM_LOAD | (1 << 15))) == (ARM_DTM_I | ARM_DTM_LOAD | (1 << 15)))
 // if ( (inst & ( ARM_DTX_I_MASK | ARM_DTX_LOAD  | ( ARM_DTX_RD_MASK ) ) ) == ( ARM_DTX_LOAD | ARM_DTX_I | ( ARM_PC << 12 ) ) )
 #define IS_UNKJMP(x)  ((((ARM_DTX_RD_MASK))) == (ARM_DTX_LOAD | ARM_DTX_I | (ARM_PC << 12)))
-#define IS_LOAD(x)    ((x & ARM_DTX_LOAD) == (ARM_DTX_LOAD))
-#define IS_CONDAL(x)  ((x & ARM_COND_MASK) == ARM_COND_AL)
+#define IS_LOAD(x)    (((x) & ARM_DTX_LOAD) == (ARM_DTX_LOAD))
+#define IS_CONDAL(x)  (((x) & ARM_COND_MASK) == ARM_COND_AL)
 #define IS_EXITPOINT(x) (IS_BRANCH (x) || IS_RETURN (x) || IS_UNKJMP (x))
 
 #define API static
@@ -42,8 +43,6 @@ static int op_thumb(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 	arm_set_thumb (arminsn, true);
 	arm_set_input_buffer (arminsn, data);
 	arm_set_pc (arminsn, addr);
-	op->jump = op->fail = -1;
-	op->ptr = op->val = -1;
 	op->delay = 0;
 	op->size = arm_disasm_one_insn (arminsn);
 	op->jump = arminsn->jmp;
@@ -75,8 +74,7 @@ static int op_thumb(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 	if (ins == 0xbf) {
 		// TODO: add support for more NOP instructions
 		op->type = R_ANAL_OP_TYPE_NOP;
-	} else if (((op_code = ((ins & B4 (B1111, B1000, 0, 0)) >> 11)) >= 12 &&
-	            op_code <= 17)) {
+	} else if (((op_code = ((ins & B4 (B1111, B1000, 0, 0)) >> 11)) >= 12 && op_code <= 17)) {
 		if (op_code % 2) {
 			op->type = R_ANAL_OP_TYPE_LOAD;
 		} else {
@@ -101,13 +99,11 @@ static int op_thumb(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 		op->type = R_ANAL_OP_TYPE_JMP;
 		op->jump = addr + 4 + (delta << 1);
 		op->fail = addr + 4;
-	} else if ((ins & B4 (B1111, B1111, B1000, 0)) ==
-	           B4 (B0100, B0111, B1000, 0)) {
+	} else if ((ins & B4 (B1111, B1111, B1000, 0)) == B4 (B0100, B0111, B1000, 0)) {
 		// BLX
 		op->type = R_ANAL_OP_TYPE_UCALL;
 		op->fail = addr + 4;
-	} else if ((ins & B4 (B1111, B1111, B1000, 0)) ==
-	           B4 (B0100, B0111, 0, 0)) {
+	} else if ((ins & B4 (B1111, B1111, B1000, 0)) == B4 (B0100, B0111, 0, 0)) {
 		// BX
 		op->type = R_ANAL_OP_TYPE_UJMP;
 		op->fail = addr + 4;
@@ -168,7 +164,7 @@ static int op_cond(const ut8 *data) {
 
 static int arm_op32(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len) {
 	const ut8 *b = (ut8 *) data;
-	ut8 ndata[4];
+	ut8 ndata[4] = {0};
 	ut32 branch_dst_addr, i = 0;
 	ut32 *code = (ut32 *) data;
 	struct winedbg_arm_insn *arminsn;
@@ -176,22 +172,20 @@ static int arm_op32(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 	if (!data) {
 		return 0;
 	}
-	memset (op, '\0', sizeof (RAnalOp));
 	arminsn = arm_new ();
 	arm_set_thumb (arminsn, false);
 	arm_set_input_buffer (arminsn, data);
 	arm_set_pc (arminsn, addr);
-	op->jump = op->fail = -1;
-	op->ptr = op->val = -1;
 	op->addr = addr;
 	op->type = R_ANAL_OP_TYPE_UNK;
 
 	if (anal->big_endian) {
 		b = data = ndata;
+		ut8 tmp = data[3];
 		ndata[0] = data[3];
 		ndata[1] = data[2];
 		ndata[2] = data[1];
-		ndata[3] = data[0];
+		ndata[3] = tmp;
 	}
 	if (anal->bits == 16) {
 		arm_free (arminsn);
@@ -274,10 +268,9 @@ static int arm_op32(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 		op->type = R_ANAL_OP_TYPE_SUB;
 		op->stackop = R_ANAL_STACK_INC;
 		op->val = -b[0];
-	} else if ((code[i] == 0x1eff2fe1) ||
-	           (code[i] == 0xe12fff1e)) {  // bx lr
+	} else if (code[i] == 0x1eff2fe1 || code[i] == 0xe12fff1e) {  // bx lr
 		op->type = R_ANAL_OP_TYPE_RET;
-	} else if ((code[i] & ARM_DTX_LOAD)) {  // IS_LOAD(code[i])) {
+	} else if (code[i] & ARM_DTX_LOAD) {  // IS_LOAD(code[i])) {
 		ut32 ptr = 0;
 		op->type = R_ANAL_OP_TYPE_MOV;
 		if (b[2] == 0x1b) {
@@ -348,7 +341,8 @@ static int arm_op32(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 
 static ut64 getaddr(ut64 addr, const ut8 *d) {
 	if (d[2] >> 7) {
-		st32 n = (d[0] + (d[1] << 8) + (d[2] << 16) + (0xff << 24));
+		/// st32 n = (d[0] + (d[1] << 8) + (d[2] << 16) + (0xff << 24));
+		st32 n = (d[0] + (d[1] << 8) + (d[2] << 16) + ((ut64)(0xff) << 24)); // * 16777216));
 		n = -n;
 		return addr - (n * 4);
 	}
@@ -356,9 +350,12 @@ static ut64 getaddr(ut64 addr, const ut8 *d) {
 }
 
 static int arm_op64(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *d, int len) {
-	memset (op, 0, sizeof (RAnalOp));
 	if (d[3] == 0) {
 		return -1;      // invalid
+	}
+	int haa = hackyArmAnal (anal, op, d, len);
+	if (haa > 0) {
+		return haa;
 	}
 	op->size = 4;
 	op->type = R_ANAL_OP_TYPE_NULL;
@@ -401,14 +398,14 @@ static int arm_op64(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *d, int len) 
 	return op->size;
 }
 
-static int arm_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len) {
+static int arm_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len, RAnalOpMask mask) {
 	if (anal->bits == 64) {
 		return arm_op64 (anal, op, addr, data, len);
 	}
 	return arm_op32 (anal, op, addr, data, len);
 }
 
-static int set_reg_profile(RAnal *anal) {
+static bool set_reg_profile(RAnal *anal) {
 	// TODO: support 64bit profile
 	const char *p32 =
 		"=PC	r15\n"
@@ -473,8 +470,8 @@ RAnalPlugin r_anal_plugin_arm_gnu = {
 	.set_reg_profile = set_reg_profile,
 };
 
-#ifndef CORELIB
-RLibStruct radare_plugin = {
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_arm_gnu,
 	.version = R2_VERSION

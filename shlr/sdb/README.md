@@ -10,10 +10,9 @@ It is distributed as a standalone binary and a library.
 There's also the sdbtypes: a vala library that implements
 several data structures on top of an sdb or a memcache instance.
 
-[![Travis](https://api.travis-ci.org/radare/sdb.svg)](https://travis-ci.org/radare/sdb)
-
-[![Build Status](http://ci.rada.re/buildStatus/icon?job=sdb)](http://ci.rada.re/job/sdb/)
-
+[![GHA](https://github.com/radareorg/sdb/workflows/ci/badge.svg)](https://github.com/radareorg/sdb/actions?query=workflow%3Aci)
+[![GHA](https://api.travis-ci.org/radareorg/sdb.svg)](https://travis-ci.org/radareorg/sdb)
+[![Travis](https://api.travis-ci.org/radareorg/sdb.svg)](https://travis-ci.org/radareorg/sdb)
 [![Build Status](https://scan.coverity.com/projects/1651/badge.svg)](https://scan.coverity.com/projects/1651)
 
 Author
@@ -25,7 +24,7 @@ Contains
 * namespaces (multiple sdb paths)
 * atomic database sync (never corrupted)
 * bindings for vala, luvit, newlisp and nodejs
-* commandline frontend for sdb databases
+* command-line frontend for sdb databases
 * memcache client and server with sdb backend
 * arrays support (syntax sugar)
 * json parser/getter (js0n.c)
@@ -43,6 +42,18 @@ To compile with Emscripten for Javascript:
 
 	make CC=emcc EXT_EXE=.js
 
+To crosscompile with meson:
+
+```
+$ cat > cross-file.txt <<EOF
+[properties]
+exe_wrapper = 'wine'
+and then run meson build --cross-file cross-file.txt ; ninja -C build. It should work and it should create another binary called sdb_native.
+EOF
+$ meson build --cross-file cross-file.txt
+$ ninja -C build
+```
+
 Changes
 -------
 I have modified cdb code a little to create smaller databases and
@@ -59,42 +70,52 @@ Usage example
 -------------
 Let's create a database!
 
-	$ sdb d hello=world
-	$ sdb d hello
-	world
+```
+$ sdb d hello=world
+$ sdb d hello
+world
+```
 
 Using arrays (>=0.6):
 
-	$ sdb - '[]list=1,2' '[0]list' '[0]list=foo' '[]list' '[+1]list=bar'
-	1
-	foo
-	2
+```
+$ sdb - '[]list=1,2' '[0]list' '[0]list=foo' '[]list' '[+1]list=bar'
+1
+foo
+2
+```
 
 Let's play with json:
 
-	$ sdb d g='{"foo":1,"bar":{"cow":3}}'
-	$ sdb d g:bar.cow
-	3
-	$ sdb - user='{"id":123}' user:id=99 user:id
-	99
+```
+$ sdb d g='{"foo":1,"bar":{"cow":3}}'
+$ sdb d g:bar.cow
+3
+$ sdb - user='{"id":123}' user:id=99 user:id
+99
+```
 
-Using the commandline without any disk database:
+Using the command-line without any disk database:
 
-	$ sdb - foo=bar foo a=3 +a -a
-	bar
-	4
-	3
+```
+$ sdb - foo=bar foo a=3 +a -a
+bar
+4
+3
 
-	$ sdb -
-	foo=bar
-	foo
-	bar
-	a=3
-	+a
-	4
-	-a
-	3
+$ sdb -
+foo=bar
+foo
+bar
+a=3
++a
+4
+-a
+3
+```
 	
 Remove the database
 
-	$ rm -f d
+```
+$ rm -f d
+```

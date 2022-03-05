@@ -27,7 +27,6 @@ KERNFILES+=kern/fs.c kern/misc.c
 KERNFILES+=kern/time.c
 KERNFILES+=kern/list.c kern/partition.c
 KERNFILES+=kern/mm.c
-#KERNFILES+=kern/dl.c
 KERNFILES+=fs/fshelp.c
 KERNFILES+=fs/reiserfs.c
 KERNFILES+=fs/ext2.c
@@ -61,9 +60,9 @@ KERNFILES+=partmap/bsdlabel.c
 KERNFILES+=partmap/sunpc.c
 
 KERNOBJS=$(subst .c,.o,${KERNFILES})
+CFLAGS:=-I../../libr/include -I../../libr/include/sdb -DGRUB_TARGET_NO_MODULES $(CFLAGS)
 CFLAGS+=-Iinclude
-CFLAGS+=-I../../libr/include -DGRUB_TARGET_NO_MODULES
-CFLAGS+=-g
+# CFLAGS+=-g
 
 ifneq (,$(findstring cygwin,${OSTYPE}))
 CFLAGS+=-D__CYGWIN__=1
@@ -83,6 +82,8 @@ endif
 ifeq (${OSTYPE},darwin)
 CFLAGS+=-DAPPLE_CC
 endif
+
+include ../../shlr/sdb.mk
 
 BIN=test${EXT_EXE}
 

@@ -1,22 +1,15 @@
 #!/bin/sh
-
-MAKE_JOBS=8
-
-# find root
-cd "$(dirname "$PWD/$0")" ; cd ..
-
-export PATH=${PWD}/sys/_work/mingw64/bin:${PATH}
-# TODO: add support for ccache
-
-type x86_64-w64-mingw32-gcc >/dev/null 2>&1
-if [ $? = 0 ]; then
-	C=x86_64-w64-mingw32-gcc
-else
-	echo "mingw64 package required."
-	exit 1
-fi
-
-make clean
-./configure --with-compiler=x86_64-w64-mingw32-gcc --with-ostype=windows --host=x86_64-unknown-windows
-make -s -j ${MAKE_JOBS} CC="${C} -g -static-libgcc" && \
-make w64dist
+cp -f dist/plugins-cfg/plugins.mingw.cfg plugins.cfg
+export CC=x86_64-w64-mingw32-gcc
+./configure --with-ostype=windows --with-compiler=x86_64-w64-mingw32-gcc --prefix=/ --without-libuv || exit 1
+make -j4 || exit 1
+# install
+rm -rf prefix
+make install DESTDIR=$PWD/prefix || exit 1
+D="radare2-`./configure -qV`-mingw64"
+rm -rf "$D"
+mkdir -p $D || exit 1
+cp -f prefix/bin/*.exe "$D"
+cp -f prefix/lib/*.dll "$D"
+ls -l "$D"
+zip -r "$D.zip" "$D" || exit 1
