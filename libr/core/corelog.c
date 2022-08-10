@@ -7,16 +7,20 @@ R_API int r_core_log_list(RCore *core, int n, int nth, char fmt) {
 	int count = 0, i, idx, id = core->log->first;
 	RStrpool *sp = core->log->sp;
 	char *str = sp->str;
+	PJ *pj = NULL;
 
 	if (fmt == 'j') {
-		r_cons_printf ("[");
+		pj = r_core_pj_new (core);
+		pj_a (pj);
 	}
 	for (i = idx = 0; str && *str; i++, id++) {
 		if ((n && n <= id) || !n) {
 			switch (fmt) {
 			case 'j':
-				r_cons_printf ("%s[%d,\"%s\"]",
-					printed? ",": "", id, str);
+				pj_o (pj);
+				pj_kn (pj, "id", id);
+				pj_ks (pj, "msg", str);
+				pj_end (pj);
 				break;
 			case 't':
 				r_cons_println (str);
@@ -41,7 +45,10 @@ R_API int r_core_log_list(RCore *core, int n, int nth, char fmt) {
 		count++;
 	}
 	if (fmt == 'j') {
-		r_cons_printf ("]\n");
+		pj_end (pj);
+		char *s = pj_drain (pj);
+		r_cons_printf ("%s\n", s);
+		free (s);
 	}
 	return count;
 }
@@ -101,8 +108,8 @@ R_API char *r_core_log_get(RCore *core, int index) {
 	return NULL;
 }
 
+static R_TH_LOCAL bool inProcess = false;
 R_API void r_core_log_add(RCore *core, const char *msg) {
-	static bool inProcess = false;
 	r_strpool_append (core->log->sp, msg);
 	core->log->last++;
 	if (core->cmdlog && *core->cmdlog) {

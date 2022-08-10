@@ -2,6 +2,7 @@
 
 #include <r_util.h>
 
+// R2_580 - return bool instead of int
 R_API int r_type_set(Sdb *TDB, ut64 at, const char *field, ut64 val) {
 	const char *kind;
 	char var[128];
@@ -13,7 +14,7 @@ R_API int r_type_set(Sdb *TDB, ut64 at, const char *field, ut64 val) {
 			snprintf (var, sizeof (var), "%s.%s.%s", p, kind, field);
 			int off = sdb_array_get_num (TDB, var, 1, NULL);
 			//int siz = sdb_array_get_num (DB, var, 2, NULL);
-			eprintf ("wv 0x%08"PFMT64x" @ 0x%08"PFMT64x, val, at + off);
+			eprintf ("wv 0x%08"PFMT64x" @ 0x%08"PFMT64x"\n", val, at + off);
 			return true;
 		}
 		eprintf ("Invalid kind of type\n");
@@ -22,7 +23,9 @@ R_API int r_type_set(Sdb *TDB, ut64 at, const char *field, ut64 val) {
 }
 
 R_API int r_type_kind(Sdb *TDB, const char *name) {
+	r_return_val_if_fail (TDB, -1);
 	if (!name) {
+		// XXX should assert too
 		return -1;
 	}
 	const char *type = sdb_const_get (TDB, name, 0);
@@ -451,7 +454,7 @@ static char *fmt_struct_union(Sdb *TDB, char *var, bool is_typedef) {
 					vars = r_str_append (vars, " ");
 				}
 			} else {
-				eprintf ("Cannot resolve type '%s'\n", var3);
+				R_LOG_ERROR ("Cannot resolve type '%s'", var3);
 			}
 			free (type);
 		}

@@ -280,13 +280,12 @@ R_API void r_cmd_macro_item_free(RCmdMacroItem *item);
 R_API void r_cmd_macro_init(RCmdMacro *mac);
 R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *name);
 R_API bool r_cmd_macro_rm(RCmdMacro *mac, const char *_name);
-R_API void r_cmd_macro_list(RCmdMacro *mac);
-R_API void r_cmd_macro_meta(RCmdMacro *mac);
+R_API void r_cmd_macro_list(RCmdMacro *mac, int mode);
 R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name);
 R_API int r_cmd_macro_break(RCmdMacro *mac, const char *value);
 
 R_API bool r_cmd_alias_del(RCmd *cmd, const char *k);
-R_API RList *r_cmd_alias_keys(RCmd *cmd);
+R_API const char **r_cmd_alias_keys(RCmd *cmd);
 R_API int r_cmd_alias_set_cmd(RCmd *cmd, const char *k, const char *v);
 R_API int r_cmd_alias_set_str(RCmd *cmd, const char *k, const char *v);
 R_API int r_cmd_alias_set_raw(RCmd *cmd, const char *k, const ut8 *v, int sz);

@@ -13,12 +13,14 @@
 
 // $ echo "..." | xcrun swift-demangle
 
+static R_TH_LOCAL int have_swift_demangle = -1;
+
 struct Type {
 	const char *code;
 	const char *name;
 };
 
-static struct Type types[] = {
+static const struct Type types[] = {
 	/* basic types */
 	{ "Sb", "Bool" },
 	{ "SS", "Swift.String" },
@@ -44,7 +46,7 @@ static struct Type types[] = {
 	{ NULL, NULL }
 };
 
-static struct Type metas [] = {
+static const struct Type metas [] = {
 	/* attributes */
 	{ "FC", "ClassFunc" },
 	{ "S0_FT", "?" },
@@ -57,7 +59,7 @@ static struct Type metas [] = {
 	{ NULL, NULL }
 };
 
-static struct Type flags [] = {
+static const struct Type flags [] = {
 	//{ "f", "function" }, // this is not an accessor
 	{ "s", "setter" },
 	{ "g", "getter" },
@@ -87,7 +89,7 @@ static const char *numpos(const char* n) {
 }
 
 static const char *getstring(const char *s, int len) {
-	static char buf[256] = {0};
+	static R_TH_LOCAL char buf[256] = {0};
 	if (len < 0 || len > sizeof (buf) - 2) {
 		return "";
 	}
@@ -96,7 +98,7 @@ static const char *getstring(const char *s, int len) {
 	return buf;
 }
 
-static const char *resolve(struct Type *t, const char *foo, const char **bar) {
+static const char *resolve(const struct Type *t, const char *foo, const char **bar) {
 	if (!t || !foo || !*foo) {
 		return NULL;
 	}
@@ -112,11 +114,9 @@ static const char *resolve(struct Type *t, const char *foo, const char **bar) {
 	return NULL;
 }
 
-static int have_swift_demangle = -1;
-
 static char *swift_demangle_cmd(const char *s) {
 	/* XXX: command injection issue here */
-	static char *swift_demangle = NULL;
+	static R_TH_LOCAL char *swift_demangle = NULL;
 	if (have_swift_demangle == -1) {
 		if (!swift_demangle) {
 			have_swift_demangle = 0;
@@ -154,8 +154,8 @@ static char *swift_demangle_cmd(const char *s) {
 
 static char *swift_demangle_lib(const char *s) {
 #if __UNIX__
-	static bool haveSwiftCore = false;
-	static char *(*swift_demangle)(const char *sym, int symlen, void *out, int *outlen, int flags) = NULL;
+	static R_TH_LOCAL bool haveSwiftCore = false;
+	static R_TH_LOCAL char *(*swift_demangle)(const char *sym, int symlen, void *out, int *outlen, int flags, int unk) = NULL;
 	if (!haveSwiftCore) {
 		void *lib = r_lib_dl_open ("/usr/lib/swift/libswiftCore.dylib");
 		if (lib) {
@@ -164,7 +164,8 @@ static char *swift_demangle_lib(const char *s) {
 		haveSwiftCore = true;
 	}
 	if (swift_demangle) {
-		return swift_demangle (s, strlen (s), NULL, NULL, 0);
+		char *r = swift_demangle (s, strlen (s), NULL, NULL, 0, 0);
+		return r;
 	}
 #endif
 	return NULL;
@@ -184,12 +185,6 @@ R_API char *r_bin_demangle_swift(const char *s, bool syscmd, bool trylib) {
 		s = s + 6;
 	}
 
-	if (*s != 'T' && strncmp (s, "_T", 2) && strncmp (s, "__T", 3)) {
-		// modern swift symbols
-		if (strncmp (s, "$s", 2)) {
-			return NULL;
-		}
-	}
 	if (!strncmp (s, "__", 2)) {
 		s = s + 2;
 	}
@@ -198,6 +193,12 @@ R_API char *r_bin_demangle_swift(const char *s, bool syscmd, bool trylib) {
 		res = swift_demangle_lib (s);
 		if (res) {
 			return res;
+		}
+	}
+	if (*s != 'T' && strncmp (s, "_T", 2) && strncmp (s, "__T", 3)) {
+		// modern swift symbols not yet supported in this parser (only via trylib)
+		if (strncmp (s, "$s", 2)) {
+			return NULL;
 		}
 	}
 	const char *attr = NULL;

@@ -2,6 +2,21 @@
 
 #include <r_core.h>
 
+const char *help_msg_hash[] = {
+	"Usage:", "#!<interpreter>", "[<args>] [<file] [<<eof]",
+	"#", "", "comment - do nothing",
+	"#!", "", "list all available interpreters",
+	"#!?", "", "show this help message",
+	"#!?j", "", "list all available interpreters in JSON",
+	"#!v?", "", "show vlang script example",
+	"#!python?", "", "show python script example",
+	"#!python", "", "run python commandline",
+	"#!python", " foo.py", "run foo.py python script (same as '. foo.py')",
+	//"#!python <<EOF        get python code until 'EOF' mark\n"
+	"#!python", " arg0 a1 <<q", "set arg0 and arg1 and read until 'q'",
+	NULL
+};
+
 typedef void (*HashHandler)(const ut8 *block, int len);
 
 typedef struct {
@@ -344,18 +359,22 @@ static int cmd_hash_bang(RCore *core, const char *input) {
 	if (r_str_endswith (input, "?")) {
 		char *ex = strchr (input, '!');
 		if (ex) {
-			char *foo = r_str_ndup (ex + 1, strlen (ex) - 2);
-			RLangPlugin *lp = r_lang_get_by_name (core->lang, foo);
+			char *name = r_str_ndup (ex + 1, strlen (ex) - 2);
+			RLangPlugin *lp = r_lang_get_by_name (core->lang, name);
 			if (lp) {
 				if (lp->example) {
 					r_cons_println (lp->example);
 				} else {
-					eprintf ("This language plugin doesnt provide any example.\n");
+					eprintf ("%s plugin does not provide an example.\n", name);
 				}
 			} else {
-				eprintf ("Unknown rlang plugin '%s'.\n", foo);
+				if (*name) {
+					eprintf ("Unknown rlang plugin '%s'.\n", name);
+				} else {
+					r_core_cmd_help_match (core, help_msg_hash, "#!", false);
+				}
 			}
-			free (foo);
+			free (name);
 		}
 		return false;
 	}
@@ -383,14 +402,16 @@ static int cmd_hash_bang(RCore *core, const char *input) {
 				if (r_cons_is_interactive ()) {
 					r_lang_prompt (core->lang);
 				} else {
-					eprintf ("Error: scr.interactive required to run the rlang prompt\n");
+					R_LOG_ERROR ("scr.interactive required to run the rlang prompt");
 				}
 			}
+		} else if (av[0][0] == '?' && av[0][1] == 'j') {
+			r_lang_list (core->lang, 'j');
 		} else if (av[0][0] == '?' || av[0][0] == '*') {
-			r_lang_list (core->lang);
+			r_lang_list (core->lang, 0);
 		}
 	} else {
-		r_lang_list (core->lang);
+		r_lang_list (core->lang, 0);
 	}
 	r_str_argv_free (av);
 	return true;
@@ -403,18 +424,7 @@ static int cmd_hash(void *data, const char *input) {
 		return cmd_hash_bang (core, input);
 	}
 	if (*input == '?') {
-		const char *helpmsg3[] = {
-		"Usage #!interpreter [<args>] [<file] [<<eof]","","",
-		" #", "", "comment - do nothing",
-		" #!","","list all available interpreters",
-		" #!v?","","show vlang script example",
-		" #!python?","","show python script example",
-		" #!python","","run python commandline",
-		" #!python"," foo.py","run foo.py python script (same as '. foo.py')",
-		//" #!python <<EOF        get python code until 'EOF' mark\n"
-		" #!python"," arg0 a1 <<q","set arg0 and arg1 and read until 'q'",
-		NULL};
-		r_core_cmd_help (core, helpmsg3);
+		r_core_cmd_help (core, help_msg_hash);
 		return false;
 	}
 	/* this is a comment - captain obvious

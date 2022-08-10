@@ -123,17 +123,17 @@ R_LIB_VERSION_HEADER (r_bin);
 #define R_BIN_TYPE_SPECIAL_SYM_STR "SPCL"
 #define R_BIN_TYPE_UNKNOWN_STR "UNK"
 
-enum {
+typedef enum {
 	R_BIN_SYM_ENTRY,
 	R_BIN_SYM_INIT,
 	R_BIN_SYM_MAIN,
 	R_BIN_SYM_FINI,
 	R_BIN_SYM_LAST
-};
+} RBinSym;
 
 // name mangling types
 // TODO: Rename to R_BIN_LANG_
-enum {
+typedef enum {
 	R_BIN_NM_NONE = 0,
 	R_BIN_NM_JAVA = 1,
 	R_BIN_NM_C = 1<<1,
@@ -145,42 +145,42 @@ enum {
 	R_BIN_NM_MSVC = 1<<7,
 	R_BIN_NM_RUST = 1<<8,
 	R_BIN_NM_KOTLIN = 1<<9,
-	R_BIN_NM_BLOCKS = 1<<31,
+	R_BIN_NM_BLOCKS = 1U<<31,
 	R_BIN_NM_ANY = -1,
-};
+} RBinNameMangling;
 
-enum {
+typedef enum {
 	R_STRING_TYPE_DETECT = '?',
 	R_STRING_TYPE_ASCII = 'a',
 	R_STRING_TYPE_UTF8 = 'u',
 	R_STRING_TYPE_WIDE = 'w', // utf16 / widechar string
 	R_STRING_TYPE_WIDE32 = 'W', // utf32
 	R_STRING_TYPE_BASE64 = 'b',
-};
+} RStringType;
 
-enum {
+typedef enum {
 	R_BIN_CLASS_PRIVATE,
 	R_BIN_CLASS_PUBLIC,
 	R_BIN_CLASS_FRIENDLY,
 	R_BIN_CLASS_PROTECTED,
-};
+} RBinClassVisibility;
 
-enum {
+typedef enum {
 	R_BIN_RELOC_1 = 1,
 	R_BIN_RELOC_2 = 2,
 	R_BIN_RELOC_4 = 4,
 	R_BIN_RELOC_8 = 8,
 	R_BIN_RELOC_16 = 16,
-	R_BIN_RELOC_24= 24,
+	R_BIN_RELOC_24 = 24,
 	R_BIN_RELOC_32 = 32,
-	R_BIN_RELOC_48= 48,
+	R_BIN_RELOC_48 = 48,
 	R_BIN_RELOC_64 = 64
-};
+} RBinRelocType;
 
-enum {
+typedef enum {
 	R_BIN_TYPE_DEFAULT = 0,
 	R_BIN_TYPE_CORE = 1
-};
+} RBinType;
 
 typedef struct r_bin_addr_t {
 	ut64 vaddr;
@@ -243,6 +243,7 @@ typedef struct r_bin_info_t {
 	ut64 baddr;
 	char *intrp;
 	char *compiler;
+	char *charset;
 } RBinInfo;
 
 typedef struct r_bin_object_t {
@@ -282,15 +283,15 @@ typedef struct r_bin_object_t {
 typedef struct r_bin_file_t {
 	char *file;
 	int fd;
-	int size;
+	ut64 size;
 	int rawstr;
 	int strmode;
 	ut32 id;
 	RBuffer *buf;
-	ut64 offset;
+	ut64 offset; // XXX
 	RBinObject *o;
 	void *xtr_obj;
-	ut64 loadaddr;
+	ut64 loadaddr; // XXX
 	/* values used when searching the strings */
 	int minstrlen;
 	int maxstrlen;
@@ -326,6 +327,7 @@ struct r_bin_t {
 	int debase64;
 	int minstrlen;
 	int maxstrlen;
+	int maxsymlen;
 	ut64 maxstrbuf;
 	int rawstr;
 	Sdb *sdb;
@@ -366,7 +368,7 @@ typedef struct r_bin_xtr_metadata_t {
 } RBinXtrMetadata;
 
 typedef int (*FREE_XTR)(void *xtr_obj);
-typedef struct r_bin_xtr_extract_t {
+typedef struct r_bin_xtr_data_t {
 	char *file;
 	RBuffer *buf;
 	ut64 size;
@@ -395,6 +397,7 @@ typedef struct r_bin_xtr_plugin_t {
 	RList *(*extractall_from_buffer)(RBin *bin, RBuffer *buf);
 	RBinXtrData *(*extract)(RBin *bin, int idx);
 	RList *(*extractall)(RBin *bin);
+	bool loadbuf;
 
 	bool (*load)(RBin *bin);
 	int (*size)(RBin *bin);
@@ -706,9 +709,7 @@ R_API RList *r_bin_get_fields(RBin *bin);
 R_API const RList *r_bin_get_imports(RBin *bin);
 R_API RList *r_bin_get_libs(RBin *bin);
 R_API RRBTree *r_bin_patch_relocs(RBin *bin);
-R_API RList *r_bin_patch_relocs_list(RBin *bin);
 R_API RRBTree *r_bin_get_relocs(RBin *bin);
-R_API RList *r_bin_get_relocs_list(RBin *bin);
 R_API RList *r_bin_get_sections(RBin *bin);
 R_API RList *r_bin_get_classes(RBin *bin);
 R_API RList *r_bin_get_strings(RBin *bin);
@@ -847,6 +848,7 @@ extern RBinPlugin r_bin_plugin_nin3ds;
 extern RBinPlugin r_bin_plugin_xbe;
 extern RBinPlugin r_bin_plugin_bflt;
 extern RBinXtrPlugin r_bin_xtr_plugin_xtr_fatmach0;
+extern RBinXtrPlugin r_bin_xtr_plugin_xtr_xalz;
 extern RBinXtrPlugin r_bin_xtr_plugin_xtr_dyldcache;
 extern RBinXtrPlugin r_bin_xtr_plugin_xtr_pemixed;
 extern RBinXtrPlugin r_bin_xtr_plugin_xtr_sep64;
@@ -861,6 +863,7 @@ extern RBinPlugin r_bin_plugin_qnx;
 extern RBinPlugin r_bin_plugin_mbn;
 extern RBinPlugin r_bin_plugin_smd;
 extern RBinPlugin r_bin_plugin_msx;
+extern RBinPlugin r_bin_plugin_s390;
 extern RBinPlugin r_bin_plugin_sms;
 extern RBinPlugin r_bin_plugin_psxexe;
 extern RBinPlugin r_bin_plugin_vsf;

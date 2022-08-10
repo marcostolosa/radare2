@@ -3,9 +3,9 @@
 #include <r_asm.h>
 #include <r_lib.h>
 
-#include <capstone.h>
+#include <capstone/capstone.h>
 #if CS_API_MAJOR >= 5
-#include <riscv.h>
+#include <capstone/riscv.h>
 
 // http://www.mrc.uidaho.edu/mrc/people/jff/digital/RISCVir.html
 
@@ -193,13 +193,13 @@ static int analop_esil(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len
 			*str[i] = 0;
 			ARG (i);
 		}
+		switch (insn->id) {
+		//case RISCV_INS_NOP:
+		//	r_strbuf_setf (&op->esil, ",");
+		//	break;
+		}
 	}
 
-	switch (insn->id) {
-	//case RISCV_INS_NOP:
-	//	r_strbuf_setf (&op->esil, ",");
-	//	break;
-	}
 	return 0;
 }
 
@@ -222,7 +222,7 @@ static int parse_reg_name(RRegItem *reg, csh handle, cs_insn *insn, int reg_num)
 }
 
 static void op_fillval(RAnal *anal, RAnalOp *op, csh *handle, cs_insn *insn) {
-	static RRegItem reg;
+	static R_TH_LOCAL RRegItem reg;
 	switch (op->type & R_ANAL_OP_TYPE_MASK) {
 	case R_ANAL_OP_TYPE_LOAD:
 		if (OPERAND(1).type == RISCV_OP_MEM) {
@@ -319,18 +319,20 @@ static void set_opdir(RAnalOp *op) {
 	}
 }
 
+#define CSINC RISCV
+#define CSINC_MODE (a->config->bits == 64)? CS_MODE_RISCV64: CS_MODE_RISCV32
+#include "capstone.inc"
+
 static int analop(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
-	int n, ret, opsize = -1;
-	static csh hndl = 0;
-	static int omode = -1;
-	static int obits = 32;
+	csh hndl = init_capstone (anal);
+	if (hndl == 0) {
+		return -1;
+	}
+	
+	int n, opsize = -1;
 	cs_insn* insn;
-	int mode = (anal->bits==64)? CS_MODE_RISCV64: CS_MODE_RISCV32;
-	if (mode != omode || anal->bits != obits) {
-		cs_close (&hndl);
-		hndl = 0;
-		omode = mode;
-		obits = anal->bits;
+	if (!op) {
+		return -1;
 	}
 // XXX no arch->cpu ?!?! CS_MODE_MICRO, N64
 	op->addr = addr;
@@ -338,17 +340,18 @@ static int analop(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, 
 		return -1;
 	}
 	op->size = 4;
-	if (hndl == 0) {
-		ret = cs_open (CS_ARCH_RISCV, mode, &hndl);
-		if (ret != CS_ERR_OK) {
-			goto fin;
-		}
-		cs_option (hndl, CS_OPT_DETAIL, CS_OPT_ON);
-	}
 	n = cs_disasm (hndl, (ut8*)buf, len, addr, 1, &insn);
 	if (n < 1 || insn->size < 1) {
 		goto beach;
 	}
+	if (mask & R_ANAL_OP_MASK_DISASM) {
+		char *str = r_str_newf ("%s%s%s", insn->mnemonic, insn->op_str[0]? " ": "", insn->op_str);
+		if (str) {
+			r_str_replace_char (str, '$', 0);
+		}
+		op->mnemonic = str;
+	}
+
 	op->id = insn->id;
 	opsize = op->size = insn->size;
 	switch (insn->id) {
@@ -392,14 +395,12 @@ beach:
 		op_fillval (anal, op, &hndl, insn);
 	}
 	cs_free (insn, n);
-	//cs_close (&handle);
-fin:
 	return opsize;
 }
 
 static char *get_reg_profile(RAnal *anal) {
 	const char *p = NULL;
-	switch (anal->bits) {
+	switch (anal->config->bits) {
 	case 32: p =
 		"=PC	pc\n"
 		"=SP	sp\n" // ABI: stack pointer
@@ -584,7 +585,7 @@ static int archinfo(RAnal *anal, int q) {
 	case R_ANAL_ARCHINFO_MAX_OP_SIZE:
 		return 4;
 	case R_ANAL_ARCHINFO_MIN_OP_SIZE:
-		if (anal->bits == 64) {
+		if (anal->config->bits == 64) {
 			return 4;
 		}
 		return 2;
@@ -602,6 +603,7 @@ RAnalPlugin r_anal_plugin_riscv_cs = {
 	.archinfo = archinfo,
 	.bits = 32|64,
 	.op = &analop,
+	.mnemonics = cs_mnemonics,
 };
 
 #ifndef R2_PLUGIN_INCORE

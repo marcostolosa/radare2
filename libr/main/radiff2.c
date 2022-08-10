@@ -459,15 +459,15 @@ static int show_help(int v) {
 			"  -z         diff on extracted strings\n"
 			"  -Z         diff code comparing zignatures\n\n"
                        "Graph Output formats: (-m [mode])\n"
-		        "  <blank/a>  Ascii art\n"
+		        "  <blank/a>  ascii art\n"
 	                "  s          r2 commands\n"
-		        "  d          Graphviz dot\n"
-	                "  g          Graph Modelling Language (gml)\n"
+		        "  d          graphviz dot\n"
+	                "  g          graph Modelling Language (gml)\n"
 		        "  j          json\n"
 	                "  J          json with disarm\n"
-		        "  k          SDB key-value\n"
-	                "  t          Tiny ascii art\n"
-		        "  i          Interactive ascii art\n");
+		        "  k          sdb key-value\n"
+	                "  t          tiny ascii art\n"
+		        "  i          interactive ascii art\n");
 	}
 	return 1;
 }
@@ -1054,7 +1054,7 @@ R_API int r_main_radiff2(int argc, const char **argv) {
 			break;
 		case 't':
 			ro.threshold = atoi (opt.arg);
-			printf ("%s\n", opt.arg);
+			// printf ("%s\n", opt.arg);
 			break;
 		case 'd':
 			delta = 1;
@@ -1211,7 +1211,11 @@ R_API int r_main_radiff2(int argc, const char **argv) {
 				r_core_zdiff (c, c2);
 			} else {
 				r_core_gdiff (c, c2);
-				r_core_diff_show (c, c2);
+				if (ro.diffmode == 'j') {
+					r_core_diff_show_json (c, c2);
+				} else {
+					r_core_diff_show (c, c2);
+				}
 			}
 		} else if (ro.mode == MODE_DIFF_SYMBOLS) {
 			int sz;

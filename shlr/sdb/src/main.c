@@ -59,8 +59,10 @@ static void terminate(int sig UNUSED) {
 	exit (sig < 2? sig: 0);
 }
 
-static void write_null(void) {
-	(void)write (1, "", 1);
+static int write_null(void) {
+	// success = write returns 1 == 1 -> 0
+	// failure = write returns 0 != 1 -> 1
+	return write (1, "", 1) != 1;
 }
 
 #define BS 128
@@ -330,7 +332,7 @@ static void cgen_header(MainOptions *mo, const char *cname) {
 		printf ("#include <string.h>\n");
 		printf ("\n");
 		printf ("struct kv { const char *name; const char *value; };\n");
-		printf ("static struct kv kvs[] = {\n");
+		printf ("static const struct kv kvs[] = {\n");
 	} else {
 		printf ("%%{\n");
 		printf ("// gperf -aclEDCIG --null-strings -H sdb_hash_c_%s -N sdb_get_c_%s -t %s.gperf > %s.c\n", cname, cname, cname, cname);
@@ -478,6 +480,7 @@ static int sdb_dump(MainOptions *mo) {
 		break;
 	}
 
+	int ret = 0;
 	if (db->fd == -1) {
 		SdbList *l = sdb_foreach_list (db, true);
 		if (!mo->textmode && mo->format == cgen && ls_length (l) > SDB_MAX_GPERF_KEYS) {
@@ -490,12 +493,12 @@ static int sdb_dump(MainOptions *mo) {
 		SdbKv *kv;
 		SdbListIter *it;
 		ls_foreach_cast (l, it, SdbKv*, kv) {
-			const char *k = sdbkv_key (kv);
-			const char *v = sdbkv_value (kv);
-			if (v && *v && grep && !strstr (k, expgrep) && !strstr (v, expgrep)) {
+			const char *sk = sdbkv_key (kv);
+			const char *sv = sdbkv_value (kv);
+			if (sv && *sv && grep && !strstr (sk, expgrep) && !strstr (sv, expgrep)) {
 				continue;
 			}
-			sdb_dump_cb (mo, k, v, comma);
+			sdb_dump_cb (mo, sk, sv, comma);
 			comma = ",";
 		}
 		ls_free (l);
@@ -511,41 +514,41 @@ static int sdb_dump(MainOptions *mo) {
 			free (v);
 			if (!mo->textmode && mo->format == cgen && count++ > SDB_MAX_GPERF_KEYS) {
 				eprintf ("Error: gperf doesn't work with datasets with more than 15.000 keys.\n");
-				free (name);
-				free (cname);
-				return -1;
+				ret = -1;
 			}
 		}
 	}
-	switch (mo->format) {
-	case zero:
-		fflush (stdout);
-		write_null ();
-		break;
-	case perf:
-	case cgen:
-		cgen_footer (mo, name, cname);
-		break;
-	case json:
-		printf ("}\n");
-		break;
-	default:
-		break;
+	if (ret == 0) {
+		switch (mo->format) {
+		case zero:
+			fflush (stdout);
+			ret = write_null ();
+			break;
+		case perf:
+		case cgen:
+			cgen_footer (mo, name, cname);
+			break;
+		case json:
+			printf ("}\n");
+			break;
+		default:
+			break;
+		}
 	}
 	sdb_free (db);
 	free (cname);
 	free (name);
-	return 0;
+	return ret;
 }
 
-static int insertkeys(Sdb *s, const char **args, int nargs, int mode) {
+static int insertkeys(Sdb *db, const char **args, int nargs, int mode) {
 	int must_save = 0;
 	if (args && nargs > 0) {
 		int i;
 		for (i = 0; i < nargs; i++) {
 			switch (mode) {
 			case '-':
-				must_save |= sdb_query (s, args[i]);
+				must_save |= sdb_query (db, args[i]);
 				break;
 			case '=':
 				if (strchr (args[i], '=')) {
@@ -553,7 +556,7 @@ static int insertkeys(Sdb *s, const char **args, int nargs, int mode) {
 					v = strchr (kv, '=');
 					if (v) {
 						*v++ = 0;
-						sdb_disk_insert (s, kv, v);
+						sdb_disk_insert (db, kv, v);
 					}
 					free (kv);
 				}
@@ -667,8 +670,7 @@ static int base64decode(void) {
 		int declen;
 		out = sdb_decode (in, &declen);
 		if (out && declen >= 0) {
-			(void)write (1, out, declen);
-			ret = 0;
+			ret = (write (1, out, declen) == declen)? 0: 1;
 		}
 		free (out);
 		free (in);
@@ -759,6 +761,8 @@ static int gen_gperf(MainOptions *mo, const char *file, const char *name) {
 		wd = open (out, O_RDWR | O_CREAT, 0644);
 	} else {
 		if (ftruncate (wd, 0) == -1) {
+			free (out);
+			free (buf);
 			close (wd);
 			return -1;
 		}
@@ -811,7 +815,7 @@ static int gen_gperf(MainOptions *mo, const char *file, const char *name) {
 
 static const char *main_argparse_getarg(MainOptions *mo) {
 	int cur = mo->argi;
-	if (mo->argi + 1>= mo->argc) {
+	if (mo->argi + 1 >= mo->argc) {
 		return NULL;
 	}
 	mo->argi++;
@@ -1010,7 +1014,7 @@ int main(int argc, const char **argv) {
 					save |= sdb_query (s, mo->argv[i]);
 					if (mo->format) {
 						fflush (stdout);
-						write_null ();
+						ret = write_null ();
 					}
 				}
 			} else {
@@ -1021,7 +1025,7 @@ int main(int argc, const char **argv) {
 					save |= sdb_query (s, line);
 					if (mo->format) {
 						fflush (stdout);
-						write_null ();
+						ret = write_null ();
 					}
 					free (line);
 				}
@@ -1049,7 +1053,7 @@ int main(int argc, const char **argv) {
 				save |= sdb_query (s, mo->argv[i]);
 				if (mo->format) {
 					fflush (stdout);
-					write_null ();
+					ret = write_null ();
 				}
 			}
 		} else {

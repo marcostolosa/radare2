@@ -27,7 +27,7 @@ static bool r_coff_is_stripped(struct r_bin_coff_obj *obj) {
 
 static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
 	*bin_obj = r_bin_coff_new_buf (buf, bf->rbin->verbose);
-	return *bin_obj != NULL;
+	return *bin_obj;
 }
 
 static void destroy(RBinFile *bf) {
@@ -270,7 +270,7 @@ static RList *libs(RBinFile *bf) {
 }
 
 static ut32 _read_le32(RBin *rbin, ut64 addr) {
-	ut8 data[4] = { 0 };
+	ut8 data[4] = {0};
 	if (!rbin->iob.read_at (rbin->iob.io, addr, data, sizeof (data))) {
 		return UT32_MAX;
 	}
@@ -278,7 +278,7 @@ static ut32 _read_le32(RBin *rbin, ut64 addr) {
 }
 
 static ut16 _read_le16(RBin *rbin, ut64 addr) {
-	ut8 data[2] = { 0 };
+	ut8 data[2] = {0};
 	if (!rbin->iob.read_at (rbin->iob.io, addr, data, sizeof (data))) {
 		return UT16_MAX;
 	}

@@ -1,13 +1,49 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <r_reg.h>
 #include <r_util.h>
 
 R_LIB_VERSION (r_reg);
 
-static const char *types[R_REG_TYPE_LAST + 1] = {
+static const char * const types[R_REG_TYPE_LAST + 1] = {
 	"gpr", "drx", "fpu", "mmx", "xmm", "ymm", "flg", "seg", NULL
 };
+
+R_API bool r_reg_hasbits_check(RReg *reg, int size) {
+	return reg->hasbits & size;
+#define HB(x) if(size&x && reg->hasbits &x) return true
+	HB(1);
+	HB(2);
+	HB(4);
+	HB(8);
+	HB(16);
+	HB(32);
+	HB(64);
+	HB(128);
+	HB(256);
+#undef HB
+	return false;
+}
+
+R_API void r_reg_hasbits_clear(RReg *reg) {
+	reg->hasbits = 0;
+}
+
+R_API bool r_reg_hasbits_use(RReg *reg, int size) {
+	bool done = false;
+#define HB(x) if(size&x) { reg->hasbits |=x; done = true; }
+	HB(1);
+	HB(2);
+	HB(4);
+	HB(8);
+	HB(16);
+	HB(32);
+	HB(64);
+	HB(128);
+	HB(256);
+#undef HB
+	return done;
+}
 
 // Take the 32bits name of a register, and return the 64 bit name of it.
 // If there is no equivalent 64 bit register return NULL.
@@ -128,6 +164,10 @@ R_API int r_reg_get_name_idx(const char *type) {
 	case 'R' + ('1' << 8): return R_REG_NAME_R1;
 	case 'R' + ('2' << 8): return R_REG_NAME_R2;
 	case 'R' + ('3' << 8): return R_REG_NAME_R3;
+	case 'F' + ('0' << 8): return R_REG_NAME_F0;
+	case 'F' + ('1' << 8): return R_REG_NAME_F1;
+	case 'F' + ('2' << 8): return R_REG_NAME_F2;
+	case 'F' + ('3' << 8): return R_REG_NAME_F3;
 	}
 	return -1;
 }
@@ -148,10 +188,10 @@ R_API const char *r_reg_get_name(RReg *reg, int role) {
 	return NULL;
 }
 
-static const char *roles[R_REG_NAME_LAST + 1] = {
+static const char * const roles[R_REG_NAME_LAST + 1] = {
 	"PC", "SP", "SR", "BP", "LR", "RS",
 	"A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
-	"R0", "R1", "R2", "R3",
+	"R0", "R1", "R2", "R3", "F0", "F1", "F2", "F3",
 	"ZF", "SF", "CF", "OF",
 	"SN",
 	NULL
@@ -271,6 +311,7 @@ R_API RReg *r_reg_init(RReg *reg) {
 		reg->regset[i].arena = arena;
 	}
 	r_reg_arena_push (reg);
+	r_reg_hasbits_clear (reg);
 	for (i = 0; i < R_REG_TYPE_LAST; i++) {
 		reg->regset[i].cur = r_list_tail (reg->regset[i].pool);
 	}

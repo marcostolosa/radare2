@@ -1,9 +1,12 @@
 /* radare - LGPL - Copyright 2009-2022 - pancake, keegan */
 
+#define R_LOG_DISABLE 1
+
 #include <r_th.h>
+#include <r_util/r_assert.h>
+#include <r_util/r_log.h>
 
 /* locks/mutex/sems */
-
 static bool lock_init(RThreadLock *thl, bool recursive) {
 #if HAVE_PTHREAD
 	if (recursive) {
@@ -13,7 +16,7 @@ static bool lock_init(RThreadLock *thl, bool recursive) {
 		pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_RECURSIVE);
 #else
 		pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_RECURSIVE_NP);
-#endif /* !defined(__GLIBC__) || __USE_UNIX98__ */
+#endif
 		pthread_mutex_init (&thl->lock, &attr);
 	} else {
 		pthread_mutexattr_t attr;
@@ -30,11 +33,11 @@ static bool lock_init(RThreadLock *thl, bool recursive) {
 	return true;
 }
 
-static bool r_atomic_exchange(volatile R_ATOMIC_BOOL *data, bool v) {
+R_API bool r_atomic_exchange(volatile R_ATOMIC_BOOL *data, bool v) {
 #if HAVE_STDATOMIC_H
 	return atomic_exchange_explicit (data, v, memory_order_acquire);
-#elif __GNUC__
-	int orig;
+#elif __GNUC__ && !__TINYC__
+	int orig = 0;
 	int conv = (int)v;
 	__atomic_exchange (data, &conv, &orig, __ATOMIC_ACQUIRE);
 	return orig;
@@ -48,10 +51,10 @@ static bool r_atomic_exchange(volatile R_ATOMIC_BOOL *data, bool v) {
 #endif
 }
 
-static void r_atomic_store(volatile R_ATOMIC_BOOL *data, bool v) {
+R_API void r_atomic_store(volatile R_ATOMIC_BOOL *data, bool v) {
 #if HAVE_STDATOMIC_H
 	atomic_store_explicit (data, v, memory_order_release);
-#elif __GNUC__
+#elif __GNUC__ && !__TINYC__
 	int conv = (int)v;
 	__atomic_store (data, &conv, __ATOMIC_RELEASE);
 #elif _MSC_VER
@@ -64,44 +67,42 @@ static void r_atomic_store(volatile R_ATOMIC_BOOL *data, bool v) {
 }
 
 R_API RThreadLock *r_th_lock_new(bool recursive) {
+	R_LOG_DEBUG ("r_th_lock_new");
 	RThreadLock *thl = R_NEW0 (RThreadLock);
-	if (!thl) {
-		return NULL;
+	if (thl) {
+		if (lock_init (thl, recursive)) {
+			thl->type = R_TH_LOCK_TYPE_HEAP;
+			thl->active = true;
+			thl->activating = false;
+		} else {
+			R_FREE (thl);
+		}
 	}
-
-	if (!lock_init (thl, recursive)) {
-		return NULL;
-	}
-
-	thl->type = R_TH_LOCK_TYPE_HEAP;
-	thl->active = 1;
-	thl->activating = 0;
 	return thl;
 }
 
-R_API int r_th_lock_wait(RThreadLock *thl) {
+R_API bool r_th_lock_wait(RThreadLock *thl) {
+	r_return_val_if_fail (thl, false);
+	R_LOG_DEBUG ("r_th_lock_wait");
 	r_th_lock_enter (thl); // locks here
 	r_th_lock_leave (thl); // releases previous mutex
-	return 0;
+	return true;
 }
 
-// TODO: return bool
-R_API int r_th_lock_enter(RThreadLock *thl) {
-	if (!thl) {
-		return -1;
-	}
+#if WANT_THREADS
+R_API bool r_th_lock_enter(RThreadLock *thl) {
+	r_return_val_if_fail (thl, false);
+	R_LOG_DEBUG ("r_th_lock_enter");
 
 	// initialize static locks on acquisition
 	if (thl->type == R_TH_LOCK_TYPE_STATIC) {
-		// start spinning
-		while (r_atomic_exchange (&thl->activating, true))
-			;
-
+		while (r_atomic_exchange (&thl->activating, true)) {
+			// spinning
+		}
 		if (!thl->active) {
 			lock_init (thl, false);
-			thl->active = 1;
+			thl->active = true;
 		}
-
 		// finish spinning
 		r_atomic_store (&thl->activating, false);
 	}
@@ -114,35 +115,43 @@ R_API int r_th_lock_enter(RThreadLock *thl) {
 	return 0;
 #endif
 }
-
-R_API int r_th_lock_tryenter(RThreadLock *thl) {
-	if (!thl) {
-		return -1;
-	}
+R_API bool r_th_lock_tryenter(RThreadLock *thl) {
+	r_return_val_if_fail (thl, false);
+	R_LOG_DEBUG ("r_th_lock_tryenter");
 #if HAVE_PTHREAD
-	return !pthread_mutex_trylock (&thl->lock);
+	return pthread_mutex_trylock (&thl->lock) == 0;
 #elif __WINDOWS__
 	return TryEnterCriticalSection (&thl->lock);
 #else
-	return 0;
+	return false;
 #endif
 }
-
-R_API int r_th_lock_leave(RThreadLock *thl) {
-	if (!thl) {
-		return -1;
-	}
+R_API bool r_th_lock_leave(RThreadLock *thl) {
+	r_return_val_if_fail (thl, false);
+	R_LOG_DEBUG ("r_th_lock_leave");
 #if HAVE_PTHREAD
-	return pthread_mutex_unlock (&thl->lock);
+	return pthread_mutex_unlock (&thl->lock) == 0;
 #elif __WINDOWS__
 	LeaveCriticalSection (&thl->lock);
-	return 0;
+	return true;
 #else
-	return 0;
+	return false;
 #endif
 }
+#else
+R_API bool r_th_lock_enter(RThreadLock *thl) {
+	return false;
+}
+R_API bool r_th_lock_tryenter(RThreadLock *thl) {
+	return false;
+}
+R_API bool r_th_lock_leave(RThreadLock *thl) {
+	return false;
+}
+#endif
 
 R_API void *r_th_lock_free(RThreadLock *thl) {
+	R_LOG_DEBUG ("r_th_lock_free");
 	if (thl) {
 #if HAVE_PTHREAD
 		pthread_mutex_destroy (&thl->lock);

@@ -1,4 +1,6 @@
-/* radare2 - LGPL - Copyright 2009-2021 - pancake, nibble, dso */
+/* radare2 - LGPL - Copyright 2009-2022 - pancake, nibble, dso */
+
+#define R_LOG_ORIGIN "bin"
 
 #include <r_bin.h>
 #include <r_types.h>
@@ -134,6 +136,7 @@ R_API void r_bin_info_free(RBinInfo *rb) {
 	r_list_free (rb->file_hashes);
 	free (rb->intrp);
 	free (rb->file);
+	free (rb->charset);
 	free (rb->type);
 	free (rb->bclass);
 	free (rb->rclass);
@@ -216,7 +219,7 @@ R_API bool r_bin_open(RBin *bin, const char *file, RBinFileOptions *opt) {
 		opt->fd = iob->fd_open (iob->io, file, R_PERM_R, 0644);
 	}
 	if (opt->fd < 0) {
-		eprintf ("Couldn't open bin for file '%s'\n", file);
+		R_LOG_ERROR ("Couldn't open bin for file '%s'", file);
 		return false;
 	}
 	opt->sz = 0;
@@ -229,13 +232,16 @@ R_API bool r_bin_reload(RBin *bin, ut32 bf_id, ut64 baseaddr) {
 
 	RBinFile *bf = r_bin_file_find_by_id (bin, bf_id);
 	if (!bf) {
-		eprintf ("r_bin_reload: No file to reopen\n");
+		R_LOG_ERROR ("r_bin_reload: No file to reopen");
 		return false;
 	}
 	RBinFileOptions opt;
 	r_bin_file_options_init (&opt, bf->fd, baseaddr, bf->loadaddr, bin->rawstr);
 	opt.filename = bf->file;
-
+	if (!bf->buf) {
+		r_bin_file_delete (bin, bf->id);
+		return false;
+	}
 	bool res = r_bin_open_buf (bin, bf->buf, &opt);
 	r_bin_file_delete (bin, bf->id);
 	return res;
@@ -327,7 +333,7 @@ R_API bool r_bin_open_io(RBin *bin, RBinFileOptions *opt) {
 	RBuffer *slice = buf;
 	if (!is_debugger && (opt->loadaddr != 0 || opt->sz != r_buf_size (buf))) {
 		slice = r_buf_new_slice (buf, opt->loadaddr, opt->sz);
-	} else if (is_debugger && opt->baseaddr != UT64_MAX && opt->baseaddr != 0) {
+	} else if (is_debugger && opt->baseaddr != UT64_MAX) {
 		slice = r_buf_new_slice (buf, opt->baseaddr, opt->sz);
 	}
 	if (slice != buf) {
@@ -540,7 +546,7 @@ R_API bool r_bin_list_plugin(RBin *bin, const char* name, PJ *pj, int json) {
 		return true;
 	}
 
-	eprintf ("Cannot find plugin %s\n", name);
+	R_LOG_ERROR ("Cannot find plugin %s", name);
 	return false;
 }
 
@@ -640,7 +646,7 @@ R_API void r_bin_set_baddr(RBin *bin, ut64 baddr) {
 			}
 		}
 	} else {
-		eprintf ("Warning: This should be an assert probably.\n");
+		R_LOG_WARN ("This should be an assert probably");
 	}
 	// XXX - update all the infos?
 	// maybe in RBinFile.rebase() ?
@@ -686,43 +692,16 @@ R_API RList *r_bin_get_libs(RBin *bin) {
 	return o ? o->libs : NULL;
 }
 
-static RList *relocs_rbtree2list(RRBTree *tree) {
-	RList *ret = r_list_new ();
-	if (!ret) {
-		return NULL;
-	}
-	RRBNode *node = r_crbtree_first_node (tree);
-	while (node) {
-		r_list_append (ret, node->data);
-		node = r_rbnode_next (node);
-	}
-	return ret;
-}
-
 R_API RRBTree *r_bin_patch_relocs(RBin *bin) {
 	r_return_val_if_fail (bin, NULL);
 	RBinObject *o = r_bin_cur_object (bin);
 	return o? r_bin_object_patch_relocs (bin, o): NULL;
 }
 
-// return a list of RBinReloc that needs to be freed by the caller
-R_API RList *r_bin_patch_relocs_list(RBin *bin) {
-	r_return_val_if_fail (bin, NULL);
-	RRBTree *tree = r_bin_patch_relocs (bin);
-	return tree? relocs_rbtree2list (tree): NULL;
-}
-
 R_API RRBTree *r_bin_get_relocs(RBin *bin) {
 	r_return_val_if_fail (bin, NULL);
 	RBinObject *o = r_bin_cur_object (bin);
 	return o ? o->relocs : NULL;
-}
-
-// return a list of <const RBinReloc> that needs to be freed by the caller
-R_API RList *r_bin_get_relocs_list(RBin *bin) {
-	r_return_val_if_fail (bin, NULL);
-	RRBTree *tree = r_bin_get_relocs (bin);
-	return tree? relocs_rbtree2list (tree): NULL;
 }
 
 R_API RList *r_bin_get_sections(RBin *bin) {
@@ -860,25 +839,33 @@ R_API RBin *r_bin_new(void) {
 	}
 	/* extractors */
 	bin->binxtrs = r_list_new ();
-	bin->binxtrs->free = free;
-	for (i = 0; bin_xtr_static_plugins[i]; i++) {
-		static_xtr_plugin = R_NEW0 (RBinXtrPlugin);
-		if (!static_xtr_plugin) {
-			goto trashbin_binxtrs;
+	if (bin->binxtrs) {
+		bin->binxtrs->free = free;
+		for (i = 0; bin_xtr_static_plugins[i]; i++) {
+			static_xtr_plugin = R_NEW0 (RBinXtrPlugin);
+			if (!static_xtr_plugin) {
+				goto trashbin_binxtrs;
+			}
+			*static_xtr_plugin = *bin_xtr_static_plugins[i];
+			if (r_bin_xtr_add (bin, static_xtr_plugin) == false) {
+				free (static_xtr_plugin);
+			}
 		}
-		*static_xtr_plugin = *bin_xtr_static_plugins[i];
-		r_bin_xtr_add (bin, static_xtr_plugin);
 	}
 	/* loaders */
 	bin->binldrs = r_list_new ();
-	bin->binldrs->free = free;
-	for (i = 0; bin_ldr_static_plugins[i]; i++) {
-		static_ldr_plugin = R_NEW0 (RBinLdrPlugin);
-		if (!static_ldr_plugin) {
-			goto trashbin_binldrs;
+	if (bin->binldrs) {
+		bin->binldrs->free = free;
+		for (i = 0; bin_ldr_static_plugins[i]; i++) {
+			static_ldr_plugin = R_NEW0 (RBinLdrPlugin);
+			if (!static_ldr_plugin) {
+				goto trashbin_binldrs;
+			}
+			*static_ldr_plugin = *bin_ldr_static_plugins[i];
+			if (r_bin_ldr_add (bin, static_ldr_plugin) == false) {
+				free (static_ldr_plugin);
+			}
 		}
-		*static_ldr_plugin = *bin_ldr_static_plugins[i];
-		r_bin_ldr_add (bin, static_ldr_plugin);
 	}
 	return bin;
 trashbin_binldrs:
@@ -898,7 +885,7 @@ R_API bool r_bin_use_arch(RBin *bin, const char *arch, int bits, const char *nam
 
 	RBinFile *binfile = r_bin_file_find_by_arch_bits (bin, arch, bits);
 	if (!binfile) {
-		R_LOG_WARN ("Cannot find binfile with arch/bits %s/%d\n", arch, bits);
+		R_LOG_WARN ("Cannot find binfile with arch/bits %s/%d", arch, bits);
 		return false;
 	}
 
@@ -1008,11 +995,11 @@ R_API void r_bin_list_archs(RBin *bin, PJ *pj, int mode) {
 	}
 	Sdb *binfile_sdb = binfile? binfile->sdb: NULL;
 	if (!binfile_sdb) {
-	//	eprintf ("Cannot find SDB!\n");
+	//	R_LOG_ERROR ("Cannot find SDB!");
 		return;
 	}
 	if (!binfile) {
-	//	eprintf ("Binary format not currently loaded!\n");
+	//	R_LOG_ERROR ("Binary format not currently loaded!");
 		return;
 	}
 	sdb_unset (binfile_sdb, ARCHS_KEY, 0);
@@ -1130,7 +1117,7 @@ R_API void r_bin_list_archs(RBin *bin, PJ *pj, int mode) {
 				"0x%08" PFMT64x ":%" PFMT64u ":%s:%d",
 				boffset, obj_size, "unk", 0);
 		} else {
-			eprintf ("Error: Invalid RBinFile.\n");
+			R_LOG_ERROR ("Invalid RBinFile");
 		}
 		//sdb_array_push (binfile_sdb, ARCHS_KEY, archline, 0);
 	}
@@ -1172,11 +1159,11 @@ R_API RBuffer *r_bin_create(RBin *bin, const char *p,
 
 	RBinPlugin *plugin = r_bin_get_binplugin_by_name (bin, p);
 	if (!plugin) {
-		R_LOG_WARN ("Cannot find RBin plugin named '%s'.\n", p);
+		R_LOG_WARN ("Cannot find RBin plugin named '%s'", p);
 		return NULL;
 	}
 	if (!plugin->create) {
-		R_LOG_WARN ("RBin plugin '%s' does not implement \"create\" method.\n", p);
+		R_LOG_WARN ("RBin plugin '%s' does not implement \"create\" method", p);
 		return NULL;
 	}
 	codelen = R_MAX (codelen, 0);
@@ -1197,7 +1184,7 @@ R_API RBuffer *r_bin_package(RBin *bin, const char *type, const char *file, RLis
 		ut8 *num8 = (ut8*)&num;
 		RBuffer *buf = r_buf_new_file (file, O_RDWR | O_CREAT, 0644);
 		if (!buf) {
-			eprintf ("Cannot open file %s - Permission Denied.\n", file);
+			R_LOG_ERROR ("Cannot open file %s - Permission Denied", file);
 			return NULL;
 		}
 		r_buf_write_at (buf, 0, (const ut8*)"\xca\xfe\xba\xbe", 4);
@@ -1214,7 +1201,7 @@ R_API RBuffer *r_bin_package(RBin *bin, const char *type, const char *file, RLis
 			if (f_buf) {
 				eprintf ("ADD %s %"PFMT64u"\n", f, (ut64)f_len);
 			} else {
-				eprintf ("Cannot open %s\n", f);
+				R_LOG_ERROR ("Cannot open %s", f);
 				free (f_buf);
 				continue;
 			}

@@ -2,6 +2,7 @@
 
 // project class definition to be used by project.c
 
+#include "rvc.h"
 #include <r_core.h>
 
 R_API RProject *r_project_new(void) {
@@ -15,7 +16,7 @@ R_API bool r_project_rename(RProject *p, const char *newname) {
 	}
 	char *newprjdir = r_file_new (p->path, "..", newname, NULL);
 	if (r_file_exists (newprjdir)) {
-		eprintf ("Cannot rename.\n");
+		R_LOG_ERROR ("Cannot rename");
 		free (newprjdir);
 		return false;
 	}
@@ -38,6 +39,8 @@ R_API void r_project_close(RProject *p) {
 	// close the current project
 	R_FREE (p->name);
 	R_FREE (p->path);
+	r_vc_close (p->rvc, true);
+	p->rvc = NULL;
 }
 
 R_API bool r_project_open(RProject *p, const char *name, const char *path) {

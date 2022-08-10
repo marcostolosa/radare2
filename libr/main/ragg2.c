@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2011-2021 - pancake */
+/* radare - LGPL - Copyright 2011-2022 - pancake */
 
 #include <r_egg.h>
 #include <r_bin.h>
@@ -469,7 +469,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 		} else if (strstr (file, ".c")) {
 			char *fileSanitized = strdup (file);
 			r_str_sanitize (fileSanitized);
-			char *textFile = r_egg_Cfile_parser (fileSanitized, arch, os, bits);
+			char *textFile = r_egg_cfile_parser (fileSanitized, arch, os, bits);
 
 			if (!textFile) {
 				eprintf ("Failure while parsing '%s'\n", fileSanitized);

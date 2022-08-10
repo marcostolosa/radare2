@@ -1,15 +1,8 @@
 /* Apache 2.0 - Copyright 2007-2022 - pancake and dso
    class.c rewrite: Adam Pridgen <dso@rice.edu || adam.pridgen@thecoverofnight.com>
  */
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <r_types.h>
-#include <r_util.h>
 #include <r_bin.h>
 #include <math.h>
-#include <sdb.h>
 #include "class.h"
 
 #ifdef IFDBG
@@ -1623,11 +1616,11 @@ R_API RBinJavaCPTypeObj *r_bin_java_read_next_constant_pool_item(RBinJavaObj *bi
 			java_obj->file_offset = offset;
 			// IFDBG eprintf ("java_obj->file_offset = 0x%08"PFMT64x".\n",java_obj->file_offset);
 		} else if (!java_obj) {
-			eprintf ("Unable to parse the tag '%d' and create valid object.\n", tag);
+			R_LOG_ERROR ("Unable to parse the tag '%d' and create valid object", tag);
 		} else if (!java_obj->metas) {
-			eprintf ("Unable to parse the tag '%d' and create valid object.\n", tag);
+			R_LOG_ERROR ("Unable to parse the tag '%d' and create valid object", tag);
 		} else {
-			eprintf ("Failed to set the java_obj->metas-file_offset for '%d' offset is(0x%08"PFMT64x ").\n", tag, offset);
+			R_LOG_ERROR ("Failed to set the java_obj->metas-file_offset for '%d' offset is(0x%08"PFMT64x ")", tag, offset);
 		}
 	}
 	free (cp_buf);
@@ -1957,10 +1950,10 @@ R_API RBinJavaAttrInfo *r_bin_java_get_attr_from_field(RBinJavaField *field, R_B
 }
 
 R_API ut8 *r_bin_java_get_attr_buf(RBinJavaObj *bin, ut64 sz, const ut64 offset, const ut8 *buf, const ut64 len) {
-	ut8 *attr_buf = NULL;
+	// XXX this pending is wrong and too expensive
 	int pending = len - offset;
 	const ut8 *a_buf = offset + buf;
-	attr_buf = (ut8 *) calloc (pending + 1, 1);
+	ut8 *attr_buf = (ut8 *) calloc (pending + 1, 1);
 	if (!attr_buf) {
 		eprintf ("Unable to allocate enough bytes (0x%04"PFMT64x
 			") to read in the attribute.\n", sz);
@@ -2145,11 +2138,11 @@ R_API ut64 r_bin_java_parse_cp_pool(RBinJavaObj *bin, const ut64 offset, const u
 			IFDBG ((RBinJavaCPTypeMetas *) obj->metas->type_info)->allocs->print_summary (obj);
 			adv += ((RBinJavaCPTypeMetas *) obj->metas->type_info)->allocs->calc_size (obj);
 			if (offset + adv > len) {
-				eprintf ("[X] r_bin_java: Error unable to parse remainder of classfile after Constant Pool Object: %d.\n", ord);
+				R_LOG_ERROR ("r_bin_java: Error unable to parse remainder of classfile after Constant Pool Object: %d", ord);
 				break;
 			}
 		} else {
-			IFDBG eprintf ("Failed to read ConstantPoolItem %d\n", bin->cp_idx);
+			IFDBG R_LOG_ERROR ("Failed to read ConstantPoolItem %d", bin->cp_idx);
 			break;
 		}
 	}
@@ -2220,7 +2213,7 @@ R_API ut64 r_bin_java_parse_fields(RBinJavaObj *bin, const ut64 offset, const ut
 					break;
 				}
 			} else {
-				IFDBG eprintf ("Failed to read Field %d\n", i);
+				IFDBG R_LOG_ERROR ("Failed to read Field %d", i);
 				break;
 			}
 		}
@@ -3029,7 +3022,7 @@ R_API RList *r_bin_java_get_symbols(RBinJavaObj *bin) {
 	bin->lang = "java";
 	if (bin->cf.major[1] >= 46) {
 		switch (bin->cf.major[1]) {
-			static char lang[32];
+			static R_TH_LOCAL char lang[32];
 			int langid;
 			case 46:
 			case 47:
@@ -3559,7 +3552,9 @@ R_API RBinJavaAttrInfo *r_bin_java_constant_value_attr_new(RBinJavaObj *bin, ut8
 	RBinJavaAttrInfo *attr = r_bin_java_default_attr_new (bin, buffer, sz, buf_offset);
 	if (attr) {
 		attr->type = R_BIN_JAVA_ATTR_TYPE_CONST_VALUE_ATTR;
-		attr->info.constant_value_attr.constantvalue_idx = R_BIN_JAVA_USHORT (buffer, offset);
+		if (offset + 4 < sz) {
+			attr->info.constant_value_attr.constantvalue_idx = R_BIN_JAVA_USHORT (buffer, offset);
+		}
 		offset += 2;
 		attr->size = offset;
 	}
@@ -6931,6 +6926,10 @@ R_API RBinJavaAttrInfo *r_bin_java_bootstrap_methods_attr_new(RBinJavaObj *bin, 
 	offset += 6;
 	if (attr) {
 		attr->type = R_BIN_JAVA_ATTR_TYPE_BOOTSTRAP_METHODS_ATTR;
+		if (offset + 8 > sz)  {
+			free (attr);
+			return NULL;
+		}
 		attr->info.bootstrap_methods_attr.num_bootstrap_methods = R_BIN_JAVA_USHORT (buffer, offset);
 		offset += 2;
 		attr->info.bootstrap_methods_attr.bootstrap_methods = r_list_newf (r_bin_java_bootstrap_method_free);
@@ -7079,9 +7078,11 @@ R_API ut64 r_bin_java_rtv_annotations_attr_calc_size(RBinJavaAttrInfo *attr) {
 
 R_API RBinJavaAttrInfo *r_bin_java_rti_annotations_attr_new(RBinJavaObj *bin, ut8 *buffer, ut64 sz, ut64 buf_offset) {
 	ut32 i = 0;
-	RBinJavaAttrInfo *attr = NULL;
 	ut64 offset = 0;
-	attr = r_bin_java_default_attr_new (bin, buffer, sz, buf_offset);
+	if (buf_offset + 32 >= sz) {
+		return NULL;
+	}
+	RBinJavaAttrInfo *attr = r_bin_java_default_attr_new (bin, buffer, sz, buf_offset);
 	offset += 6;
 	if (attr) {
 		attr->type = R_BIN_JAVA_ATTR_TYPE_RUNTIME_INVISIBLE_ANNOTATION_ATTR;
@@ -7646,7 +7647,7 @@ R_API RList *r_bin_java_find_cp_const_by_val(RBinJavaObj *bin_obj, const ut8 *by
 	case R_BIN_JAVA_CP_DOUBLE: return r_bin_java_find_cp_const_by_val_double (bin_obj, bytes, len);
 	case R_BIN_JAVA_CP_UNKNOWN:
 	default:
-		eprintf ("Failed to perform the search for: %s\n", bytes);
+		R_LOG_ERROR ("Failed to perform the search for: %s", bytes);
 		return r_list_new ();
 	}
 }

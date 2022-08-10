@@ -25,12 +25,6 @@
 	return;								\
 } while (0)
 
-/* callback pointer */
-ST_DATA R_TH_LOCAL char **tcc_cb_ptr;
-// globals that must be moved into TCCState
-ST_DATA R_TH_LOCAL CType char_pointer_type, func_old_type;
-ST_DATA R_TH_LOCAL CType int8_type, int16_type, int32_type, int64_type, size_type;
-
 /* ------------------------------------------------------------------------- */
 static inline CType *pointed_type(CType *type);
 static bool is_compatible_types(CType *type1, CType *type2);
@@ -194,12 +188,10 @@ int tcc_sym_push(TCCState *s1, char *typename, int typesize, int meta) {
 	new_type->ref = sym_malloc (s1);
 	new_type->t = meta;
 
-	if (!sym_push (s1, 0, new_type, 0, 0)) {
-		return 0;
-	}
+	Sym *sym = sym_push (s1, 0, new_type, 0, 0);
 
 	free (new_type);
-	return 1;
+	return sym != NULL;
 }
 
 void dump_type(TCCState *s1, CType *type, int depth) {
@@ -363,15 +355,15 @@ static void vsetc(TCCState *s1, CType *type, int r, CValue *vc) {
 
 /* push constant of type "type" with useless value */
 void vpush(TCCState *s1, CType *type) {
-	CValue cval = { 0 };
+	CValue cval = {0};
 	vsetc (s1, type, VT_CONST, &cval);
 }
 
 /* push integer constant */
 ST_FUNC void vpushi(TCCState *s1, int v) {
-	CValue cval = { 0 };
+	CValue cval = {0};
 	cval.i = v;
-	vsetc (s1, &int32_type, VT_CONST, &cval);
+	vsetc (s1, &s1->int32_type, VT_CONST, &cval);
 }
 
 /* push a pointer sized constant */
@@ -382,7 +374,7 @@ static void vpushs(TCCState *s1, long long v) {
 	} else {
 		cval.ull = v;
 	}
-	vsetc (s1, &size_type, VT_CONST, &cval);
+	vsetc (s1, &s1->size_type, VT_CONST, &cval);
 }
 
 /* push arbitrary 64 bit constant */
@@ -399,7 +391,7 @@ void vpush64(TCCState *s1, int ty, unsigned long long v) {
 ST_FUNC void vpushll(TCCState *s1, long long v) {
 	CValue cval;
 	cval.ll = v;
-	vsetc (s1, &int64_type, VT_CONST, &cval);
+	vsetc (s1, &s1->int64_type, VT_CONST, &cval);
 }
 
 ST_FUNC void vset(TCCState *s1, CType *type, int r, int v) {
@@ -410,7 +402,7 @@ ST_FUNC void vset(TCCState *s1, CType *type, int r, int v) {
 }
 
 static void vseti(TCCState *s1, int r, int v) {
-	CType type = { 0 };
+	CType type = {0};
 	type.t = VT_INT32;
 	type.ref = NULL;
 	vset (s1, &type, r, v);
@@ -722,7 +714,7 @@ add_tstr:
 		type_to_str (s1, buf, buf_size, &s->type, varstr);
 		pstrcat (buf, buf_size, "(");
 		sa = s->next;
-		while (sa != NULL) {
+		while (sa) {
 			type_to_str (s1, buf1, sizeof (buf1), &sa->type, NULL);
 			pstrcat (buf, buf_size, buf1);
 			sa = sa->next;
@@ -982,15 +974,15 @@ do_decl:
 				// TODO: use is_typedef here
 				if (strcmp (name, "{")) {
 					const char *varstr = get_tok_str (s1, v, NULL);
-					tcc_appendf ("%s=enum\n", name);
-					tcc_appendf ("[+]enum.%s=%s\n", name, varstr);
-					tcc_appendf ("enum.%s.%s=0x%"PFMT64x "\n", name, varstr, iota);
-					tcc_appendf ("enum.%s.0x%"PFMT64x "=%s\n", name, iota, varstr);
+					tcc_appendf (s1, "%s=enum\n", name);
+					tcc_appendf (s1, "[+]enum.%s=%s\n", name, varstr);
+					tcc_appendf (s1, "enum.%s.%s=0x%"PFMT64x "\n", name, varstr, iota);
+					tcc_appendf (s1, "enum.%s.0x%"PFMT64x "=%s\n", name, iota, varstr);
 					// TODO: if token already defined throw an error
 					// if (varstr isInside (arrayOfvars)) { erprintf ("ERROR: DUP VAR IN ENUM\n"); }
 				}
 				/* enum symbols have static storage */
-				ss = sym_push (s1, v, &int64_type, VT_CONST, iota);
+				ss = sym_push (s1, v, &s1->int64_type, VT_CONST, iota);
 				if (!ss) {
 					return;
 				}
@@ -1015,7 +1007,7 @@ do_decl:
 
 			const char *ctype = (a == TOK_UNION)? "union": "struct";
 			if (!is_typedef || !autonamed) {
-				tcc_appendf ("%s=%s\n", name, ctype);
+				tcc_appendf (s1, "%s=%s\n", name, ctype);
 			}
 
 			while (s1->tok != '}') {
@@ -1137,16 +1129,16 @@ do_decl:
 							int type_bt = type1.t & VT_BTYPE;
 							//eprintf("2: %s.%s = %s\n", ctype, name, varstr);
 							if (is_typedef && autonamed) {
-								tcc_typedef_appendf ("[+]typedef.%%s.fields=%s\n", varstr);
-								tcc_typedef_appendf ("typedef.%%s.%s.meta=%d\n", varstr, type_bt);
-								tcc_typedef_appendf ("typedef.%%s.%s=%s,%d,%d\n", varstr, b, offset, (int)s1->arraysize);
+								tcc_typedef_appendf (s1, "[+]typedef.%%s.fields=%s\n", varstr);
+								tcc_typedef_appendf (s1, "typedef.%%s.%s.meta=%d\n", varstr, type_bt);
+								tcc_typedef_appendf (s1, "typedef.%%s.%s=%s,%d,%d\n", varstr, b, offset, (int)s1->arraysize);
 							} else {
-								tcc_appendf ("[+]%s.%s=%s\n",
+								tcc_appendf (s1, "[+]%s.%s=%s\n",
 									ctype, name, varstr);
-								tcc_appendf ("%s.%s.%s.meta=%d\n",
+								tcc_appendf (s1, "%s.%s.%s.meta=%d\n",
 									ctype, name, varstr, type_bt);
 								/* compact form */
-								tcc_appendf ("%s.%s.%s=%s,%d,%d\n",
+								tcc_appendf (s1, "%s.%s.%s=%s,%d,%d\n",
 									ctype, name, varstr, b, offset, (int)s1->arraysize);
 							}
 #if 0
@@ -1157,9 +1149,9 @@ do_decl:
 							// (%s) field (%s) offset=%d array=%d", name, b, get_tok_str(v, NULL), offset, arraysize);
 							s1->arraysize = 0;
 							if (type1.t & VT_BITFIELD) {
-								tcc_appendf ("%s.%s.%s.bitfield.pos=%d\n",
+								tcc_appendf (s1, "%s.%s.%s.bitfield.pos=%d\n",
 									ctype, name, varstr, (type1.t >> VT_STRUCT_SHIFT) & 0x3f);
-								tcc_appendf ("%s.%s.%s.bitfield.size=%d\n",
+								tcc_appendf (s1, "%s.%s.%s.bitfield.size=%d\n",
 									ctype, name, varstr, (type1.t >> (VT_STRUCT_SHIFT + 6)) & 0x3f);
 							}
 							// printf("\n");
@@ -1168,7 +1160,7 @@ do_decl:
 					}
 					if (v == 0 && is_structured (&type1)) {
 						ass = type1.ref;
-						while ((ass = ass->next) != NULL) {
+						while ((ass = ass->next)) {
 							ss = sym_push (s1, ass->v, &ass->type, 0, offset + ass->c);
 							if (!ss) {
 								return;
@@ -1496,9 +1488,9 @@ static void post_type(TCCState *s1, CType *type, AttributeDef *ad) {
 			const char *ret_type = s1->global_type;
 			free (symname);
 			symname = strdup (s1->global_symname);
-			tcc_appendf ("func.%s.ret=%s\n", symname, ret_type);
-			tcc_appendf ("func.%s.cc=%s\n", symname, "cdecl");	// TODO
-			tcc_appendf ("%s=func\n", symname);
+			tcc_appendf (s1, "func.%s.ret=%s\n", symname, ret_type);
+			tcc_appendf (s1, "func.%s.cc=%s\n", symname, "cdecl");	// TODO
+			tcc_appendf (s1, "%s=func\n", symname);
 		}
 		arg_size = 0;
 		if (s1->tok != ')') {
@@ -1538,7 +1530,7 @@ old_proto:
 				} else {
 					char kind[1024];
 					type_to_str (s1, kind, sizeof (kind), &pt, NULL);
-					tcc_appendf ("func.%s.arg.%d=%s,%s\n",
+					tcc_appendf (s1, "func.%s.arg.%d=%s,%s\n",
 						symname, narg, kind, s1->global_symname);
 					narg++;
 				}
@@ -1555,7 +1547,7 @@ old_proto:
 				}
 			}
 		}
-		tcc_appendf ("func.%s.args=%d\n", symname, narg);
+		tcc_appendf (s1, "func.%s.args=%d\n", symname, narg);
 		/* if no parameters, then old type prototype */
 		if (l == 0) {
 			l = FUNC_OLD;
@@ -1705,12 +1697,11 @@ redo:
 		post_type (s1, type, ad);
 		s1->nocode_wanted = saved_nocode_wanted;
 	} else {
-		static char kind[1024];
 		char *name = get_tok_str (s1, *v, NULL);
-		type_to_str (s1, kind, sizeof(kind), type, NULL);
+		type_to_str (s1, s1->decl_kind, sizeof(s1->decl_kind), type, NULL);
 		// eprintf ("---%d %s STATIC %s\n", td, kind, name);
 		s1->global_symname = name;
-		s1->global_type = kind;
+		s1->global_type = s1->decl_kind;
 		post_type (s1, type, ad);
 	}
 	type->t |= storage;
@@ -1781,7 +1772,7 @@ static void parse_type(TCCState *s1, CType *type) {
 }
 
 static void vpush_tokc(TCCState *s1, int t) {
-	CType type = { 0 };
+	CType type = {0};
 	type.t = t;
 	type.ref = NULL;
 	vsetc (s1, &type, VT_CONST, &s1->tokc);
@@ -1789,10 +1780,10 @@ static void vpush_tokc(TCCState *s1, int t) {
 
 static void unary(TCCState *s1) {
 	int n, t, align, size, r, sizeof_caller;
-	CType type = { 0 };
+	CType type = {0};
 	Sym *s;
 	AttributeDef ad;
-	static int in_sizeof = 0;
+	static R_TH_LOCAL int in_sizeof = 0;
 
 	sizeof_caller = in_sizeof;
 	in_sizeof = 0;
@@ -1975,7 +1966,6 @@ str_init:
 	case TOK_builtin_frame_address:
 	{
 		int level;
-		CType type = { 0  };
 		next (s1);
 		skip (s1, '(');
 		if (s1->tok != TOK_CINT || s1->tokc.i < 0) {
@@ -2006,13 +1996,12 @@ str_init:
 				TCC_ERR ("__builtin_va_start expects a local variable");
 			}
 			s1->vtop->r &= ~(VT_LVAL | VT_REF);
-			s1->vtop->type = char_pointer_type;
+			s1->vtop->type = s1->char_pointer_type;
 		}
 		break;
 	case TOK_builtin_va_arg_types:
 		if (!(!strncmp (s1->arch, "x86", 3) && s1->bits == 64 &&
 		      !strncmp (s1->os, "windows", 7))) {
-			CType type = { 0  };
 			next (s1);
 			skip (s1, '(');
 			parse_type (s1, &type);
@@ -2092,7 +2081,7 @@ tok_identifier:
 			s = s1->vtop->type.ref;
 			/* find field */
 			s1->tok |= SYM_FIELD;
-			while ((s = s->next) != NULL) {
+			while ((s = s->next)) {
 				if (s->v == s1->tok) {
 					break;
 				}
@@ -2101,7 +2090,7 @@ tok_identifier:
 				TCC_ERR ("field not found: %s", get_tok_str (s1, s1->tok & ~SYM_FIELD, NULL));
 			}
 			/* add field offset to pointer */
-			s1->vtop->type = char_pointer_type;	/* change type to 'char *' */
+			s1->vtop->type = s1->char_pointer_type;	/* change type to 'char *' */
 			vpushi (s1, s->c);
 			/* change type to field type, and set to lvalue */
 			s1->vtop->type = s->type;
@@ -2522,14 +2511,8 @@ static void decl_initializer(TCCState *s1, CType *type, unsigned long c, int fir
 
 		/* only parse strings here if correct type (otherwise: handle
 		   them as ((w)char *) expressions */
-		if ((s1->tok == TOK_LSTR &&
-/* FIXME: Handle platform here ! */
-#ifdef TCC_TARGET_PE
-		     (t1->t & VT_BTYPE) == VT_INT16 && (t1->t & VT_UNSIGNED)
-#else
-		     (t1->t & VT_BTYPE) == VT_INT32
-#endif
-		    ) || (s1->tok == TOK_STR && (t1->t & VT_BTYPE) == VT_INT8)) {
+		// TARGET_PE ?? (t1->t & VT_BTYPE) == VT_INT16 && (t1->t & VT_UNSIGNED)
+		if ((s1->tok == TOK_LSTR && (t1->t & VT_BTYPE) == VT_INT32) || (s1->tok == TOK_STR && (t1->t & VT_BTYPE) == VT_INT8)) {
 			while (tcc_nerr (s1) == 0 && (s1->tok == TOK_STR || s1->tok == TOK_LSTR)) {
 				CString *cstr = s1->tokc.cstr;
 				/* compute maximum number of chars wanted */
@@ -2885,7 +2868,7 @@ static void decl_initializer_alloc(TCCState *s1, CType *type, AttributeDef *ad, 
 				sym->asm_label = asm_label;
 			}
 		} else {
-			CValue cval = { 0 };
+			CValue cval = {0};
 			vsetc (s1, type, VT_CONST | VT_SYM, &cval);
 			s1->vtop->sym = sym;
 		}
@@ -2923,7 +2906,7 @@ static void func_decl_list(TCCState *s1, Sym *func_sym) {
 				/* find parameter in function parameter list */
 				s = func_sym;
 				found = 0;
-				while ((s = s->next) != NULL) {
+				while ((s = s->next)) {
 					if ((s->v & ~SYM_FIELD) == v) {
 						found = 1;
 						break;
@@ -3023,7 +3006,7 @@ static int decl0(TCCState *s1, int l, int is_for_loop_init) {
 			if (ad.weak) {
 				type.t |= VT_WEAK;
 			}
-#ifdef TCC_TARGET_PE
+#if 0
 			if (ad.func_import) {
 				type.t |= VT_IMPORT;
 			}
@@ -3043,7 +3026,7 @@ static int decl0(TCCState *s1, int l, int is_for_loop_init) {
 				/* reject abstract declarators in function definition */
 				sym = type.ref;
 				if (sym) {
-					while ((sym = sym->next) != NULL)
+					while ((sym = sym->next))
 						if (!(sym->v & ~SYM_FIELD)) {
 							expect (s1, "identifier6");
 						}
@@ -3114,9 +3097,9 @@ func_error1:
 					char buf[500];
 					alias = get_tok_str (s1, v, NULL);
 					type_to_str (s1, buf, sizeof (buf), &sym->type, NULL);
-					tcc_appendf ("%s=typedef\n", alias);
-					tcc_appendf ("typedef.%s=%s\n", alias, buf);
-					tcc_typedef_alias_fields (alias);
+					tcc_appendf (s1, "%s=typedef\n", alias);
+					tcc_appendf (s1, "typedef.%s=%s\n", alias, buf);
+					tcc_typedef_alias_fields (s1, alias);
 				} else {
 					r = 0;
 					if ((type.t & VT_BTYPE) == VT_FUNC) {

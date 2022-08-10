@@ -1,10 +1,11 @@
 r_egg_sources = [
   'egg.c',
-  'egg_Cfile.c',
+  'egg_cfile.c',
   'egg_lang.c',
   'emit_arm.c',
   'emit_trace.c',
   'emit_x64.c',
+  'emit_esil.c',
   'emit_x86.c',
   #'p/egg_bind.c',
   #'p/egg_cb.c',
@@ -32,6 +33,7 @@ r_egg = library('r_egg', r_egg_sources,
 r_egg_dep = declare_dependency(link_with: r_egg,
   include_directories: [platform_inc])
 
+if get_option('blob')
 r_egg_static = static_library('r_egg_static', r_egg_sources,
   include_directories: [platform_inc],
   c_args: library_cflags,
@@ -47,6 +49,7 @@ r_egg_static = static_library('r_egg_static', r_egg_sources,
 
 r_egg_static_dep = declare_dependency(link_with: r_egg_static,
   include_directories: [platform_inc])
+endif
 
 pkgconfig_mod.generate(r_egg,
   subdirs: 'libr',

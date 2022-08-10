@@ -46,13 +46,15 @@ jobs:
         path: r2-static.tar.xz
 
   linux-acr-deb-64:
-    if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
+    # if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     runs-on: ubuntu-18.04
     steps:
     - name: Checkout
       uses: actions/checkout@v2
     - name: Packaging for Debian
-      run: sys/debian.sh
+      run: |
+        export CFLAGS="-Werror"
+        sys/debian.sh
     - name: Pub
       uses: actions/upload-artifact@v2
       with:
@@ -67,8 +69,8 @@ jobs:
     - name: Packaging for 32bit Debian
       run: |
         sudo apt --assume-yes update
-        sudo apt install gcc-multilib gperf
-        export CFLAGS=-m32
+        sudo apt install -y gcc-multilib gperf
+        export CFLAGS="-m32 -Werror"
         export LDFLAGS=-m32
         export ARCH=i386
         sys/debian.sh
@@ -131,7 +133,7 @@ jobs:
 
 
   # macOS
-  macos-acr:
+  macos-acr-x64:
     runs-on: macos-latest
     steps:
     - name: Checkout
@@ -146,24 +148,22 @@ jobs:
       uses: actions/upload-artifact@v2
       with:
         path: dist/macos/*.pkg
-        name: macos-acr
+        name: macos-acr-x64
 
-#   macos-acr-m1:
-#     runs-on: macos-latest
-#     steps:
-#     - name: Checkout
-#       uses: actions/checkout@v2
-#     - name: Packaging
-#       run: export CC="xcrun --sdk macosx11.1 gcc -arch arm64" ; dist/macos/build-pkg.sh
-#     - name: Pub
-#       uses: actions/upload-artifact@v2
-#       with:
-#         path: dist/macos/*.pkg
-#         name: macos-acr-m1
-#
-
-
-  # iOS
+  macos-acr-m1:
+     runs-on: macos-12
+     steps:
+     - name: Checkout
+       uses: actions/checkout@v2
+     - name: Packaging
+       env:
+         ARCHFLAGS: '-arch arm64'
+       run: export CC="gcc -arch arm64" ; dist/macos/build-pkg.sh
+     - name: Pub
+       uses: actions/upload-artifact@v2
+       with:
+         path: dist/macos/*.pkg
+         name: macos-acr-m1
   ios-cydia32:
     if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     runs-on: macos-latest
@@ -247,8 +247,9 @@ jobs:
         name: android-acr-arm
         path: radare2*android*arm.tar.gz
 
+  # disabled because the ndk link is broken for a while
   android-meson:
-    if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
+    if: contains(github.ref, 'android')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -270,7 +271,7 @@ jobs:
       run: |
         cd /tmp
         rm -rf android-dir/include android-dir/lib
-        tar --transform 's/android-dir/data\/data\/org.radareorg.radare2installer/g' -cvf radare2-android-${{ matrix.name }}.tar.gz android-dir/
+        tar --transform 's/android-dir/data\/data\/org.radareorg.radare2installer/g' -czvf radare2-android-${{ matrix.name }}.tar.gz android-dir/
     - uses: actions/upload-artifact@v2
       with:
         name: android-meson-${{ matrix.name }}
@@ -325,6 +326,90 @@ jobs:
         path: |
           radare2-${{ steps.r2v.outputs.branch }}-w32.zip
 #          radare2-win-installer\Output\radare2.exe
+  w64-static-2022:
+    runs-on: windows-2022
+    steps:
+    - name: Win configure Pagefile
+      uses: al-cheb/configure-pagefile-action@v1.2
+      with:
+          minimum-size: 16GB
+          maximum-size: 16GB
+          disk-root: "C:"
+    - name: Checkout
+      uses: actions/checkout@v2
+    - uses: actions/setup-python@v2
+#      with:
+#        python-version: '3.7'
+    - name: Preparing nmake
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install git+https://github.com/frida/meson.git@f7f25b19a8d71cebf8e2934733eb041eb6862eee
+        pip install ninja r2pipe wget r2env
+    - name: preconfigure
+      continue-on-error: true
+      shell: cmd
+      run: preconfigure
+    - name: Build with meson + ninja
+      shell: cmd
+      run: |
+        call configure static
+        call make
+    - name: Test executable
+      continue-on-error: true
+      shell: cmd
+      run: |
+        cd prefix\bin
+        r2blob -v
+    - uses: actions/upload-artifact@v2
+      continue-on-error: true
+      with:
+        name: w64-static-2022
+        path: prefix\bin\r2blob.static.exe
+
+  w64-static:
+    runs-on: windows-2019
+    steps:
+    - name: Win configure Pagefile
+      uses: al-cheb/configure-pagefile-action@v1.2
+      with:
+          minimum-size: 16GB
+          maximum-size: 16GB
+          disk-root: "C:"
+    - name: Checkout
+      uses: actions/checkout@v2
+    - uses: actions/setup-python@v2
+#      with:
+#        python-version: '3.7'
+    - name: Preparing nmake
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install git+https://github.com/frida/meson.git@f7f25b19a8d71cebf8e2934733eb041eb6862eee
+        pip install ninja r2pipe wget r2env
+    - name: Build with meson + ninja
+      shell: cmd
+      run: |
+        REM preconfigure
+        call configure static
+        call make
+    - name: Test executable
+      continue-on-error: true
+      shell: cmd
+      run: |
+        cd prefix\bin
+        r2blob -v
+    - uses: actions/upload-artifact@v2
+      continue-on-error: true
+      with:
+        name: w64-static
+        path: prefix\bin\r2blob.static.exe
 
   w64-meson:
     runs-on: windows-2019
@@ -420,20 +505,22 @@ jobs:
     needs:
       - linux-acr-deb-64
       - linux-acr-deb-32
+      - w64-static
       - w64-meson
       - w32-meson
-      - macos-acr
+      - macos-acr-x64
+      - macos-acr-m1
       - ios-cydia
       - ios-cydia32
       - ios-cydia
       - android-acr-arm
-      - android-meson
       - android-acr-aarch64
       - linux-static
       - linux-acr-deb-64
       - linux-acr-deb-32
       - linux-wasi
       - freebsd
+#      - android-meson
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -510,14 +597,23 @@ jobs:
           asset_path: dist/artifacts/w32-meson/radare2-${{ steps.r2v.outputs.branch }}-w32.zip
           asset_name: radare2-${{ steps.r2v.outputs.branch }}-w32.zip
           asset_content_type: application/zip
-      - name: Upload asset for macOS
+      - name: Upload asset for macOS-x64
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/artifacts/macos-acr/radare2-${{ steps.r2v.outputs.branch }}.pkg
-          asset_name: radare2-${{ steps.r2v.outputs.branch }}.pkg
+          asset_path: dist/artifacts/macos-acr-x64/radare2-x64-${{ steps.r2v.outputs.branch }}.pkg
+          asset_name: radare2-x64-${{ steps.r2v.outputs.branch }}.pkg
+          asset_content_type: application/x-xar
+      - name: Upload asset for macOS-m1
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/artifacts/macos-acr-m1/radare2-m1-${{ steps.r2v.outputs.branch }}.pkg
+          asset_name: radare2-m1-${{ steps.r2v.outputs.branch }}.pkg
           asset_content_type: application/x-xar
       - name: Upload asset for iPhoneOS (arm)
         uses: actions/upload-release-asset@v1
@@ -555,15 +651,15 @@ jobs:
           asset_path: dist/artifacts/android-acr-arm/radare2-${{ steps.r2v.outputs.branch }}-android-arm.tar.gz
           asset_name: radare2-${{ steps.r2v.outputs.branch }}-android-arm.tar.gz
           asset_content_type: application/gzip
-      - name: Upload asset for Android (x86_64)
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/artifacts/android-meson-x86_64/radare2-android-x86_64.tar.gz
-          asset_name: radare2-${{ steps.r2v.outputs.branch }}-android-x86_64.tar.gz
-          asset_content_type: application/x-tar
+#      - name: Upload asset for Android (x86_64)
+#        uses: actions/upload-release-asset@v1
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        with:
+#          upload_url: ${{ steps.create_release.outputs.upload_url }}
+#          asset_path: dist/artifacts/android-meson-x86_64/radare2-android-x86_64.tar.gz
+#          asset_name: radare2-${{ steps.r2v.outputs.branch }}-android-x86_64.tar.gz
+#          asset_content_type: application/x-tar
       - name: Upload asset for Android (aarch64)
         uses: actions/upload-release-asset@v1
         env:
@@ -618,3 +714,13 @@ jobs:
           asset_path: dist/artifacts/freebsd/radare2-freebsd.tgz
           asset_name: radare2-${{ steps.r2v.outputs.branch }}-freebsd.tgz
           asset_content_type: application/gzip
+      - name: Upload asset for Windows (w64-blob)
+        continue-on-error: true
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/artifacts/w64-static/r2blob.static.exe
+          asset_name: r2blob-${{ steps.r2v.outputs.branch }}-w64.zip
+          asset_content_type: application/zip

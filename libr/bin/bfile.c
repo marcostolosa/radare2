@@ -129,8 +129,8 @@ static int string_scan_range(RList *list, RBinFile *bf, int min,
 		return -1;
 	}
 	st64 len = (st64)(to - from);
-	if (len > ST32_MAX) {
-		eprintf ("String scan range is too large\n");
+	if (len < 1 || len > ST32_MAX) {
+		eprintf ("String scan range is invalid (%"PFMT64d" bytes)\n", len);
 		return -1;
 	}
 	ut8 *buf = calloc (len, 1);
@@ -167,8 +167,6 @@ static int string_scan_range(RList *list, RBinFile *bf, int min,
 				len = res;
 				free (buf);
 				buf = out;
-			} else {
-				eprintf ("Cannot allocate\n");
 			}
 		} else {
 			eprintf ("Invalid value for RABIN2_CHARSET.\n");
@@ -176,22 +174,21 @@ static int string_scan_range(RList *list, RBinFile *bf, int min,
 		r_charset_free (ch);
 	}
 	free (charset);
+	RConsIsBreaked is_breaked = (bin && bin->consb.is_breaked)? bin->consb.is_breaked: NULL;
 	// may oobread
-	while (needle < to) {
-		if (bin && bin->consb.is_breaked) {
-			if (bin->consb.is_breaked ()) {
-				break;
-			}
+	while (needle < to && needle < UT64_MAX - 4) {
+		if (is_breaked && is_breaked ()) {
+			break;
 		}
 		// smol optimization
-		if (needle + 4 < to) {
-			ut32 n1 = r_read_le32 (buf + needle - from);
+		if (to > 4 && needle < to - 4) {
+			ut32 n1 = r_read_le32 (buf + (needle - from));
 			if (!n1) {
 				needle += 4;
 				continue;
 			}
 		}
-		rc = r_utf8_decode (buf + needle - from, to - needle, NULL);
+		rc = r_utf8_decode (buf + (needle - from), to - needle, NULL);
 		if (!rc) {
 			needle++;
 			continue;
@@ -199,7 +196,7 @@ static int string_scan_range(RList *list, RBinFile *bf, int min,
 		bool addr_aligned = !(needle % 4);
 
 		if (type == R_STRING_TYPE_DETECT) {
-			char *w = (char *)buf + needle + rc - from;
+			char *w = (char *)buf + (needle + rc - from);
 			if (((to - needle) > 8 + rc)) {
 				// TODO: support le and be
 				bool is_wide32le = (needle + rc + 2 < to) && (!w[0] && !w[1] && !w[2] && w[3] && !w[4]);
@@ -249,7 +246,7 @@ static int string_scan_range(RList *list, RBinFile *bf, int min,
 					rc = 2;
 				}
 			} else {
-				rc = r_utf8_decode (buf + needle - from, to - needle, &r);
+				rc = r_utf8_decode (buf + (needle - from), to - needle, &r);
 				if (rc > 1) {
 					str_type = R_STRING_TYPE_UTF8;
 				}
@@ -343,6 +340,7 @@ static int string_scan_range(RList *list, RBinFile *bf, int min,
 				}
 				free (block_list);
 				if (num_blocks > R_STRING_MAX_UNI_BLOCKS) {
+					needle++;
 					continue;
 				}
 			}
@@ -423,7 +421,7 @@ static bool __isDataSection(RBinFile *a, RBinSection *s) {
 		return true;
 	}
  	// Rust
-	return strstr (s->name, "_const") != NULL;
+	return strstr (s->name, "_const");
 }
 
 static void get_strings_range(RBinFile *bf, RList *list, int min, int raw, ut64 from, ut64 to, RBinSection *section) {
@@ -446,7 +444,7 @@ static void get_strings_range(RBinFile *bf, RList *list, int min, int raw, ut64 
 	}
 	{
 		RIO *io = bf->rbin->iob.io;
-		RCoreBind *cb = &io->corebind;
+		RCoreBind *cb = &io->coreb;
 		if (cb && cb->cfgGet) {
 			const bool cfg_debug = cb->cfgGet (cb->core, "cfg.debug");
 			if (!cfg_debug) {
@@ -464,8 +462,7 @@ static void get_strings_range(RBinFile *bf, RList *list, int min, int raw, ut64 
 		// in case of dump ignore here
 		if (bf->rbin->maxstrbuf && size && size > bf->rbin->maxstrbuf) {
 			if (bf->rbin->verbose) {
-				eprintf ("Warning: bin_strings buffer is too big (0x%08" PFMT64x "). Use -zzz or set bin.maxstrbuf (RABIN2_MAXSTRBUF) in r2 (rabin2)\n",
-					size);
+				R_LOG_WARN ("bin_strings buffer is too big (0x%08" PFMT64x "). Use -zzz or set bin.maxstrbuf (RABIN2_MAXSTRBUF) in r2 (rabin2)", size);
 			}
 			return;
 		}
@@ -483,7 +480,7 @@ static void get_strings_range(RBinFile *bf, RList *list, int min, int raw, ut64 
 	} else if (!strcmp (enc, "utf32le")) {
 		type = R_STRING_TYPE_WIDE32;
 	} else { // TODO utf16be, utf32be
-		eprintf ("ERROR: encoding %s not supported\n", enc);
+		R_LOG_ERROR ("encoding %s not supported", enc);
 		return;
 	}
 	string_scan_range (list, bf, min, from, to, type, raw, section);
@@ -551,15 +548,23 @@ R_API bool r_bin_file_object_new_from_xtr_data(RBin *bin, RBinFile *bf, ut64 bas
 	if (!o->info) {
 		o->info = R_NEW0 (RBinInfo);
 	}
-	free (o->info->file);
-	free (o->info->arch);
-	free (o->info->machine);
-	free (o->info->type);
+	R_FREE (o->info->file);
+	R_FREE (o->info->arch);
+	R_FREE (o->info->machine);
+	R_FREE (o->info->type);
 	o->info->file = strdup (bf->file);
-	o->info->arch = strdup (data->metadata->arch);
-	o->info->machine = strdup (data->metadata->machine);
-	o->info->type = strdup (data->metadata->type);
-	o->info->bits = data->metadata->bits;
+	if (data->metadata) {
+		if (data->metadata->arch) {
+			o->info->arch = strdup (data->metadata->arch);
+		}
+		if (data->metadata->machine) {
+			o->info->machine = strdup (data->metadata->machine);
+		}
+		if (data->metadata->type) {
+			o->info->type = strdup (data->metadata->type);
+		}
+		o->info->bits = data->metadata->bits;
+	}
 	o->info->has_crypto = bf->o->info->has_crypto;
 	data->loaded = true;
 	return true;
@@ -824,7 +829,7 @@ R_IPI bool r_bin_file_set_bytes(RBinFile *bf, const ut8 *bytes, ut64 sz, bool st
 	} else {
 		bf->buf = r_buf_new_with_bytes (bytes, sz);
 	}
-	return bf->buf != NULL;
+	return bf->buf;
 }
 
 R_API RBinPlugin *r_bin_file_cur_plugin(RBinFile *bf) {
@@ -915,6 +920,7 @@ R_API bool r_bin_file_close(RBin *bin, int bd) {
 	return false;
 }
 
+// TODO: do not compute md5 or sha1, those are weak and vulnerable hashes
 R_API RList *r_bin_file_compute_hashes(RBin *bin, ut64 limit) {
 	r_return_val_if_fail (bin && bin->cur && bin->cur->o, NULL);
 	ut64 buf_len = 0, r = 0;
@@ -930,14 +936,13 @@ R_API RList *r_bin_file_compute_hashes(RBin *bin, ut64 limit) {
 	// By SLURP_LIMIT normally cannot compute ...
 	if (buf_len > limit) {
 		if (bin->verbose) {
-			eprintf ("Warning: r_bin_file_hash: file exceeds bin.hashlimit\n");
+			R_LOG_WARN ("r_bin_file_hash: file exceeds bin.hashlimit");
 		}
 		return NULL;
 	}
 	const size_t blocksize = 64000;
 	ut8 *buf = malloc (blocksize);
 	if (!buf) {
-		eprintf ("Cannot allocate computation buffer\n");
 		return NULL;
 	}
 
@@ -1065,7 +1070,7 @@ R_API RBinSymbol *r_bin_file_add_method(RBinFile *bf, const char *klass, const c
 
 	RBinClass *c = r_bin_file_add_class (bf, klass, NULL, 0);
 	if (!c) {
-		eprintf ("Cannot allocate class %s\n", klass);
+		R_LOG_ERROR ("Cannot allocate class %s", klass);
 		return NULL;
 	}
 	RBinSymbol *sym = __getMethod (bf, klass, method);

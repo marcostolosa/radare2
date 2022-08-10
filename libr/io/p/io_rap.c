@@ -32,7 +32,7 @@ static int __rap_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 static bool __rap_close(RIODesc *fd) {
 	int ret = false;
 	if (RIORAP_IS_VALID (fd)) {
-		if (RIORAP_FD (fd) != NULL) {
+		if (RIORAP_FD (fd)) {
 			RIORap *r = fd->data;
 			if (r && fd->fd != -1) {
 				if (r->fd) {
@@ -66,10 +66,10 @@ static RIODesc *__rap_open(RIO *io, const char *pathname, int rw, int mode) {
 	if (!__rap_plugin_open (io, pathname, 0)) {
 		return NULL;
 	}
-	bool is_ssl = (!strncmp (pathname, "raps://", 7));
+	bool is_ssl = r_str_startswith (pathname, "raps://");
 	const char *host = pathname + (is_ssl? 7: 6);
 	if (!(port = strchr (host, ':'))) {
-		eprintf ("rap: wrong uri\n");
+		R_LOG_ERROR ("rap: wrong uri");
 		return NULL;
 	}
 	listenmode = (*host == ':');
@@ -83,7 +83,7 @@ static RIODesc *__rap_open(RIO *io, const char *pathname, int rw, int mode) {
 		file++;
 	}
 	if (r_sandbox_enable (0)) {
-		eprintf ("sandbox: Cannot use network\n");
+		R_LOG_ERROR ("sandbox: Cannot use network");
 		return NULL;
 	}
 	if (listenmode) {
@@ -123,16 +123,16 @@ static RIODesc *__rap_open(RIO *io, const char *pathname, int rw, int mode) {
 	}
 	RSocket *s = r_socket_new (is_ssl);
 	if (!s) {
-		eprintf ("Cannot create new socket\n");
+		R_LOG_ERROR ("Cannot create new socket");
 		return NULL;
 	}
-	eprintf ("Connecting to %s, port %s\n", host, port);
+	R_LOG_INFO ("Connecting to %s, port %s", host, port);
 	if (!r_socket_connect (s, host, port, R_SOCKET_PROTO_TCP, 0)) {
-		eprintf ("Cannot connect to '%s' (%d)\n", host, p);
+		R_LOG_ERROR ("Cannot connect to '%s' (%d)", host, p);
 		r_socket_free (s);
 		return NULL;
 	}
-	eprintf ("Connected to: %s at port %s\n", host, port);
+	R_LOG_INFO ("Connected to: %s at port %s", host, port);
 	RIORap *rior = R_NEW0 (RIORap);
 	if (!rior) {
 		r_socket_free (s);
@@ -149,10 +149,10 @@ static RIODesc *__rap_open(RIO *io, const char *pathname, int rw, int mode) {
 		}
 		if (i > 0) {
 			eprintf ("rap connection was successful. open %d\n", i);
-			// io->corebind.cmd (io->corebind.core, "e io.va=0");
-			io->corebind.cmd (io->corebind.core, ".=!i*");
-			io->corebind.cmd (io->corebind.core, ".=!f*");
-			io->corebind.cmd (io->corebind.core, ".=!om*");
+			// io->coreb.cmd (io->coreb.core, "e io.va=0");
+			io->coreb.cmd (io->coreb.core, ".=!i*");
+			io->coreb.cmd (io->coreb.core, ".=!f*");
+			io->coreb.cmd (io->coreb.core, ".=!om*");
 		}
 	}
 	return r_io_desc_new (io, &r_io_plugin_rap,
@@ -166,7 +166,7 @@ static int __rap_listener(RIODesc *fd) {
 static char *__rap_system(RIO *io, RIODesc *fd, const char *command) {
 	RSocket *s = RIORAP_FD (fd);
 	// TODO: bind core into RSocket instead of pass the one from io?
-	return r_socket_rap_client_command (s, command, &io->corebind);
+	return r_socket_rap_client_command (s, command, &io->coreb);
 #if 0
 	int ret, reslen = 0, cmdlen = 0;
 	unsigned int i;
@@ -257,7 +257,7 @@ static char *__rap_system(RIO *io, RIODesc *fd, const char *command) {
 			io->cb_printf ("%s", ptr);
 		} else {
 			if (write (1, ptr, i) != i) {
-				eprintf ("Failed to write\n");
+				R_LOG_ERROR ("Failed to write");
 			}
 		}
 		free (ptr);

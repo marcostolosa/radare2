@@ -23,10 +23,10 @@ SECURITY IMPLICATIONS
 #define rtr_n core->rtr_n
 #define rtr_host core->rtr_host
 
-static RSocket *s = NULL;
-static RThread *httpthread = NULL;
-static RThread *rapthread = NULL;
-static const char *listenport = NULL;
+static R_TH_LOCAL RSocket *s = NULL;
+static R_TH_LOCAL RThread *httpthread = NULL;
+static R_TH_LOCAL RThread *rapthread = NULL;
+static R_TH_LOCAL const char *listenport = NULL;
 
 typedef struct {
 	const char *host;
@@ -110,7 +110,7 @@ static void rtr_textlog_chat(RCore *core, TextLog T) {
 	char buf[1024];
 	int lastmsg = 0;
 	const char *me = r_config_get (core->config, "cfg.user");
-	char *ret, msg[1024];
+	char *ret, msg[1024] = {0};
 
 	eprintf ("Type '/help' for commands and ^D to quit:\n");
 	char *oldprompt = strdup (r_line_singleton ()->prompt);
@@ -227,7 +227,7 @@ static void activateDieTime(RCore *core) {
 		r_sys_signal (SIGALRM, dietime);
 		alarm (dt);
 #else
-		eprintf ("http.dietime only works on *nix systems\n");
+		R_LOG_ERROR ("http.dietime only works on *nix systems");
 #endif
 	}
 }
@@ -426,7 +426,7 @@ static int r_core_rtr_gdb_cb(libgdbr_t *g, void *core_ptr, const char *cmd,
 			be = r_config_get_i (core->config, "cfg.bigendian");
 			if (isspace ((ut8)cmd[2])) { // dr reg
 				const char *name, *val_ptr;
-				char new_cmd[128] = { 0 };
+				char new_cmd[128] = {0};
 				int off = 0;
 				name = cmd + 3;
 				// Temporarily using new_cmd to store reg name
@@ -587,23 +587,23 @@ static int r_core_rtr_gdb_run(RCore *core, int launch, const char *path) {
 	}
 
 	if (!r_core_file_open (core, file, R_PERM_RX, 0)) {
-		eprintf ("Cannot open file (%s)\n", file);
+		R_LOG_ERROR ("Cannot open file (%s)", file);
 		return -1;
 	}
 	r_core_file_reopen_debug (core, args);
 
 	if (!(sock = r_socket_new (false))) {
-		eprintf ("gdbserver: Could not open socket for listening\n");
+		R_LOG_ERROR ("gdbserver: Could not open socket for listening");
 		return -1;
 	}
 	if (!r_socket_listen (sock, port, NULL)) {
 		r_socket_free (sock);
-		eprintf ("gdbserver: Cannot listen on port: %s\n", port);
+		R_LOG_ERROR ("gdbserver: Cannot listen on port: %s", port);
 		return -1;
 	}
 	if (!(g = R_NEW0 (libgdbr_t))) {
 		r_socket_free (sock);
-		eprintf ("gdbserver: Cannot alloc libgdbr instance\n");
+		R_LOG_ERROR ("gdbserver: Cannot alloc libgdbr instance");
 		return -1;
 	}
 	gdbr_init (g, true);
@@ -612,7 +612,7 @@ static int r_core_rtr_gdb_run(RCore *core, int launch, const char *path) {
 	int bits = r_config_get_i (core->config, "asm.bits");
 	gdbr_set_architecture (g, arch, bits);
 	core->gdbserver_up = 1;
-	eprintf ("gdbserver started on port: %s, file: %s\n", port, file);
+	R_LOG_INFO ("gdbserver started on port: %s, file: %s", port, file);
 
 	for (;;) {
 		if (!(g->sock = r_socket_accept (sock))) {
@@ -636,12 +636,12 @@ static int r_core_rtr_gdb_run(RCore *core, int launch, const char *path) {
 R_API int r_core_rtr_gdb(RCore *core, int launch, const char *path) {
 	int ret;
 	if (r_sandbox_enable (0)) {
-		eprintf ("sandbox: connect disabled\n");
+		R_LOG_ERROR ("connect disable the sandbox");
 		return -1;
 	}
 	// TODO: do stuff with launch
 	if (core->gdbserver_up) {
-		eprintf ("gdbserver is already running\n");
+		R_LOG_INFO ("the gdbserver is already running");
 		return -1;
 	}
 	ret = r_core_rtr_gdb_run (core, launch, path);
@@ -659,7 +659,7 @@ R_API void r_core_rtr_pushout(RCore *core, const char *input) {
 			}
 		}
 		if (!(cmd = strchr (input, ' '))) {
-			eprintf ("Error\n");
+			R_LOG_ERROR ("Missing space");
 			return;
 		}
 	} else {
@@ -667,31 +667,31 @@ R_API void r_core_rtr_pushout(RCore *core, const char *input) {
 	}
 
 	if (!rtr_host[rtr_n].fd || !rtr_host[rtr_n].fd->fd) {
-		eprintf ("Error: Unknown host\n");
+		R_LOG_ERROR ("Unknown host");
 		return;
 	}
 
 	if (!(str = r_core_cmd_str (core, cmd))) {
-		eprintf ("Error: radare_cmd_str returned NULL\n");
+		R_LOG_ERROR ("radare_cmd_str returned NULL");
 		return;
 	}
 
 	switch (rtr_host[rtr_n].proto) {
 	case RTR_PROTOCOL_RAP:
-		eprintf ("Error: Cannot use '=<' to a rap connection.\n");
+		R_LOG_ERROR ("Cannot use '=<' to a rap connection");
 		break;
 	case RTR_PROTOCOL_UNIX:
 		r_socket_write (rtr_host[rtr_n].fd, str, strlen (str));
 		break;
 	case RTR_PROTOCOL_HTTP:
-		eprintf ("TODO\n");
+		R_LOG_INFO ("TODO");
 		break;
 	case RTR_PROTOCOL_TCP:
 	case RTR_PROTOCOL_UDP:
 		r_socket_write (rtr_host[rtr_n].fd, str, strlen (str));
 		break;
 	default:
-		eprintf ("Unknown protocol\n");
+		R_LOG_ERROR ("Unknown protocol");
 		break;
 	}
 	free (str);
@@ -774,7 +774,7 @@ R_API void r_core_rtr_add(RCore *core, const char *_input) {
 			// it's fine to listen without serving a file
 		} else {
 			file = "cmd/";
-			eprintf ("Error: Missing '/'\n");
+			R_LOG_ERROR ("Missing '/'");
 			//c:wreturn;
 		}
 	}
@@ -786,7 +786,7 @@ R_API void r_core_rtr_add(RCore *core, const char *_input) {
 
 	fd = r_socket_new (false);
 	if (!fd) {
-		eprintf ("Error: Cannot create new socket\n");
+		R_LOG_ERROR ("Cannot create new socket");
 		return;
 	}
 	switch (proto) {
@@ -796,18 +796,18 @@ R_API void r_core_rtr_add(RCore *core, const char *_input) {
 			char *uri = r_str_newf ("http://%s:%s/%s", host, port, file);
 			char *str = r_socket_http_get (uri, NULL, &len);
 			if (!str) {
-				eprintf ("Cannot find peer\n");
+				R_LOG_ERROR ("Cannot find peer");
 				r_socket_free (fd);
 				return;
 			}
-			core->num->value = 0;
 			// eprintf ("Connected to: 'http://%s:%s'\n", host, port);
+			r_core_return_value (core, R_CMD_RC_SUCCESS);
 			free (str);
 		}
 		break;
 	case RTR_PROTOCOL_RAP:
 		if (!r_socket_connect_tcp (fd, host, port, timeout)) { //TODO: Use rap.ssl
-			eprintf ("Error: Cannot connect to '%s' (%s)\n", host, port);
+			R_LOG_ERROR ("Cannot connect to '%s' (%s)", host, port);
 			r_socket_free (fd);
 			return;
 		} else {
@@ -817,32 +817,32 @@ R_API void r_core_rtr_add(RCore *core, const char *_input) {
 		break;
 	case RTR_PROTOCOL_UNIX:
 		if (!r_socket_connect_unix (fd, host)) {
-			core->num->value = 1;
-			eprintf ("Error: Cannot connect to 'unix://%s'\n", host);
+			r_core_return_value (core, R_CMD_RC_FAILURE);
+			R_LOG_ERROR ("Cannot connect to 'unix://%s'", host);
 			r_socket_free (fd);
 			return;
 		}
-		core->num->value = 0;
+		r_core_return_value (core, R_CMD_RC_SUCCESS);
 		eprintf ("Connected to: 'unix://%s'\n", host);
 		break;
 	case RTR_PROTOCOL_TCP:
 		if (!r_socket_connect_tcp (fd, host, port, timeout)) { //TODO: Use rap.ssl
-			core->num->value = 1;
-			eprintf ("Error: Cannot connect to '%s' (%s)\n", host, port);
+			r_core_return_value (core, R_CMD_RC_FAILURE);
+			R_LOG_ERROR ("Cannot connect to '%s' (%s)", host, port);
 			r_socket_free (fd);
 			return;
 		}
-		core->num->value = 0;
+		r_core_return_value (core, R_CMD_RC_SUCCESS);
 		eprintf ("Connected to: %s at port %s\n", host, port);
 		break;
 	case RTR_PROTOCOL_UDP:
 		if (!r_socket_connect_udp (fd, host, port, timeout)) { //TODO: Use rap.ssl
-			core->num->value = 1;
-			eprintf ("Error: Cannot connect to '%s' (%s)\n", host, port);
+			r_core_return_value (core, R_CMD_RC_FAILURE);
+			R_LOG_ERROR ("Cannot connect to '%s' (%s)", host, port);
 			r_socket_free (fd);
 			return;
 		}
-		core->num->value = 0;
+		r_core_return_value (core, R_CMD_RC_SUCCESS);
 		eprintf ("Connected to: %s at port %s\n", host, port);
 		break;
 	}
@@ -862,7 +862,7 @@ R_API void r_core_rtr_add(RCore *core, const char *_input) {
 		rtr_n = i;
 		break;
 	}
-	core->num->value = ret;
+	r_core_return_value (core, ret);
 	// double free wtf is freed this here? r_socket_free(fd);
 	//r_core_rtr_list (core);
 }
@@ -914,14 +914,14 @@ R_API void r_core_rtr_event(RCore *core, const char *input) {
 		errmsg_tmpfile = strdup (f);
 		int e = mkfifo (f, 0644);
 		if (e == -1) {
-			perror ("mkfifo");
+			r_sys_perror ("mkfifo");
 		} else {
 			int ff = open (f, O_RDWR);
 			if (ff != -1) {
 				dup2 (ff, 2);
 				errmsg_fd = ff;
 			} else {
-				eprintf ("Cannot open fifo: %s\n", f);
+				R_LOG_ERROR ("Cannot open fifo: %s", f);
 			}
 		}
 		// r_core_event (core, );
@@ -929,7 +929,7 @@ R_API void r_core_rtr_event(RCore *core, const char *input) {
 		free (f);
 		// TODO: those files are leaked when closing r_core_free() should be deleted
 #else
-		eprintf ("Not supported for your platform.\n");
+		R_LOG_ERROR ("Not supported for your platform");
 #endif
 	} else {
 		eprintf ("(%s)\n", input);
@@ -1006,7 +1006,7 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 				int cpuaff = (int)r_config_get_i (core->config, "cfg.cpuaffinity");
 				r_th_setaffinity (rapthread, cpuaff);
 				r_th_setname (rapthread, "rapthread");
-				r_th_start (rapthread, true);
+				r_th_start (rapthread, false);
 				eprintf ("Background rap server started.\n");
 			}
 		}
@@ -1025,8 +1025,8 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 	}
 
 	if (!rtr_host[rtr_n].fd) {
-		eprintf ("Error: Unknown host\n");
-		core->num->value = 1; // fail
+		R_LOG_ERROR ("Unknown host");
+		r_core_return_value (core, R_CMD_RC_FAILURE);
 		return;
 	}
 
@@ -1039,7 +1039,7 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 		r_socket_close (s);
 		r_strf_var (portstr, 32, "%d", rh->port);
 		if (!r_socket_connect (s, rh->host, portstr, R_SOCKET_PROTO_TCP, 0)) {
-			eprintf ("Error: Cannot connect to '%s' (%d)\n", rh->host, rh->port);
+			R_LOG_ERROR ("Cannot connect to '%s' (%d)", rh->host, rh->port);
 			r_socket_free (s);
 			return;
 		}
@@ -1048,7 +1048,7 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 		int maxlen = 4096; // r_read_le32 (blen);
 		char *cmd_output = calloc (1, maxlen + 1);
 		if (!cmd_output) {
-			eprintf ("Error: Allocating cmd output\n");
+			R_LOG_ERROR ("Allocating cmd output");
 			return;
 		}
 		(void)r_socket_read_block (s, (ut8*)cmd_output, maxlen);
@@ -1069,10 +1069,10 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 		char *uri = r_str_newf ("http://%s:%d/cmd/%s", rh->host, rh->port, cmd);
 		char *str = r_socket_http_get (uri, NULL, &len);
 		if (!str) {
-			eprintf ("Cannot find '%s'\n", uri);
+			R_LOG_ERROR ("Cannot find '%s'", uri);
 			return;
 		}
-		core->num->value = 0;
+		r_core_return_value (core, R_CMD_RC_SUCCESS);
 		str[len] = 0;
 		r_cons_print (str);
 		free ((void *)str);
@@ -1081,7 +1081,7 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 	}
 
 	if (rtr_host[rtr_n].proto == RTR_PROTOCOL_RAP) {
-		core->num->value = 0; // that's fine
+		r_core_return_value (core, R_CMD_RC_SUCCESS);
 		cmd = r_str_trim_head_ro (cmd);
 		RSocket *fh = rtr_host[rtr_n].fd;
 		if (!strlen (cmd)) {
@@ -1094,7 +1094,7 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 		free (cmd_output);
 		return;
 	}
-	eprintf ("Error: Unknown protocol\n");
+	R_LOG_ERROR ("Unknown protocol");
 }
 
 // TODO: support len for binary data?
@@ -1124,7 +1124,7 @@ R_API char *r_core_rtr_cmds_query(RCore *core, const char *host, const char *por
 			rbuf = r_str_append (rbuf, (const char *)buf);
 		}
 	} else {
-		eprintf ("Cannot connect\n");
+		R_LOG_ERROR ("Cannot connect");
 	}
 	r_socket_free (s);
 	return rbuf;
@@ -1187,7 +1187,7 @@ static void rtr_cmds_read(uv_stream_t *client, ssize_t nread, const uv_buf_t *bu
 
 	if (nread < 0) {
 		if (nread != UV_EOF) {
-			eprintf ("Failed to read: %s\n", uv_err_name ((int) nread));
+			R_LOG_ERROR ("Failed to read: %s", uv_err_name ((int) nread));
 		}
 		rtr_cmds_client_close ((uv_tcp_t *) client, true);
 		return;
@@ -1308,7 +1308,7 @@ R_API int r_core_rtr_cmds(RCore *core, const char *port) {
 	uv_tcp_bind (&context.server, (const struct sockaddr *) &addr, 0);
 	int r = uv_listen ((uv_stream_t *)&context.server, 32, rtr_cmds_new_connection);
 	if (r) {
-		eprintf ("Failed to listen: %s\n", uv_strerror (r));
+		R_LOG_ERROR ("Failed to listen: %s", uv_strerror (r));
 		goto beach;
 	}
 
@@ -1345,7 +1345,7 @@ R_API int r_core_rtr_cmds(RCore *core, const char *port) {
 	s->local = r_config_get_i (core->config, "tcp.islocal");
 
 	if (!r_socket_listen (s, port, NULL)) {
-		eprintf ("Error listening on port %s\n", port);
+		R_LOG_ERROR ("listening on port %s", port);
 		r_socket_free (s);
 		return false;
 	}

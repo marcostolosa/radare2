@@ -1,8 +1,8 @@
-/* radare - LGPL - Copyright 2007-2021 - pancake */
+/* radare - LGPL - Copyright 2007-2022 - pancake */
 
-#include "r_types.h"
-#include "r_util.h"
-#include <stdio.h>
+#define R_LOG_ORIGIN "filter"
+
+#include <r_util.h>
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -40,12 +40,12 @@ static int file_stat(const char *file, struct stat* const pStat) {
 	if (!wfile) {
 		return -1;
 	}
-	int ret = _wstat (wfile, pStat);
+	int ret = _wstat (wfile, (struct _stat64i32 *)pStat);
 	free (wfile);
 	return ret;
-#else // __WINDOWS__
+#else
 	return stat (file, pStat);
-#endif // __WINDOWS__
+#endif
 }
 
 // r_file_new("", "bin", NULL) -> /bin
@@ -100,7 +100,7 @@ R_API bool r_file_truncate(const char *filename, ut64 newsize) {
 	int r = ftruncate (fd, newsize);
 #endif
 	if (r != 0) {
-		eprintf ("Could not resize %s file\n", filename);
+		R_LOG_ERROR ("Could not resize %s file", filename);
 		close (fd);
 		return false;
 	}
@@ -195,21 +195,27 @@ R_API bool r_file_fexists(const char *fmt, ...) {
 }
 
 R_API bool r_file_exists(const char *str) {
-	char *absfile = r_file_abspath (str);
 	struct stat buf = {0};
+#if 1
+	if (file_stat (str, &buf) != 0) {
+		return false;
+	}
+#else
+	char *absfile = r_file_abspath (str);
 	r_return_val_if_fail (!R_STR_ISEMPTY (str), false);
 	if (file_stat (absfile, &buf) == -1) {
 		free (absfile);
 		return false;
 	}
 	free (absfile);
+#endif
 	return S_IFREG == (S_IFREG & buf.st_mode);
 }
 
 R_API ut64 r_file_size(const char *str) {
 	r_return_val_if_fail (!R_STR_ISEMPTY (str), 0);
 	struct stat buf = {0};
-	if (file_stat (str, &buf) == -1) {
+	if (file_stat (str, &buf) != 0) {
 		return 0;
 	}
 	return (ut64)buf.st_size;
@@ -246,8 +252,7 @@ R_API char *r_file_abspath_rel(const char *cwd, const char *file) {
 				PTCHAR f = r_sys_conv_utf8_to_win (file);
 				int s = GetFullPathName (f, MAX_PATH, abspath, NULL);
 				if (s > MAX_PATH) {
-					// R_LOG_ERROR ("r_file_abspath/GetFullPathName: Path to file too long.\n");
-					eprintf ("r_file_abspath/GetFullPathName: Path to file too long.\n");
+					eprintf ("r_file_abspath/GetFullPathName: Path to file too long\n");
 				} else if (!s) {
 					r_sys_perror ("r_file_abspath/GetFullPathName");
 				} else {
@@ -288,7 +293,7 @@ R_API char *r_file_binsh(void) {
 	if (R_STR_ISEMPTY (bin_sh)) {
 		free (bin_sh);
 		bin_sh = r_file_path ("sh");
-		if (R_STR_ISEMPTY (bin_sh)) {
+		if (!bin_sh || *bin_sh != '/') {
 			free (bin_sh);
 			bin_sh = strdup (SHELL_PATH);
 		}
@@ -351,7 +356,6 @@ R_API char *r_stdin_slurp(int *sz) {
 	for (i = ret = 0; i >= 0; i += ret) {
 		char *new = realloc (buf, i + BS);
 		if (!new) {
-			eprintf ("Cannot realloc to %d\n", i+BS);
 			free (buf);
 			return NULL;
 		}
@@ -430,6 +434,7 @@ R_API char *r_file_slurp(const char *str, R_NULLABLE size_t *usz) {
 			char *nbuf = realloc (buf, size + 1);
 			if (!nbuf) {
 				free (buf);
+				fclose (fd);
 				return NULL;
 			}
 			buf = nbuf;
@@ -452,7 +457,7 @@ R_API char *r_file_slurp(const char *str, R_NULLABLE size_t *usz) {
 	}
 	size_t rsz = fread (ret, 1, sz, fd);
 	if (rsz != sz) {
-		eprintf ("Warning: r_file_slurp: fread: truncated read (%d / %d)\n", (int)rsz, (int)sz);
+		R_LOG_WARN ("r_file_slurp: fread: truncated read (%d / %d)", (int)rsz, (int)sz);
 		sz = rsz;
 	}
 	fclose (fd);
@@ -655,7 +660,7 @@ R_API char *r_file_slurp_lines_from_bottom(const char *file, int line) {
 			}
 		}
 		if (line > lines) {
-			return strdup (str);	// number of lines requested in more than present, return all
+			return str;	// number of lines requested in more than present, return all
 		}
 		i--;
 		for (; str[i] && line; i--) {
@@ -663,7 +668,7 @@ R_API char *r_file_slurp_lines_from_bottom(const char *file, int line) {
 				line--;
 			}
 		}
-		ptr = str+i;
+		ptr = str + i;
 		ptr = strdup (ptr);
 		free (str);
 	}
@@ -687,7 +692,7 @@ R_API char *r_file_slurp_lines(const char *file, int line, int count) {
 			return NULL;
 		}
 		lines = line - 1;
-		for (i = 0; str[i]&&lines; i++) {
+		for (i = 0; str[i] && lines; i++) {
 			if (str[i] == '\n') {
 				lines--;
 			}
@@ -742,7 +747,7 @@ R_API bool r_file_hexdump(const char *file, const ut8 *buf, int len, int append)
 		fd = r_sandbox_fopen (file, "wb");
 	}
 	if (!fd) {
-		eprintf ("Cannot open '%s' for writing\n", file);
+		R_LOG_ERROR ("Cannot open '%s' for writing", file);
 		return false;
 	}
 	for (i = 0; i < len; i += 16) {
@@ -782,7 +787,7 @@ R_API bool r_file_dump(const char *file, const ut8 *buf, int len, bool append) {
 		fd = r_sandbox_fopen (file, "wb");
 	}
 	if (!fd) {
-		eprintf ("Cannot open '%s' for writing\n", file);
+		R_LOG_ERROR ("Cannot open '%s' for writing", file);
 		return false;
 	}
 	if (buf) {
@@ -1287,7 +1292,7 @@ R_API char *r_file_tmpdir(void) {
 	if (!r_file_is_directory (path)) {
 		free (path);
 		return NULL;
-		//eprintf ("Cannot find dir.tmp '%s'\n", path);
+		//R_LOG_ERROR ("Cannot find dir.tmp '%s'", path);
 	}
 	return path;
 }
@@ -1295,7 +1300,7 @@ R_API char *r_file_tmpdir(void) {
 R_API bool r_file_copy(const char *src, const char *dst) {
 	r_return_val_if_fail (R_STR_ISNOTEMPTY (src) && R_STR_ISNOTEMPTY (dst), false);
 	if (!strcmp (src, dst)) {
-		eprintf ("Cannot copy file '%s' to itself.\n", src);
+		R_LOG_ERROR ("Cannot copy file '%s' to itself", src);
 		return false;
 	}
 	/* TODO: implement in C */
@@ -1390,7 +1395,6 @@ R_API bool r_file_rm_rf(const char *dir) {
 	return r_file_rm (dir);
 }
 
-
 static void recursive_glob(const char *path, const char *glob, RList* list, int depth) {
 	if (depth < 1) {
 		return;
@@ -1402,7 +1406,7 @@ static void recursive_glob(const char *path, const char *glob, RList* list, int 
 		if (!strcmp (file, ".") || !strcmp (file, "..")) {
 			continue;
 		}
-		char *filename = r_str_newf ("%s%s", path, file);
+		char *filename = r_file_new (path, file, NULL);
 		if (r_file_is_directory (filename)) {
 			recursive_glob (filename, glob, list, depth - 1);
 			free (filename);

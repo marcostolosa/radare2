@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2006-2021 - pancake */
+/* radare - LGPL - Copyright 2006-2022 - pancake */
 
 /* must be included first because of winsock2.h and windows.h */
 #include <r_socket.h>
@@ -16,10 +16,7 @@
 #define NETWORK_DISABLED 0
 #endif
 
-#define D if(0)
-
 R_LIB_VERSION(r_socket);
-
 
 #if NETWORK_DISABLED
 /* no network */
@@ -113,7 +110,7 @@ R_API bool r_socket_is_connected(RSocket *s) {
 	socklen_t len = sizeof (error);
 	int ret = getsockopt (s->fd, SOL_SOCKET, SO_ERROR, &error, &len);
 	if (ret != 0) {
-		perror ("getsockopt");
+		r_sys_perror ("getsockopt");
 		return false;
 	}
 	return (error == 0);
@@ -224,17 +221,17 @@ R_API bool r_socket_spawn(RSocket *s, const char *cmd, unsigned int timeout) {
 		free (profile);
 #endif
 		if (res != 0) {
-			eprintf ("r_socket_spawn: rarun2 failed\n");
+			R_LOG_ERROR ("rarun2 has failed");
 			exit (1);
 		}
-		eprintf ("r_socket_spawn: %s is dead\n", cmd);
+		R_LOG_ERROR ("r_socket_spawn: %s is dead", cmd);
 		exit (0);
 	}
 	r_sys_sleep (1);
 	r_sys_usleep (timeout);
 
 	char aport[32];
-	sprintf (aport, "%d", port);
+	snprintf (aport, sizeof (aport), "%d", port);
 	// redirect stdin/stdout/stderr
 	bool sock = r_socket_connect (s, "127.0.0.1", aport, R_SOCKET_PROTO_TCP, 2000);
 	if (!sock) {
@@ -245,7 +242,7 @@ R_API bool r_socket_spawn(RSocket *s, const char *cmd, unsigned int timeout) {
 	r_sys_usleep (timeout);
 
 	int status = 0;
-	int ret = waitpid (childPid, &status, WNOHANG);
+	int ret = waitpid (childPid, &status, WNOHANG | WUNTRACED);
 	if (ret != 0) {
 		r_socket_close (s);
 		return false;
@@ -261,12 +258,12 @@ R_API bool r_socket_connect(RSocket *s, const char *host, const char *port, int 
 	WSADATA wsadata;
 
 	if (WSAStartup (MAKEWORD (1, 1), &wsadata) == SOCKET_ERROR) {
-		eprintf ("Error creating socket.");
+		R_LOG_ERROR ("WSAStartup failed");
 		return false;
 	}
 #endif
 	int ret;
-	struct addrinfo hints = { 0 };
+	struct addrinfo hints = {0};
 	struct addrinfo *res, *rp;
 	if (proto == R_SOCKET_PROTO_NONE) {
 		proto = R_SOCKET_PROTO_DEFAULT;
@@ -292,7 +289,7 @@ R_API bool r_socket_connect(RSocket *s, const char *host, const char *port, int 
 		if (fd == -1) {
 			return false;
 		}
-		static struct can_isotp_options opts = {
+		struct can_isotp_options opts = {
 			.txpad_content = 0xcc,
 			.rxpad_content = 0xcc,
 			.frame_txtime = 0x1000,
@@ -301,14 +298,14 @@ R_API bool r_socket_connect(RSocket *s, const char *host, const char *port, int 
 			close (fd);
 			return false;
 		}
-		static struct can_isotp_fc_options fcopts = {
+		struct can_isotp_fc_options fcopts = {
 			.stmin = 0xf3
 		};
 		if (setsockopt (fd, SOL_CAN_ISOTP, CAN_ISOTP_RECV_FC, &fcopts, sizeof (fcopts)) == -1) {
 			close (fd);
 			return false;
 		}
-		static struct can_isotp_ll_options llopts = {
+		struct can_isotp_ll_options llopts = {
 			.mtu = 8,
 			.tx_dl = 8,
 		};
@@ -341,7 +338,7 @@ R_API bool r_socket_connect(RSocket *s, const char *host, const char *port, int 
 		s->is_ssl = false;
 		return true;
 #else
-		eprintf ("Unsupported ISOTP socket protocol\n");
+		R_LOG_ERROR ("Unsupported ISOTP socket protocol");
 		return false;
 #endif
 	} else {
@@ -349,7 +346,7 @@ R_API bool r_socket_connect(RSocket *s, const char *host, const char *port, int 
 		hints.ai_protocol = proto;
 		int gai = getaddrinfo (host, port, &hints, &res);
 		if (gai != 0) {
-			eprintf ("r_socket_connect: Error in getaddrinfo: %s (%s:%s)\n",
+			R_LOG_ERROR ("getaddrinfo: %s (%s:%s)",
 				gai_strerror (gai), host, port);
 			return false;
 		}
@@ -358,7 +355,7 @@ R_API bool r_socket_connect(RSocket *s, const char *host, const char *port, int 
 
 			s->fd = socket (rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 			if (s->fd == -1) {
-				perror ("socket");
+				r_sys_perror ("socket");
 				continue;
 			}
 
@@ -366,7 +363,7 @@ R_API bool r_socket_connect(RSocket *s, const char *host, const char *port, int 
 			case R_SOCKET_PROTO_TCP:
 				ret = setsockopt (s->fd, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof (flag));
 				if (ret < 0) {
-					perror ("setsockopt");
+					r_sys_perror ("setsockopt");
 					close (s->fd);
 					s->fd = -1;
 					continue;
@@ -416,14 +413,14 @@ R_API bool r_socket_connect(RSocket *s, const char *host, const char *port, int 
 						goto success;
 					}
 				} else {
-					perror ("connect");
+					r_sys_perror ("connect");
 				}
 			}
 			r_socket_close (s);
 		}
 		freeaddrinfo (res);
 		if (!rp) {
-			eprintf ("Could not resolve address '%s' or failed to connect\n", host);
+			R_LOG_ERROR ("Could not resolve address '%s' or failed to connect", host);
 			return false;
 		}
 	}
@@ -538,7 +535,7 @@ R_API int r_socket_port_by_name(const char *name) {
 R_API bool r_socket_listen(RSocket *s, const char *port, const char *certfile) {
 	int optval = 1;
 	int ret;
-	struct linger linger = { 0 };
+	struct linger linger = {0};
 
 	if (s->proto == R_SOCKET_PROTO_UNIX) {
 #if __UNIX__
@@ -552,7 +549,7 @@ R_API bool r_socket_listen(RSocket *s, const char *port, const char *certfile) {
 #if __WINDOWS__
 	WSADATA wsadata;
 	if (WSAStartup (MAKEWORD (1, 1), &wsadata) == SOCKET_ERROR) {
-		eprintf ("Error creating socket.");
+		R_LOG_ERROR ("WSAStartup failed");
 		return false;
 	}
 #endif
@@ -571,7 +568,7 @@ R_API bool r_socket_listen(RSocket *s, const char *port, const char *certfile) {
 		}
 		break;
 	default:
-		eprintf ("Invalid protocol for socket\n");
+		R_LOG_ERROR ("Invalid protocol for socket");
 		return false;
 	}
 
@@ -703,7 +700,7 @@ R_API RSocket *r_socket_accept_timeout(RSocket *s, unsigned int timeout) {
 
 	int r = select (s->fd + 1, &read_fds, NULL, &except_fds, &t);
 	if(r < 0) {
-		perror ("select");
+		r_sys_perror ("select");
 	} else if (r > 0 && FD_ISSET (s->fd, &read_fds)) {
 		return r_socket_accept (s);
 	}
@@ -780,7 +777,7 @@ R_API char *r_socket_to_string(RSocket *s) {
 				a[0], a[1], a[2], a[3], ntohs (sain->sin_port));
 		}
 	} else {
-		eprintf ("getperrname: failed\n"); //r_sys_perror ("getpeername");
+		r_sys_perror ("getpeername");
 	}
 	return str;
 #else
@@ -868,10 +865,7 @@ R_API int r_socket_read(RSocket *s, unsigned char *buf, int len) {
 		return SSL_read (s->sfd, buf, len);
 	}
 #endif
-	// int r = read (s->fd, buf, len);
-	int r = recv (s->fd, (char *)buf, len, 0);
-	D { eprintf ("READ "); int i; for (i = 0; i<len; i++) { eprintf ("%02x ", buf[i]); } eprintf ("\n"); }
-	return r;
+	return recv (s->fd, (char *)buf, len, 0);
 }
 
 R_API int r_socket_read_block(RSocket *s, ut8 *buf, int len) {

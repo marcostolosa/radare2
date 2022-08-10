@@ -2,14 +2,20 @@
 
 #include <r_anal.h>
 #include <r_lib.h>
-#include <capstone.h>
-#include <xcore.h>
+#include <capstone/capstone.h>
+#include <capstone/xcore.h>
 
 #if CS_API_MAJOR < 2
 #error Old Capstone not supported
 #endif
 
 #define INSOP(n) insn->detail->xcore.operands[n]
+
+#define CSINC XCORE
+#define CSINC_MODE \
+	CS_MODE_BIG_ENDIAN \
+	| (a->config->cpu != NULL && ((!strcmp (a->config->cpu, "v9"))) ? CS_MODE_V9 : 0)
+#include "capstone.inc"
 
 static void opex(RStrBuf *buf, csh handle, cs_insn *insn) {
 	int i;
@@ -54,28 +60,13 @@ static void opex(RStrBuf *buf, csh handle, cs_insn *insn) {
 }
 
 static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
-	static csh handle = 0;
-	static int omode = 0;
-	cs_insn *insn;
-	int mode, n, ret;
-	mode = CS_MODE_BIG_ENDIAN;
-	if (!strcmp (a->cpu, "v9")) {
-		mode |= CS_MODE_V9;
-	}
-	if (mode != omode) {
-		if (handle) {
-			cs_close (&handle);
-			handle = 0;
-		}
-		omode = mode;
-	}
+	csh handle = init_capstone (a);
 	if (handle == 0) {
-		ret = cs_open (CS_ARCH_XCORE, mode, &handle);
-		if (ret != CS_ERR_OK) {
-			return -1;
-		}
-		cs_option (handle, CS_OPT_DETAIL, CS_OPT_ON);
+		return -1;
 	}
+	
+	cs_insn *insn;
+	int n;
 	// capstone-next
 	n = cs_disasm (handle, (const ut8*)buf, len, addr, 1, &insn);
 	if (n < 1) {
@@ -83,6 +74,11 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 	} else {
 		if (mask & R_ANAL_OP_MASK_OPEX) {
 			opex (&op->opex, handle, insn);
+		}
+		if (mask & R_ANAL_OP_MASK_DISASM) {
+			op->mnemonic = r_str_newf ("%s%s%s",
+				insn->mnemonic, insn->op_str[0]? " ": "",
+				insn->op_str);
 		}
 		op->size = insn->size;
 		op->id = insn->id;
@@ -121,7 +117,6 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		}
 		cs_free (insn, n);
 	}
-	//	cs_close (&handle);
 	return op->size;
 }
 
@@ -134,6 +129,7 @@ RAnalPlugin r_anal_plugin_xcore_cs = {
 	.bits = 32,
 	.op = &analop,
 	//.set_reg_profile = &set_reg_profile,
+	.mnemonics = cs_mnemonics,
 };
 
 #ifndef R2_PLUGIN_INCORE

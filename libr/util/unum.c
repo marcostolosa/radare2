@@ -1,13 +1,10 @@
-/* radare - LGPL - Copyright 2007-2021 - pancake */
+/* radare - LGPL - Copyright 2007-2022 - pancake */
 
-#if __WINDOWS__
-#include <stdlib.h>
-#endif
+#define R_LOG_ORIGIN "util.num"
 
 #include <errno.h>
 #include <math.h>  /* for ceill */
 #include <r_util.h>
-#define R_NUM_USE_CALC 1
 
 static ut64 r_num_tailff(RNum *num, const char *hex);
 
@@ -47,7 +44,7 @@ R_API void r_num_irand(void) {
 }
 
 R_API int r_num_rand(int max) {
-	static bool rand_initialized = false;
+	static R_TH_LOCAL bool rand_initialized = false;
 	if (!rand_initialized) {
 		r_num_irand ();
 		rand_initialized = true;
@@ -76,13 +73,12 @@ R_API void r_num_minmax_swap_i(int *a, int *b) {
 
 R_API RNum *r_num_new(RNumCallback cb, RNumCallback2 cb2, void *ptr) {
 	RNum *num = R_NEW0 (RNum);
-	if (!num) {
-		return NULL;
+	if (num) {
+		num->value = 0LL;
+		num->callback = cb;
+		num->cb_from_value = cb2;
+		num->userptr = ptr;
 	}
-	num->value = 0LL;
-	num->callback = cb;
-	num->cb_from_value = cb2;
-	num->userptr = ptr;
 	return num;
 }
 
@@ -149,29 +145,40 @@ R_API const char *r_num_get_name(RNum *num, ut64 n) {
 
 static void error(RNum *num, const char *err_str) {
 	if (num) {
-		num->nc.errors++;
-#if 0
-		num->nc.calc_err = err_str;
-#endif
+		if (err_str) {
+			num->nc.errors++;
+			num->nc.calc_err = err_str;
+		} else {
+			num->nc.errors = 0;
+			num->nc.calc_err = NULL;
+		}
 	}
 }
 
-static ut64 r_num_from_binary(const char *str) {
+static ut64 r_num_from_binary(RNum *num, const char *str) {
 	int i, j;
 	ut64 ret = 0;
-	for (j = 0, i = strlen (str) - 1; i > 0; i--, j++) {
-		if (str[i] == '1') {
-			ret |= (ut64) (1ULL << j);
-		} else if (str[i] != '0') {
+	for (j = 0, i = strlen (str) - 1; i >= 0; i--, j++) {
+		switch (str[i]) {
+		case '_':
+			j--;
 			break;
+		case '1':
+			ret |= (ut64) (1ULL << j);
+			break;
+		case '0':
+			break;
+		default:
+			error (num, "binary numbers must contain only 0 and 1");
+			return 0;
 		}
 	}
-	sscanf (str, "0x%"PFMT64x, &ret);
+//	sscanf (str, "0x%"PFMT64x, &ret);
 	return ret;
 }
 
 R_API ut64 r_num_from_ternary(const char *inp) {
-	if (!inp) {
+	if (R_STR_ISEMPTY (inp)) {
 		return 0LL;
 	}
 	const char *p;
@@ -200,15 +207,10 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 	ut32 s, a;
 
 	if (num && !num->nc.under_calc) {
-		num->nc.errors = 0;
+		error (num, NULL);
 	}
-	if (!str) {
-		return 0;
-	}
-	for (; *str == ' '; ) {
-		str++;
-	}
-	if (!*str) {
+	str = r_str_trim_head_ro (str);
+	if (R_STR_ISEMPTY (str)) {
 		return 0;
 	}
 	if (!strncmp (str, "1u", 2)) { // '1' is captured by op :(
@@ -252,8 +254,8 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 			return (ut64) ((s << 4) + a);
 		}
 	}
-	if (str[0] == '0' && str[1] == 'b') {
-		ret = r_num_from_binary (str + 2);
+	if (str[0] == '0' && str[1] == 'b') { // XXX this is wrong and causes bugs
+		ret = r_num_from_binary (num, str + 2);
 	} else if (str[0] == '\'') {
 		ret = str[1] & 0xff;
 	// ugly as hell
@@ -407,19 +409,12 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 			}
 			break;
 		default:
-#if 0
-			// sscanf (str, "%"PFMT64d"%n", &ret, &chars_read);
-// 32bit chop
-#if __WINDOWS__
-			ret = _strtoui64 (str, &endptr, 10);
-#endif
-#endif
 			errno = 0;
 			ret = strtoull (str, &endptr, 10);
 			if (errno == ERANGE) {
 				error (num, "number won't fit into 64 bits");
 			}
-			if (!IS_DIGIT (*str) || (*endptr && *endptr != lch)) {
+			if (!IS_DIGIT (*str)) {
 				error (num, "unknown symbol");
 			}
 			break;
@@ -431,110 +426,16 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 	return ret;
 }
 
-#if !R_NUM_USE_CALC
-static ut64 r_num_op(RNum *num, char op, ut64 a, ut64 b) {
-	switch (op) {
-	case '+': return a + b;
-	case '-': return a - b;
-	case '*': return a * b;
-	case '/':
-		if (!b && num) num->dbz = 1;
-		return b ? a / b : 0;
-	case '&': return a & b;
-	case '|': return a | b;
-	case '^': return a ^ b;
-	}
-	return b;
-}
-
-R_API static ut64 r_num_math_internal(RNum *num, char *s) {
-	ut64 ret = 0LL;
-	char *p = s;
-	int i, nop, op = 0;
-	for (i=0; s[i]; i++) {
-		if (r_num_is_op (s[i])) {
-			nop = s[i]; s[i] = '\0';
-			ret = r_num_op (num, op, ret, r_num_get (num, p));
-			op = s[i] = nop; p = s + i + 1;
-			break;
-		}
-	}
-	return r_num_op (op, ret, r_num_get (num, p));
-}
-#endif /* !R_NUM_USE_CALC */
-
 R_API ut64 r_num_math(RNum *num, const char *str) {
-#if R_NUM_USE_CALC
-	ut64 ret;
 	const char *err = NULL;
-	if (!str || !*str) {
+	if (R_STR_ISEMPTY (str)) {
 		return 0LL;
 	}
-	// if (!str || !*str) return 0LL;
-	if (num) {
-		num->dbz = 0;
-	}
-	ret = r_num_calc (num, str, &err);
+	ut64 ret = r_num_calc (num, str, &err); // TODO: rename r_num_calc to r_num_math_err()
 	if (err) {
-		eprintf ("r_num_calc error: (%s) in (%s)\n", err, str);
-	}
-	if (num) {
-		num->value = ret;
+		R_LOG_DEBUG ("(%s) in (%s)", err, str);
 	}
 	return ret;
-#else
-	ut64 ret = 0LL;
-	char op = '+';
-	int len;
-	char *p, *s, *os;
-	char *group;
-	if (!str) return 0LL;
-
-	len = strlen (str) + 1;
-	os = malloc (len + 1);
-
-	s = os;
-	memcpy (s, str, len);
-	for (; *s == ' '; s++);
-	p = s;
-
-	do {
-		group = strchr (p, '(');
-		if (group) {
-			group[0] = '\0';
-			ret = r_num_op (op, ret, r_num_math_internal (num, p));
-			for (; p<group; p += 1) {
-				if (r_num_is_op (*p)) {
-					op = *p;
-					break;
-				}
-			}
-			group[0] = '(';
-			p = group + 1;
-			if (r_str_delta (p, '(', ')') < 0) {
-				char *p2 = strchr (p, '(');
-				if (p2 != NULL) {
-					*p2 = '\0';
-					ret = r_num_op (op, ret, r_num_math_internal (num, p));
-					ret = r_num_op (op, ret, r_num_math (num, p2 + 1));
-					p = p2 + 1;
-					continue;
-				}
-				eprintf ("WTF!\n");
-			} else {
-				ret = r_num_op (op, ret, r_num_math_internal (num, p));
-			}
-		} else {
-			ret = r_num_op (op, ret, r_num_math_internal (num, p));
-		}
-	} while (0);
-
-	if (num) {
-		num->value = ret;
-	}
-	free (os);
-	return ret;
-#endif
 }
 
 R_API int r_num_is_float(RNum *num, const char *str) {
@@ -715,7 +616,7 @@ R_API char* r_num_as_string(RNum *___, ut64 n, bool printable_only) {
 	int stri, ret = 0, off = 0;
 	int len = sizeof (ut64);
 	ut64 num = n;
-	str[stri=0] = 0;
+	str[stri = 0] = 0;
 	while (len--) {
 		char ch = (num & 0xff);
 		if (ch >= 32 && ch < 127) {
@@ -785,21 +686,19 @@ R_API ut64 r_num_tail_base(RNum *num, ut64 addr, ut64 off) {
 R_API ut64 r_num_tail(RNum *num, ut64 addr, const char *hex) {
 	ut64 mask = 0LL;
 	ut64 n = 0;
-	char *p;
-	int i;
 
 	while (*hex && (*hex == ' ' || *hex == '.')) {
 		hex++;
 	}
-	i = strlen (hex) * 4;
-	p = malloc (strlen (hex) + 10);
+	int i = strlen (hex) * 4;
+	char *p = malloc (strlen (hex) + 10);
 	if (p) {
 		strcpy (p, "0x");
 		strcpy (p + 2, hex);
 		if (isxdigit ((ut8)hex[0])) {
 			n = r_num_math (num, p);
 		} else {
-			eprintf ("Invalid argument\n");
+			R_LOG_ERROR ("Invalid argument");
 			free (p);
 			return addr;
 		}
@@ -823,13 +722,13 @@ static ut64 r_num_tailff(RNum *num, const char *hex) {
 		if (isxdigit ((ut8)hex[0])) {
 			n = r_num_get (num, p);
 		} else {
-			eprintf ("Invalid argument\n");
+			R_LOG_ERROR ("Invalid argument");
 			free (p);
 			return UT64_MAX;
 		}
 		free (p);
 	}
-	ut64 left = ((UT64_MAX >>i) << i);
+	ut64 left = ((UT64_MAX >> i) << i);
 	return left | n;
 }
 

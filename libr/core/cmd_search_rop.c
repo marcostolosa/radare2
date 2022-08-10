@@ -235,7 +235,6 @@ static char* rop_classify_constant(RCore *core, RList *ropList) {
 	const bool stats = r_config_get_i (core->config, "esil.stats");
 
 	if (!romem || !stats) {
-		// eprintf ("Error: esil.romem and esil.stats must be set TRUE");
 		return NULL;
 	}
 
@@ -253,7 +252,7 @@ static char* rop_classify_constant(RCore *core, RList *ropList) {
 			goto continue_error;
 		}
 		esil_split_flg (esil_str, &esil_main, &esil_flg);
-		cmd_anal_esil (core, esil_main? esil_main: esil_str);
+		cmd_anal_esil (core, esil_main? esil_main: esil_str, false);
 		out = sdb_querys (core->anal->esil->stats, NULL, 0, "*");
 		if (!out) {
 			goto continue_error;
@@ -320,7 +319,6 @@ static char* rop_classify_mov(RCore *core, RList *ropList) {
 	const bool stats = r_config_get_i (core->config, "esil.stats");
 
 	if (!romem || !stats) {
-		// eprintf ("Error: esil.romem and esil.stats must be set TRUE");
 		return NULL;
 	}
 
@@ -332,7 +330,7 @@ static char* rop_classify_mov(RCore *core, RList *ropList) {
 			goto out_error;
 		}
 		esil_split_flg (esil_str, &esil_main, &esil_flg);
-		cmd_anal_esil (core, esil_main? esil_main: esil_str);
+		cmd_anal_esil (core, esil_main? esil_main: esil_str, false);
 		out = sdb_querys (core->anal->esil->stats, NULL, 0, "*");
 		if (out) {
 			ops_list  = parse_list (strstr (out, "ops.list"));
@@ -417,7 +415,6 @@ static char* rop_classify_arithmetic(RCore *core, RList *ropList) {
 	ut64 *op_result_r = R_NEW0 (ut64);
 
 	if (!romem || !stats) {
-		// eprintf ("Error: esil.romem and esil.stats must be set TRUE");
 		free (op_result);
 		free (op_result_r);
 		return NULL;
@@ -432,9 +429,9 @@ static char* rop_classify_arithmetic(RCore *core, RList *ropList) {
 		}
 		esil_split_flg (esil_str, &esil_main, &esil_flg);
 		if (esil_main) {
-			cmd_anal_esil (core, esil_main);
+			cmd_anal_esil (core, esil_main, false);
 		} else {
-			cmd_anal_esil (core, esil_str);
+			cmd_anal_esil (core, esil_str, false);
 		}
 		out = sdb_querys (core->anal->esil->stats, NULL, 0, "*");
 		// r_cons_println (out);
@@ -544,7 +541,6 @@ static char* rop_classify_arithmetic_const(RCore *core, RList *ropList) {
 	ut64 *op_result_r = R_NEW0 (ut64);
 
 	if (!romem || !stats) {
-		// eprintf ("Error: esil.romem and esil.stats must be set TRUE");
 		R_FREE (op_result);
 		R_FREE (op_result_r);
 		return NULL;
@@ -565,9 +561,9 @@ static char* rop_classify_arithmetic_const(RCore *core, RList *ropList) {
 		}
 		esil_split_flg (esil_str, &esil_main, &esil_flg);
 		if (esil_main) {
-			cmd_anal_esil (core, esil_main);
+			cmd_anal_esil (core, esil_main, false);
 		} else {
-			cmd_anal_esil (core, esil_str);
+			cmd_anal_esil (core, esil_str, false);
 		}
 		char *out = sdb_querys (core->anal->esil->stats, NULL, 0, "*");
 		// r_cons_println (out);
@@ -661,7 +657,6 @@ static int rop_classify_nops(RCore *core, RList *ropList) {
 	const bool stats = r_config_get_i (core->config, "esil.stats");
 
 	if (!romem || !stats) {
-		// eprintf ("Error: esil.romem and esil.stats must be set TRUE\n");
 		return -2;
 	}
 
@@ -669,7 +664,7 @@ static int rop_classify_nops(RCore *core, RList *ropList) {
 		fillRegisterValues (core);
 
 		// r_cons_printf ("Emulating nop:%s\n", esil_str);
-		cmd_anal_esil (core, esil_str);
+		cmd_anal_esil (core, esil_str, false);
 		char *out = sdb_querys (core->anal->esil->stats, NULL, 0, "*");
 		// r_cons_println (out);
 		if (out) {
@@ -693,7 +688,7 @@ static void rop_classify(RCore *core, Sdb *db, RList *ropList, const char *key, 
 	Sdb *db_aritm_ct = sdb_ns (db, "arithm_ct", true);
 
 	if (!db_nop || !db_mov || !db_ct || !db_aritm || !db_aritm_ct) {
-		eprintf ("Error: Could not create SDB 'rop' sub-namespaces\n");
+		R_LOG_ERROR ("Could not create SDB 'rop' sub-namespaces");
 		return;
 	}
 	nop = rop_classify_nops (core, ropList);

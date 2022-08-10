@@ -1,11 +1,37 @@
+NAME=test 8051 reassembly
+FILE=--
+CMDS=!scripts/test-8051-reassembly.sh
+EXPECT=<<EOF
+Reassembling 8051... OK
+EOF
+EXPECT_ERR=<<EOF
+Warning: using oba to load the syminfo from different mapaddress.
+EOF
+RUN
+
+NAME=rasm2 binary input
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+!!rasm2 -a arm -b 64 -d Bx01000000_00000000_00000010_10001011
+!!rasm2 -a arm -b 64 -d 0b01000000_00000000_00000010_10001011
+!!rasm2 -a arm -b 64 -d 0100_0000_0000_0000_0000_0010_1000_1011b
+!!rasm2 -a arm -b 64 -d 01000001000000000000001110001011b
+EOF
+EXPECT=<<EOF
+add x0, x2, x2
+add x0, x2, x2
+add x0, x2, x2
+add x1, x2, x3
+EOF
+RUN
+
 NAME=rasm2 i4004
 FILE=-
 CMDS=<<EOF
 !!rasm2 -L~4004
 EOF
-EXPECT=<<EOF
-adAe  4          i4004       LGPL3   Intel 4004 microprocessor
-EOF
+EXPECT=
 RUN
 
 NAME=rasm2 arm asm/dis endian
@@ -164,7 +190,7 @@ CMDS=!rasm2 -a x86 -b 32 "mov hello, eax"
 EXPECT=<<EOF
 EOF
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov hello, eax' at line 3
+ERROR: Cannot assemble 'mov hello, eax' at line 3
 invalid
 EOF
 RUN
@@ -175,7 +201,7 @@ CMDS=!rasm2 -a x86 -b 32 "mov 33, eax"
 EXPECT=<<EOF
 EOF
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov 33, eax' at line 3
+ERROR: Cannot assemble 'mov 33, eax' at line 3
 invalid
 EOF
 RUN
@@ -186,7 +212,7 @@ CMDS=!rasm2 -a x86 -b 32 "mov eax, hello"
 EXPECT=<<EOF
 EOF
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov eax, hello' at line 3
+ERROR: Cannot assemble 'mov eax, hello' at line 3
 invalid
 EOF
 RUN
@@ -196,7 +222,7 @@ FILE=-
 CMDS=!rasm2 -a x86 -b 32 "mov eax, 0x1122334455"
 EXPECT=
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov eax, 0x1122334455' at line 3
+ERROR: Cannot assemble 'mov eax, 0x1122334455' at line 3
 invalid
 EOF
 RUN
@@ -209,9 +235,9 @@ CMDS=<<EOF
 EOF
 EXPECT=
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov rax, 0x112233445566778899' at line 3
+ERROR: Cannot assemble 'mov rax, 0x112233445566778899' at line 3
 invalid
-Cannot assemble 'mov eax, 0x1122334455' at line 3
+ERROR: Cannot assemble 'mov eax, 0x1122334455' at line 3
 invalid
 EOF
 RUN

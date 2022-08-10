@@ -1,5 +1,6 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
+#define R_LOG_ORIGIN "cmdapi"
 #include <r_core.h>
 #include "ht_pp.h"
 
@@ -34,7 +35,7 @@ static const RCmdDescHelp root_help = {
 	.description = "",
 };
 
-static int value = 0;
+static R_TH_LOCAL int value = 0;
 
 #define NCMDS (sizeof (cmd->cmds)/sizeof(*cmd->cmds))
 R_LIB_VERSION (r_cmd);
@@ -162,7 +163,7 @@ static ut32 alias_hashfn(const void *k_in) {
 }
 
 R_API void r_cmd_alias_init(RCmd *cmd) {
-	HtPPOptions opt = { 0 };
+	HtPPOptions opt = {0};
 	opt.cmp = alias_cmp;
 	opt.hashfn = alias_hashfn;
 	opt.dupkey = alias_dupkey;
@@ -253,20 +254,31 @@ out:
 	return res;
 }
 
+// This struct exists to store the index during hashtable foreach.
+typedef struct {
+	const char **keys;
+	size_t current_key;
+} AliasKeylist;
+
 static bool get_keys(void *keylist_in, const void *k, const void *v) {
-	RList *keylist = (RList *) keylist_in;
-	return r_list_append (keylist, (char *) k);
+	AliasKeylist *keylist = keylist_in;
+	keylist->keys[keylist->current_key++] = (const char *)k;
+	return true;
 }
 
-R_API RList *r_cmd_alias_keys(RCmd *cmd) {
-	RList *keylist = r_list_new ();
-	if (!keylist) {
+R_API const char **r_cmd_alias_keys(RCmd *cmd) {
+	AliasKeylist keylist;
+
+	keylist.keys = R_NEWS (const char *, cmd->aliases->count);
+	if (!keylist.keys) {
 		return NULL;
 	}
 
-	ht_pp_foreach (cmd->aliases, get_keys, keylist);
+	keylist.current_key = 0;
+	ht_pp_foreach (cmd->aliases, get_keys, &keylist);
 
-	return keylist;
+	// We don't need to return a count - it's already in cmd->aliases.
+	return keylist.keys;
 }
 
 R_API void r_cmd_alias_free(RCmd *cmd) {
@@ -358,6 +370,7 @@ R_API int r_cmd_alias_set_raw(RCmd *cmd, const char *k, const ut8 *v, int sz) {
 		val.sz++;
 		ut8 *data = realloc (val.data, val.sz);
 		if (!data) {
+			free (val.data);
 			return 1;
 		}
 		val.data = data;
@@ -391,8 +404,7 @@ R_API int r_cmd_alias_set_raw(RCmd *cmd, const char *k, const ut8 *v, int sz) {
 
 R_API RCmdAliasVal *r_cmd_alias_get(RCmd *cmd, const char *k) {
 	r_return_val_if_fail (cmd && cmd->aliases && k, NULL);
-
-	return ht_pp_find(cmd->aliases, k, NULL);
+	return ht_pp_find (cmd->aliases, k, NULL);
 }
 
 static ut8 *alias_append_internal(int *out_szp, const RCmdAliasVal *first, const ut8 *second, int second_sz) {
@@ -427,20 +439,16 @@ R_API int r_cmd_alias_append_str(RCmd *cmd, const char *k, const char *a) {
 		if (!v_old->is_data) {
 			return 1;
 		}
-
-		int new_len;
+		int new_len = 0;
 		ut8* new = alias_append_internal (&new_len, v_old, (ut8 *)a, strlen (a) + 1);
-
 		if (!new) {
 			return 1;
 		}
-
 		r_cmd_alias_set_raw (cmd, k, new, new_len);
 		free (new);
 	} else {
 		r_cmd_alias_set_str (cmd, k, a);
 	}
-
 	return 0;
 }
 
@@ -450,16 +458,16 @@ R_API int r_cmd_alias_append_raw(RCmd *cmd, const char *k, const ut8 *a, int sz)
 		if (!v_old->is_data) {
 			return 1;
 		}
-
-		int new_len;
+		int new_len = 0;
 		ut8 *new = alias_append_internal (&new_len, v_old, a, sz);
-
+		if (!new) {
+			return 1;
+		}
 		r_cmd_alias_set_raw (cmd, k, new, new_len);
 		free (new);
 	} else {
 		r_cmd_alias_set_raw (cmd, k, a, sz);
 	}
-
 	return 0;
 }
 
@@ -468,7 +476,6 @@ R_API char *r_cmd_alias_val_strdup(RCmdAliasVal *v) {
 	if (v->is_str) {
 		return strdup ((char *)v->data);
 	}
-
 	return r_str_escape_raw (v->data, v->sz);
 }
 
@@ -502,6 +509,18 @@ R_API void r_cmd_del(RCmd *cmd, const char *command) {
 	R_FREE (cmd->cmds[idx]);
 }
 
+#if SHELLFILTER
+static char *r_cmd_filter_special(const char *input) {
+	char *s = strdup (input);
+	// XXX workaround to call macros with quotes
+	if (*s == '(') {
+		return s;
+	}
+	r_str_trim_args (s);
+	return s;
+}
+#endif
+
 R_API int r_cmd_call(RCmd *cmd, const char *input) {
 	struct r_cmd_item_t *c;
 	int ret = -1;
@@ -533,8 +552,17 @@ R_API int r_cmd_call(RCmd *cmd, const char *input) {
 		}
 		c = cmd->cmds[((ut8)input[0]) & 0xff];
 		if (c && c->callback) {
-			const char *inp = (*input)? input + 1: "";
-			ret = c->callback (cmd->data, inp);
+			if (*input) {
+#if SHELLFILTER
+				char *s = r_cmd_filter_special (input + 1);
+				ret = c->callback (cmd->data, s);
+				free (s);
+#else
+				ret = c->callback (cmd->data, input + 1);
+#endif
+			} else {
+				ret = c->callback (cmd->data, "");
+			}
 		} else {
 			ret = -1;
 		}
@@ -599,7 +627,7 @@ R_API RCmdStatus r_cmd_call_parsed_args(RCmd *cmd, RCmdParsedArgs *args) {
 		break;
 	default:
 		res = R_CMD_STATUS_INVALID;
-		R_LOG_ERROR ("RCmdDesc type not handled\n");
+		R_LOG_ERROR ("RCmdDesc type not handled");
 		break;
 	}
 	return res;
@@ -872,7 +900,7 @@ R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *oname) {
 	int lidx;
 
 	if (!*oname) {
-		r_cmd_macro_list (mac);
+		r_cmd_macro_list (mac, 0);
 		return false;
 	}
 
@@ -934,7 +962,7 @@ R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *oname) {
 	}
 	macro->args = strdup (args);
 	ptr = strchr (macro->name, ' ');
-	if (ptr != NULL) {
+	if (ptr) {
 		*ptr = '\0';
 		macro->nargs = r_str_word_set0 (ptr+1);
 	}
@@ -971,7 +999,7 @@ R_API bool r_cmd_macro_rm(RCmdMacro *mac, const char *_name) {
 	r_list_foreach (mac->macros, iter, m) {
 		if (!strcmp (m->name, name)) {
 			r_list_delete (mac->macros, iter);
-			eprintf ("Macro '%s' removed.\n", name);
+			R_LOG_DEBUG ("Macro '%s' removed", name);
 			ret = true;
 			break;
 		}
@@ -980,8 +1008,32 @@ R_API bool r_cmd_macro_rm(RCmdMacro *mac, const char *_name) {
 	return ret;
 }
 
+static void macro_meta(RCmdMacro *mac) {
+	RCmdMacroItem *m;
+	int j;
+	RListIter *iter;
+	r_list_foreach (mac->macros, iter, m) {
+		mac->cb_printf ("\"(%s %s; ", m->name, m->args);
+		for (j=0; m->code[j]; j++) {
+			if (m->code[j] == '\n') {
+				mac->cb_printf (";");
+			} else {
+				mac->cb_printf ("%c", m->code[j]);
+			}
+		}
+		mac->cb_printf (")\"\n");
+	}
+}
 // TODO: use mac->cb_printf which is r_cons_printf at the end
-R_API void r_cmd_macro_list(RCmdMacro *mac) {
+R_API void r_cmd_macro_list(RCmdMacro *mac, int mode) {
+	if (mode == '*') {
+		macro_meta (mac);
+		return;
+	}
+	if (mode == 'j') {
+		eprintf ("TODO: JSON output for macros\n");
+		return;
+	}
 	RCmdMacroItem *m;
 	int j, idx = 0;
 	RListIter *iter;
@@ -999,23 +1051,6 @@ R_API void r_cmd_macro_list(RCmdMacro *mac) {
 	}
 }
 
-// TODO: use mac->cb_printf which is r_cons_printf at the end
-R_API void r_cmd_macro_meta(RCmdMacro *mac) {
-	RCmdMacroItem *m;
-	int j;
-	RListIter *iter;
-	r_list_foreach (mac->macros, iter, m) {
-		mac->cb_printf ("(%s %s, ", m->name, m->args);
-		for (j=0; m->code[j]; j++) {
-			if (m->code[j] == '\n') {
-				mac->cb_printf ("; ");
-			} else {
-				mac->cb_printf ("%c", m->code[j]);
-			}
-		}
-		mac->cb_printf (")\n");
-	}
-}
 
 #if 0
 (define name value
@@ -1154,12 +1189,12 @@ R_API char *r_cmd_macro_label_process(RCmdMacro *mac, RCmdMacroLabel *labels, in
 }
 
 /* TODO: add support for spaced arguments */
+static R_TH_LOCAL int macro_level = 0;
 R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name) {
 	char *args;
 	int nargs = 0;
 	char *str, *ptr, *ptr2;
 	RListIter *iter;
-	static int macro_level = 0;
 	RCmdMacroItem *m;
 	/* labels */
 	int labels_n = 0;
@@ -1167,7 +1202,7 @@ R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name) {
 
 	str = strdup (name);
 	if (!str) {
-		perror ("strdup");
+		r_sys_perror ("strdup");
 		return false;
 	}
 	ptr = strchr (str, ')');
@@ -1205,7 +1240,7 @@ R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name) {
 			char *end = strchr (ptr, '\n');
 			if (m->nargs != 0 && nargs != m->nargs) {
 				eprintf ("Macro '%s' expects %d args, not %d\n", m->name, m->nargs, nargs);
-				macro_level --;
+				macro_level--;
 				free (str);
 				r_cons_break_pop ();
 				return false;

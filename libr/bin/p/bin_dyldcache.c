@@ -147,43 +147,34 @@ static void free_bin(RDyldBinImage *bin) {
 }
 
 static void rebase_info3_free(RDyldRebaseInfo3 *rebase_info) {
-	if (!rebase_info) {
-		return;
+	if (rebase_info) {
+		R_FREE (rebase_info->page_starts);
+		R_FREE (rebase_info);
 	}
-
-	R_FREE (rebase_info->page_starts);
-	R_FREE (rebase_info);
 }
 
 static void rebase_info2_free(RDyldRebaseInfo2 *rebase_info) {
-	if (!rebase_info) {
-		return;
+	if (rebase_info) {
+		R_FREE (rebase_info->page_starts);
+		R_FREE (rebase_info->page_extras);
+		R_FREE (rebase_info);
 	}
-
-	R_FREE (rebase_info->page_starts);
-	R_FREE (rebase_info->page_extras);
-	R_FREE (rebase_info);
 }
 
 static void rebase_info1_free(RDyldRebaseInfo1 *rebase_info) {
-	if (!rebase_info) {
-		return;
+	if (rebase_info) {
+		R_FREE (rebase_info->toc);
+		R_FREE (rebase_info->entries);
+		R_FREE (rebase_info);
 	}
-
-	R_FREE (rebase_info->toc);
-	R_FREE (rebase_info->entries);
-	R_FREE (rebase_info);
 }
 
 static void rebase_info_free(RDyldRebaseInfo *rebase_info) {
 	if (!rebase_info) {
 		return;
 	}
-
 	R_FREE (rebase_info->one_page_buf);
-
 	ut8 version = rebase_info->version;
-
 	if (version == 1) {
 		rebase_info1_free ((RDyldRebaseInfo1*) rebase_info);
 	} else if (version == 2 || version == 4) {
@@ -408,7 +399,7 @@ static void symbols_from_locsym(RDyldCache *cache, RDyldBinImage *bin, RList *sy
 		if (symstr) {
 			sym->name = symstr;
 		} else {
-			static ut32 k = 0;
+			static R_TH_LOCAL ut32 k = 0;
 			sym->name = r_str_newf ("unk_local%d", k++);
 		}
 
@@ -485,10 +476,10 @@ static struct MACH0_(obj_t) *bin_to_mach0(RBinFile *bf, RDyldBinImage *bin) {
 	opts.symbols_off = bin->symbols_off;
 
 	struct MACH0_(obj_t) *mach0 = MACH0_(new_buf) (buf, &opts);
-
-	mach0->user = cache;
-	mach0->va2pa = &bin_obj_va2pa;
-
+	if (mach0) {
+		mach0->user = cache;
+		mach0->va2pa = &bin_obj_va2pa;
+	}
 	r_buf_free (buf);
 
 	return mach0;
@@ -963,7 +954,7 @@ static bool check_buffer(RBinFile *bf, RBuffer *buf) {
 		return false;
 	}
 
-	char hdr[17] = { 0 };
+	char hdr[17] = {0};
 	int rhdr = r_buf_read_at (buf, 0, (ut8 *)&hdr, sizeof (hdr) - 1);
 	if (rhdr != sizeof (hdr) - 1) {
 		return false;
@@ -1075,7 +1066,7 @@ static void carve_deps_at_address(RDyldCache *cache, cache_img_t *img, HtPU *pat
 			const char *key = (const char *) cursor + 24;
 			size_t dep_index = (size_t)ht_pu_find (path_to_idx, key, &found);
 			if (!found || dep_index >= cache->hdr->imagesCount) {
-				eprintf ("Warning: alien dep '%s'\n", key);
+				R_LOG_WARN ("alien dep '%s'", key);
 				continue;
 			}
 			deps[dep_index]++;
@@ -1166,6 +1157,9 @@ static RList *create_cache_bins(RBinFile *bf, RDyldCache *cache) {
 			r_list_free (target_lib_names);
 			return NULL;
 		}
+	} else {
+		eprintf ("bin.dyldcache: Use R_DYLDCACHE_FILTER to specify a colon ':' separated\n");
+		eprintf ("bin.dyldcache: list of names to avoid loading all the files in memory.\n");
 	}
 
 	ut32 i;
@@ -1247,7 +1241,8 @@ static RList *create_cache_bins(RBinFile *bf, RDyldCache *cache) {
 			if (deps && !deps[j]) {
 				continue;
 			}
-			ut64 pa = va2pa (img[j].address, hdr->mappingCount, &cache->maps[maps_index], cache->buf, 0, NULL, NULL);
+			// ut64 pa = va2pa (img[j].address, hdr->mappingCount, &cache->maps[maps_index], cache->buf, 0, NULL, NULL);
+			ut64 pa = va2pa (img[j].address, cache->n_maps, &cache->maps[maps_index], cache->buf, 0, NULL, NULL);
 			if (pa == UT64_MAX) {
 				continue;
 			}
@@ -1369,7 +1364,7 @@ static void rebase_bytes_v2(RDyldRebaseInfo2 *rebase_info, ut8 *buf, ut64 offset
 				ut32 delta = 1;
 				while (delta) {
 					ut64 position = in_buf + first_rebase_off - page_offset;
-					if (position >= count) {
+					if (position + 8 >= count) {
 						break;
 					}
 					ut64 raw_value = r_read_le64 (buf + position);
@@ -1413,7 +1408,7 @@ static void rebase_bytes_v3(RDyldRebaseInfo3 *rebase_info, ut8 *buf, ut64 offset
 		if (first_rebase_off >= page_offset && first_rebase_off < page_offset + count) {
 			do {
 				ut64 position = in_buf + first_rebase_off - page_offset;
-				if (position >= count) {
+				if (position + 8 >= count) {
 					break;
 				}
 				ut64 raw_value = r_read_le64 (buf + position);
@@ -1479,7 +1474,7 @@ static void rebase_bytes(RDyldRebaseInfo *rebase_info, ut8 *buf, ut64 offset, in
 
 static int dyldcache_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	r_return_val_if_fail (io, -1);
-	RCore *core = (RCore*) io->corebind.core;
+	RCore *core = (RCore*) io->coreb.core;
 
 	if (!core || !core->bin || !core->bin->binfiles) {
 		return -1;
@@ -1543,7 +1538,7 @@ static int dyldcache_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 		if (rounded_count > rebase_info->page_size) {
 			internal_buf = malloc (rounded_count);
 			if (!internal_buf) {
-				eprintf ("Cannot allocate memory for 'internal_buf'\n");
+				R_LOG_ERROR ("Cannot allocate memory for 'internal_buf'");
 				return -1;
 			}
 		}
@@ -1560,7 +1555,7 @@ static int dyldcache_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 			result = R_MIN (count, internal_result);
 			memcpy (buf, internal_buf + page_offset, result);
 		} else {
-			eprintf ("ERROR rebasing\n");
+			R_LOG_ERROR ("rebasing");
 			result = cache->original_io_read (io, fd, buf, count);
 		}
 
@@ -1831,7 +1826,7 @@ static objc_cache_opt_info *get_objc_opt_info(RBinFile *bf, RDyldCache *cache) {
 			}
 			ut64 cursor = selrefs_offset;
 			ut64 end = cursor + selrefs_size;
-			while (cursor < end) {
+			while (cursor + 8 < end) {
 				ut64 sel_ptr = r_buf_read_le64_at (cache->buf, cursor);
 				if (sel_ptr == UT64_MAX) {
 					break;
@@ -2096,12 +2091,18 @@ static RList *sections(RBinFile *bf) {
 
 	RListIter *iter;
 	RDyldBinImage *bin;
+	ut32 i = 0;
+	RConsIsBreaked is_breaked = (bf->rbin && bf->rbin->consb.is_breaked)? bf->rbin->consb.is_breaked: NULL;
 	r_list_foreach (cache->bins, iter, bin) {
+		i++;
+		if (is_breaked && is_breaked ()) {
+			eprintf ("Parsing sections stopped %d / %d\n", i, r_list_length (cache->bins));
+			break;
+		}
 		sections_from_bin (ret, bf, bin);
 	}
 
 	RBinSection *ptr = NULL;
-	int i;
 	for (i = 0; i < cache->n_maps; i++) {
 		if (!(ptr = R_NEW0 (RBinSection))) {
 			r_list_free (ret);
@@ -2142,7 +2143,14 @@ static RList *symbols(RBinFile *bf) {
 
 	RListIter *iter;
 	RDyldBinImage *bin;
+	ut32 i = 0;
+	RConsIsBreaked is_breaked = (bf->rbin && bf->rbin->consb.is_breaked)? bf->rbin->consb.is_breaked: NULL;
 	r_list_foreach (cache->bins, iter, bin) {
+		i++;
+		if (is_breaked && is_breaked ()) {
+			eprintf ("Parsing symbols stopped %d / %d\n", i, r_list_length (cache->bins));
+			break;
+		}
 		SetU *hash = set_u_new ();
 		if (!hash) {
 			r_list_free (ret);
@@ -2202,7 +2210,14 @@ static RList *classes(RBinFile *bf) {
 
 	RBuffer *orig_buf = bf->buf;
 	ut32 num_of_unnamed_class = 0;
+	ut32 i = 0;
+	RConsIsBreaked is_breaked = (bf->rbin && bf->rbin->consb.is_breaked)? bf->rbin->consb.is_breaked: NULL;
 	r_list_foreach (cache->bins, iter, bin) {
+		i++;
+		if (is_breaked && is_breaked ()) {
+			eprintf ("Parsing classes stopped %d / %d\n", i, r_list_length (cache->bins));
+			break;
+		}
 		struct MACH0_(obj_t) *mach0 = bin_to_mach0 (bf, bin);
 		if (!mach0) {
 			goto beach;
@@ -2265,7 +2280,9 @@ static RList *classes(RBinFile *bf) {
 				bf->buf = orig_buf;
 
 				if (!klass->name) {
-					eprintf ("KLASS ERROR AT 0x%"PFMT64x", is_classlist %d\n", pointer_to_class, is_classlist);
+					if (bf->rbin->verbose) {
+						eprintf ("KLASS ERROR AT 0x%"PFMT64x", is_classlist %d\n", pointer_to_class, is_classlist);
+					}
 					klass->name = r_str_newf ("UnnamedClass%u", num_of_unnamed_class);
 					if (!klass->name) {
 						R_FREE (klass);
@@ -2454,6 +2471,7 @@ RBinPlugin r_bin_plugin_dyldcache = {
 	.baddr = &baddr,
 	.symbols = &symbols,
 	.sections = &sections,
+	.minstrlen = 5,
 	.check_buffer = &check_buffer,
 	.destroy = &destroy,
 	.classes = &classes,

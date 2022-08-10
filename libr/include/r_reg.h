@@ -2,6 +2,7 @@
 #define R2_REG_H
 
 #include <r_types.h>
+#include <r_arch.h>
 #include <r_list.h>
 #include <r_util/r_hex.h>
 #include <r_util/r_assert.h>
@@ -56,6 +57,10 @@ typedef enum {
 	R_REG_NAME_R1,
 	R_REG_NAME_R2,
 	R_REG_NAME_R3,
+	R_REG_NAME_F0, // float return registers
+	R_REG_NAME_F1,
+	R_REG_NAME_F2,
+	R_REG_NAME_F3,
 	/* flags */
 	R_REG_NAME_ZF,
 	R_REG_NAME_SF,
@@ -90,7 +95,7 @@ typedef enum {
 typedef struct r_reg_item_t {
 	char *name;
 	int /*RRegisterType*/ type;
-	int size;	/* 8,16,32,64 ... 128/256 ??? */
+	int size;	/* 8,16,32,64 ... 128/256 ??? rename to bitsize */
 	int offset;      /* offset in data structure */
 	int packed_size; /* 0 means no packed register, 1byte pack, 2b pack... */
 	bool is_float;
@@ -123,13 +128,15 @@ typedef struct r_reg_t {
 	RList *allregs;
 	RList *roregs;
 	int iters;
-	int arch;
-	int bits;
 	int size;
 	int bits_default;
-	bool is_thumb;
-	bool big_endian;
+	ut64 hasbits;
+	RArchConfig *config;
 } RReg;
+
+R_API bool r_reg_hasbits_check(RReg *reg, int size);
+R_API bool r_reg_hasbits_use(RReg *reg, int size);
+R_API void r_reg_hasbits_clear(RReg *reg);
 
 typedef struct r_reg_flags_t {
 	bool s; // sign, negative number (msb)

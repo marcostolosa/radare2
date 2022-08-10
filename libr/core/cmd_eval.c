@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2009-2021 - pancake */
+/* radare2 - LGPL - Copyright 2009-2022 - pancake */
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -21,6 +21,7 @@ static const char *help_msg_e[] = {
 	"ee", "var", "open editor to change the value of var",
 	"ed", "", "open editor to change the ~/.radare2rc",
 	"ej", "", "list config vars in JSON",
+	"en", "", "list environment vars",
 	"env", " [k[=v]]", "get/set environment variable",
 	"er", " [key]", "set config key as readonly. no way back",
 	"es", " [space]", "list all eval spaces [or keys]",
@@ -139,16 +140,19 @@ static bool cmd_load_theme(RCore *core, const char *_arg) {
 
 	if (load_theme (core, home)) {
 		core->theme = r_str_dup (core->theme, arg);
+		free (core->themepath);
 		core->themepath = home;
 		home = NULL;
 	} else {
 		if (load_theme (core, path)) {
 			core->theme = r_str_dup (core->theme, arg);
+			free (core->themepath);
 			core->themepath = path;
 			path = NULL;
 		} else {
 			if (load_theme (core, arg)) {
 				core->theme = r_str_dup (core->theme, arg);
+				free (core->themepath);
 				core->themepath = arg;
 				arg = NULL;
 			} else {
@@ -233,10 +237,12 @@ static void nextpal(RCore *core, int mode) {
 							r_list_free (files);
 							return;
 						}
+#if 0
 						eprintf ("%s %s %s\n",
 							r_str_get (nfn),
 							r_str_get (core->theme),
 							r_str_get (fn));
+#endif
 						if (nfn && !strcmp (nfn, core->theme)) {
 							r_list_free (files);
 							files = NULL;
@@ -275,10 +281,12 @@ static void nextpal(RCore *core, int mode) {
 							r_list_free (files);
 							return;
 						}
+#if 0
 						eprintf ("%s %s %s\n",
 							r_str_get (nfn),
 							r_str_get (core->theme),
 							r_str_get (fn));
+#endif
 						if (nfn && !strcmp (nfn, core->theme)) {
 							free (core->theme);
 							core->theme = strdup (fn);
@@ -299,12 +307,13 @@ done:
 	if (getNext) {
 		R_FREE (core->theme);
 		nextpal (core, mode);
+		r_list_free (files);
 		return;
 	}
 	if (mode == 'l' && !core->theme && !r_list_empty (files)) {
 		//nextpal (core, mode);
 	} else if (mode == 'n' || mode == 'p') {
-		if (core->theme) {
+		if (R_STR_ISNOTEMPTY (core->theme)) {
 			r_core_cmdf (core, "eco %s", core->theme);
 		}
 	}
@@ -318,7 +327,7 @@ done:
 }
 
 R_API void r_core_echo(RCore *core, const char *input) {
-	if (!strncmp (input, "64 ", 3)) {
+	if (r_str_startswith (input, "64 ")) {
 		char *buf = strdup (input);
 		r_base64_decode ((ut8*)buf, input + 3, -1);
 		if (*buf) {
@@ -364,7 +373,10 @@ static int cmd_eval(void *data, const char *input) {
 		}
 		break;
 	case 'n': // "en" "env"
-		if (!strchr (input, '=')) {
+		if (strchr (input, '?')) {
+			r_core_cmd_help_match_spec (core, help_msg_e, "en", 0, false);
+			break;
+		} else if (!strchr (input, '=')) {
 			char *var, *p;
 			var = strchr (input, ' ');
 			if (var) while (*var==' ') var++;
@@ -390,7 +402,7 @@ static int cmd_eval(void *data, const char *input) {
 				r_str_trim (k);
 				r_str_trim (v);
 				char *last = k + strlen (k) - 1;
-				if (*last == '%') {
+				if (*k && *last == '%') {
 					*last = 0;
 					r_str_trim (k);
 				}
@@ -425,7 +437,8 @@ static int cmd_eval(void *data, const char *input) {
 			} else if (input[2] == '*') {
 				r_core_cmdf (core, "cat %s", core->themepath);
 			} else if (input[2] == '!') {
-				r_core_editor (core, core->themepath, NULL);
+				char *res = r_core_editor (core, core->themepath, NULL);
+				free (res);
 				cmd_load_theme (core, core->theme); // reload
 			} else if (input[2] == ' ') {
 				cmd_load_theme (core, input + 3);

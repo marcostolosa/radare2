@@ -47,27 +47,26 @@ static void clear_flags(RAnalOp *op, int flags) {
 }
 
 static int v810_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
-	int ret;
 	ut8 opcode, reg1, reg2, imm5, cond;
-	ut16 word1, word2 = 0;
+	ut16 word2 = 0;
 	st32 jumpdisp;
 	struct v810_cmd cmd;
 
 	memset (&cmd, 0, sizeof(cmd));
 
-	ret = op->size = v810_decode_command (buf, len, &cmd);
+	int ret = op->size = v810_decode_command (buf, len, &cmd);
 	if (ret <= 0) {
 		return ret;
 	}
-
-	word1 = r_read_ble16 (buf, anal->big_endian);
-
-	if (ret == 4) {
-		word2 = r_read_ble16 (buf+2, anal->big_endian);
+	if (mask & R_ANAL_OP_MASK_DISASM) {
+		op->mnemonic = r_str_newf ("%s %s", cmd.instr, cmd.operands);
 	}
-
+	const bool be = anal->config->big_endian;
+	ut16 word1 = r_read_ble16 (buf, be);
+	if (ret == 4) {
+		word2 = r_read_ble16 (buf + 2, be);
+	}
 	op->addr = addr;
-
 	opcode = OPCODE(word1);
 	if (opcode >> 3 == 0x4) {
 		opcode &= 0x20;
@@ -76,23 +75,19 @@ static int v810_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len,
 	switch (opcode) {
 	case V810_MOV:
 		op->type = R_ANAL_OP_TYPE_MOV;
-		r_strbuf_appendf (&op->esil, "r%u,r%u,=",
-						 REG1(word1), REG2(word1));
+		r_strbuf_appendf (&op->esil, "r%u,r%u,=", REG1(word1), REG2(word1));
 		break;
 	case V810_MOV_IMM5:
 		op->type = R_ANAL_OP_TYPE_MOV;
-		r_strbuf_appendf (&op->esil, "%d,r%u,=",
-						  (st8)SEXT5(IMM5(word1)), REG2(word1));
+		r_strbuf_appendf (&op->esil, "%d,r%u,=", (st8)SEXT5(IMM5(word1)), REG2(word1));
 		break;
 	case V810_MOVHI:
 		op->type = R_ANAL_OP_TYPE_MOV;
-		r_strbuf_appendf (&op->esil, "16,%hu,<<,r%u,+,r%u,=",
-						 word2, REG1(word1), REG2(word1));
+		r_strbuf_appendf (&op->esil, "16,%hu,<<,r%u,+,r%u,=", word2, REG1(word1), REG2(word1));
 		break;
 	case V810_MOVEA:
 		op->type = R_ANAL_OP_TYPE_MOV;
-		r_strbuf_appendf (&op->esil, "%hd,r%u,+,r%u,=",
-						 word2, REG1(word1), REG2(word1));
+		r_strbuf_appendf (&op->esil, "%hd,r%u,+,r%u,=", word2, REG1(word1), REG2(word1));
 		break;
 	case V810_LDSR:
 		op->type = R_ANAL_OP_TYPE_MOV;
@@ -102,8 +97,7 @@ static int v810_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len,
 		break;
 	case V810_NOT:
 		op->type = R_ANAL_OP_TYPE_NOT;
-		r_strbuf_appendf (&op->esil, "r%u,0xffffffff,^,r%u,=",
-						 REG1(word1), REG2(word1));
+		r_strbuf_appendf (&op->esil, "r%u,0xffffffff,^,r%u,=", REG1(word1), REG2(word1));
 		update_flags (op, V810_FLAG_S | V810_FLAG_Z);
 		clear_flags (op, V810_FLAG_OV);
 		break;
@@ -396,7 +390,7 @@ static bool set_reg_profile(RAnal *anal) {
 		"=OF	ov\n"
 		"=CF	cy\n"
 
-		"gpr	r0	.32	0   0\n"
+		"gpr	r0	.32	?   0\n"
 		"gpr	r1	.32	4   0\n"
 		"gpr	r2	.32	8   0\n"
 		"gpr	r3	.32	12  0\n"

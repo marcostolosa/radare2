@@ -1,9 +1,11 @@
+/* radare - LGPL - Copyright 2014-2020 - inisider */
+
 #include "types.h"
 #include "tpi.h"
 #include "stream_file.h"
 
-static unsigned int base_idx = 0;
-static RList *p_types_list;
+static R_TH_LOCAL unsigned int base_idx = 0;
+static R_TH_LOCAL RList *p_types_list;
 
 static bool is_simple_type(int idx) {
 	ut32 value = (ut32) idx;
@@ -26,7 +28,7 @@ static bool is_simple_type(int idx) {
  *  and splitting it on 2 parts, 1 mode, 1 type
  */
 static STypeInfo parse_simple_type(ut32 idx) {
-	STypeInfo type = { 0 };
+	STypeInfo type = {0};
 	SLF_SIMPLE_TYPE *simple_type = R_NEW0 (SLF_SIMPLE_TYPE);
 	if (!simple_type) {
 		return type;
@@ -2032,14 +2034,14 @@ static void get_nesttype_print_type(void *type, char **name) {
 		tmp_name = base_type->type;
 	} else {
 		ti = &t->type_data;
-		if (ti->get_print_type != NULL) {
+		if (ti->get_print_type) {
 			ti->get_print_type (ti, &tmp_name);
 		} else {
 			// TODO: need to investigate why this branch can be...
 			//	this is possible because there is no support for
 			// parsing METHODLIST...
 			// need to investigate for this theme
-			//eprintf ("warning: strange for nesttype\n");
+			//R_LOG_WARN ("strange for nesttype");
 		}
 	}
 

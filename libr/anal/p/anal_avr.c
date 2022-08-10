@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2011-2021 - pancake, Roc Valles, condret, killabyte */
+/* radare - LGPL - Copyright 2011-2022 - pancake, Roc Valles, condret, killabyte */
 
 #if 0
 http://www.atmel.com/images/atmel-0856-avr-instruction-set-manual.pdf
@@ -14,8 +14,7 @@ https://en.wikipedia.org/wiki/Atmel_AVR_instruction_set
 #include <r_anal.h>
 
 #include "../../asm/arch/avr/disasm.h"
-
-static RDESContext desctx;
+#include "../../asm/arch/avr/assemble.h"
 
 typedef struct _cpu_const_tag {
 	const char *const key;
@@ -35,6 +34,9 @@ typedef struct _cpu_model_tag {
 	struct _cpu_model_tag *inherit_cpu_p;
 	CPU_CONST *consts[10];
 } CPU_MODEL;
+
+static R_TH_LOCAL RDESContext desctx;
+static R_TH_LOCAL CPU_MODEL *Gcpu = NULL;
 
 typedef void (*inst_handler_t) (RAnal *anal, RAnalOp *op, const ut8 *buf, int len, int *fail, CPU_MODEL *cpu);
 
@@ -58,7 +60,7 @@ static OPCODE_DESC* avr_op_analyze(RAnal *anal, RAnalOp *op, ut64 addr, const ut
 	}
 #define MASK(bits)			((bits) == 32 ? 0xffffffff : (~((~((ut32) 0)) << (bits))))
 #define CPU_PC_MASK(cpu)		MASK((cpu)->pc)
-#define CPU_PC_SIZE(cpu)		((((cpu)->pc) >> 3) + ((((cpu)->pc) & 0x07) ? 1 : 0))
+#define CPU_PC_SIZE(cpu) cpu? ((((cpu)->pc) >> 3) + ((((cpu)->pc) & 0x07) ? 1 : 0)): 0
 
 #define INST_HANDLER(OPCODE_NAME)	static void _inst__ ## OPCODE_NAME (RAnal *anal, RAnalOp *op, const ut8 *buf, int len, int *fail, CPU_MODEL *cpu)
 #define INST_DECL(OP, M, SL, C, SZ, T)	{ #OP, (M), (SL), _inst__ ## OP, (C), (SZ), R_ANAL_OP_TYPE_ ## T }
@@ -143,7 +145,8 @@ CPU_MODEL cpu_models[] = {
 //	CPU_MODEL_DECL ("ATmega168",   13, 512, 512),
 	// last model is the default AVR - ATmega8 forever!
 	{
-		.model = "ATmega8", .pc = 13,
+		.model = "ATmega8",
+		.pc = 13,
 		.consts = {
 			cpu_reg_common,
 			cpu_memsize_common,
@@ -159,34 +162,31 @@ static CPU_MODEL *get_cpu_model(const char *model);
 
 static CPU_MODEL *__get_cpu_model_recursive(const char *model) {
 	CPU_MODEL *cpu = NULL;
-
 	for (cpu = cpu_models; cpu < cpu_models + ((sizeof (cpu_models) / sizeof (CPU_MODEL))) - 1; cpu++) {
 		if (!r_str_casecmp (model, cpu->model)) {
 			break;
 		}
 	}
-
 	// fix inheritance tree
-	if (cpu->inherit && !cpu->inherit_cpu_p) {
+	if (cpu && cpu->inherit && !cpu->inherit_cpu_p) {
 		cpu->inherit_cpu_p = get_cpu_model (cpu->inherit);
 		if (!cpu->inherit_cpu_p) {
-			eprintf ("ERROR: Cannot inherit from unknown CPU model '%s'.\n", cpu->inherit);
+			R_LOG_ERROR ("Cannot inherit from unknown CPU model '%s'", cpu->inherit);
 		}
 	}
-
 	return cpu;
 }
 
 static CPU_MODEL *get_cpu_model(const char *model) {
-	static CPU_MODEL *cpu = NULL;
 	if (!model) {
-		return NULL;
+		model = "ATmega8";
 	}
 	// cache
-	if (cpu && cpu->model && !r_str_casecmp (model, cpu->model)) {
-		return cpu;
+	if (Gcpu && Gcpu->model && !r_str_casecmp (model, Gcpu->model)) {
+		return Gcpu;
 	}
-	return cpu = __get_cpu_model_recursive (model);
+	Gcpu = __get_cpu_model_recursive (model);
+	return Gcpu;
 }
 
 static ut32 const_get_value(CPU_CONST *c) {
@@ -195,11 +195,13 @@ static ut32 const_get_value(CPU_CONST *c) {
 
 static CPU_CONST *const_by_name(CPU_MODEL *cpu, int type, char *c) {
 	CPU_CONST **clist, *citem;
+	if (!cpu) {
+		return NULL;
+	}
 
 	for (clist = cpu->consts; *clist; clist++) {
 		for (citem = *clist; citem->key; citem++) {
-			if (!strcmp (c, citem->key)
-			&& (type == CPU_CONST_NONE || type == citem->type)) {
+			if (!strcmp (c, citem->key) && (type == CPU_CONST_NONE || type == citem->type)) {
 				return citem;
 			}
 		}
@@ -207,7 +209,7 @@ static CPU_CONST *const_by_name(CPU_MODEL *cpu, int type, char *c) {
 	if (cpu->inherit_cpu_p) {
 		return const_by_name (cpu->inherit_cpu_p, type, c);
 	}
-	eprintf ("ERROR: CONSTANT key[%s] NOT FOUND.\n", c);
+	R_LOG_ERROR ("CONSTANT key[%s] NOT FOUND", c);
 	return NULL;
 }
 
@@ -243,7 +245,7 @@ static CPU_CONST *const_by_value(CPU_MODEL *cpu, int type, ut32 v) {
 static RStrBuf *__generic_io_dest(ut8 port, int write, CPU_MODEL *cpu) {
 	RStrBuf *r = r_strbuf_new ("");
 	CPU_CONST *c = const_by_value (cpu, CPU_CONST_REG, port);
-	if (c != NULL) {
+	if (c) {
 		r_strbuf_set (r, c->key);
 		if (write) {
 			r_strbuf_append (r, ",=");
@@ -482,14 +484,18 @@ INST_HANDLER (call) {	// CALL k
 		 | (buf[0] & 0x01) << 17
 		 | (buf[0] & 0xf0) << 14;
 	op->fail = op->addr + op->size;
-	op->cycles = cpu->pc <= 16 ? 3 : 4;
-	if (!STR_BEGINS (cpu->model, "ATxmega")) {
-		op->cycles--;	// AT*mega optimizes one cycle
+	if (cpu) {
+		op->cycles = cpu->pc <= 16 ? 3 : 4;
+		if (!STR_BEGINS (cpu->model, "ATxmega")) {
+			op->cycles--;	// AT*mega optimizes one cycle
+		}
+		ESIL_A ("pc,");				// esil is already pointing to
+							// next instruction (@ret)
+		__generic_push (op, CPU_PC_SIZE (cpu));	// push @ret in stack
+		ESIL_A ("%"PFMT64d",pc,=,", op->jump);	// jump!
+	} else {
+		op->cycles = 1;
 	}
-	ESIL_A ("pc,");				// esil is already pointing to
-						// next instruction (@ret)
-	__generic_push (op, CPU_PC_SIZE (cpu));	// push @ret in stack
-	ESIL_A ("%"PFMT64d",pc,=,", op->jump);	// jump!
 }
 
 INST_HANDLER (cbi) {	// CBI A, b
@@ -1115,23 +1121,20 @@ INST_HANDLER (pop) {	// POP Rd
 	int d = ((buf[1] & 0x1) << 4) | ((buf[0] >> 4) & 0xf);
 	__generic_pop (op, 1);
 	ESIL_A ("r%d,=,", d);	// store in Rd
-
 }
 
-INST_HANDLER (push) {	// PUSH Rr
+INST_HANDLER(push) { // PUSH Rr
 	if (len < 2) {
 		return;
 	}
 	int r = ((buf[1] & 0x1) << 4) | ((buf[0] >> 4) & 0xf);
-	ESIL_A ("r%d,", r);	// load Rr
-	__generic_push (op, 1);	// push it into stack
-	// cycles
-	op->cycles = !STR_BEGINS (cpu->model, "ATxmega")
-			? 1	// AT*mega optimizes one cycle
-			: 2;
+	ESIL_A ("r%d,", r); // load Rr
+	__generic_push (op, 1); // push it into stack
+	// AT*mega optimizes one cycle
+	op->cycles = !STR_BEGINS (cpu->model, "ATxmega") ?1: 2;
 }
 
-INST_HANDLER (rcall) {	// RCALL k
+INST_HANDLER(rcall) { // RCALL k
 	if (len < 2) {
 		return;
 	}
@@ -1296,7 +1299,7 @@ INST_HANDLER (sbix) {	// SBIC A, b
 	}
 	int a = (buf[0] >> 3) & 0x1f;
 	int b = buf[0] & 0x07;
-	RAnalOp next_op = { 0 };
+	RAnalOp next_op = {0};
 	RStrBuf *io_port;
 
 	op->type2 = 0;
@@ -1690,30 +1693,29 @@ INVALID_OP:
 }
 
 //TODO: remove register analysis comment when each avr cpu will be implemented in asm plugin
-static int avr_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
-	char mnemonic[32] = {0};
+static int avr_op (RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
+	const int mnemonic_len = 32;
+	op->mnemonic = calloc (mnemonic_len, 1);
 
 	set_invalid_op (op, addr);
 
-	int size = avr_anal (anal, mnemonic, sizeof (mnemonic), addr, buf, len);
+	int size = avr_anal (anal, op->mnemonic, mnemonic_len, addr, buf, len);
 
-	if (!strcmp (mnemonic, "invalid")
-			|| !strcmp (mnemonic, "truncated")) {
+	if (!strcmp (op->mnemonic, "invalid") || !strcmp (op->mnemonic, "truncated")) {
 		op->eob = true;
-		op->mnemonic = strdup (mnemonic);
 		op->size = 2;
-		return -1;//R_MIN (len, 2);
+		return 2;//R_MIN (len, 2);
 	}
 
 	// select cpu info
-	CPU_MODEL *cpu = get_cpu_model (anal->cpu);
+	CPU_MODEL *cpu = get_cpu_model (anal->config->cpu);
 
 	// set memory layout registers
 	if (anal->esil) {
 		ut64 offset = 0;
 		r_anal_esil_reg_write (anal->esil, "_prog", offset);
 
-		offset += (1ULL << cpu->pc);
+		offset += (1ULL << (cpu ? cpu->pc: 8));
 		r_anal_esil_reg_write (anal->esil, "_io", offset);
 
 		offset += const_get_value (const_by_name (cpu, CPU_CONST_PARAM, "sram_start"));
@@ -1728,9 +1730,10 @@ static int avr_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, 
 	// process opcode
 	avr_op_analyze (anal, op, addr, buf, len, cpu);
 
-	free (op->mnemonic);
-	op->mnemonic = op->size > 1? strdup (mnemonic): strdup ("invalid");
 	op->size = size;
+	if (op->size <= 0) {
+		op->mnemonic = strdup ("invalid");
+	}
 
 	return size;
 }
@@ -1799,7 +1802,7 @@ static bool avr_custom_spm_page_erase(RAnalEsil *esil) {
 	}
 
 	// get details about current MCU and fix input address
-	CPU_MODEL *cpu = get_cpu_model (esil->anal->cpu);
+	CPU_MODEL *cpu = get_cpu_model (esil->anal->config->cpu);
 	ut64 page_size_bits = const_get_value (const_by_name (cpu, CPU_CONST_PARAM, "page_size"));
 
 	// align base address to page_size_bits
@@ -1842,7 +1845,7 @@ static bool avr_custom_spm_page_fill(RAnalEsil *esil) {
 	r1 = i;
 
 	// get details about current MCU and fix input address
-	CPU_MODEL *cpu = get_cpu_model (esil->anal->cpu);
+	CPU_MODEL *cpu = get_cpu_model (esil->anal->config->cpu);
 	ut64 page_size_bits = const_get_value (const_by_name (cpu, CPU_CONST_PARAM, "page_size"));
 
 	// align and crop base address
@@ -1874,7 +1877,7 @@ static bool avr_custom_spm_page_write(RAnalEsil *esil) {
 
 	// get details about current MCU and fix input address and base address
 	// of the internal temporary page
-	cpu = get_cpu_model (esil->anal->cpu);
+	cpu = get_cpu_model (esil->anal->config->cpu);
 	page_size_bits = const_get_value (const_by_name (cpu, CPU_CONST_PARAM, "page_size"));
 	r_anal_esil_reg_read (esil, "_page", &tmp_page, NULL);
 
@@ -1884,7 +1887,6 @@ static bool avr_custom_spm_page_write(RAnalEsil *esil) {
 	// perform writing
 	//eprintf ("SPM_PAGE_WRITE %ld bytes @ 0x%08" PFMT64x ".\n", page_size, addr);
 	if (!(t = malloc (1 << page_size_bits))) {
-		eprintf ("Cannot alloc a buffer for copying the temporary page.\n");
 		return false;
 	}
 	r_anal_esil_mem_read (esil, tmp_page, (ut8 *) t, 1 << page_size_bits);
@@ -1900,7 +1902,7 @@ static bool esil_avr_hook_reg_write(RAnalEsil *esil, const char *name, ut64 *val
 	}
 
 	// select cpu info
-	CPU_MODEL *cpu = get_cpu_model (esil->anal->cpu);
+	CPU_MODEL *cpu = get_cpu_model (esil->anal->config->cpu);
 
 	// crop registers and force certain values
 	if (!strcmp (name, "pc")) {
@@ -2068,7 +2070,7 @@ static bool set_reg_profile(RAnal *anal) {
 		"gpr    spmcsr  .8      64      0\n"
 	);
 
-	if (!strcmp (r_str_get (anal->cpu), "ATmega328p")) {
+	if (!strcmp (r_str_get (anal->config->cpu), "ATmega328p")) {
 		const char *section_two =
 			"gpr		pinb	.8		65		0\n"
 			"gpr		pinb0	.8		66		0\n"
@@ -2213,22 +2215,18 @@ static bool set_reg_profile(RAnal *anal) {
 			"gpr		spcr	.8		90		0\n"
 			"gpr		spsr	.8		90		0\n"
 			"gpr		spdr	.8		90		0\n"
-			"gpr		acsr	.8		90		0\n"
 			"gpr		smcr	.8		90		0\n"
 			"gpr		mcusr	.8		90		0\n"
 			"gpr		mcucr	.8		90		0\n"
-			"gpr		spmcsr	.8		90		0\n"
 			"gpr		wdtcsr	.8		90		0\n"
 			"gpr		clkpr	.8		90		0\n"
 			"gpr		prr		.8		90		0\n"
 			"gpr		osccal	.8		90		0\n"
 			"gpr		acsr	.8		90		0\n"
-			"gpr		pcicr	.8		90		0\n"
 			"gpr		eicra	.8		90		0\n"
 			"gpr		pcmsk0	.8		90		0\n"
 			"gpr		pcmsk1	.8		90		0\n"
 			"gpr		pcmsk2	.8		90		0\n"
-			"gpr		pcicr	.8		90		0\n"
 			"gpr		timsk0	.8		90		0\n"
 			"gpr		timsk1	.8		90		0\n"
 			"gpr		timsk2	.8		90		0\n"
@@ -2252,7 +2250,6 @@ static bool set_reg_profile(RAnal *anal) {
 			"gpr		icr1l	.8		90		0\n"
 			"gpr		icr1h	.8		90		0\n"
 			"gpr		ocr1h	.16		90		0\n"
-			"gpr		ocr1al	.8		90		0\n"
 			"gpr		ocr1ah	.8		90		0\n"
 			"gpr		ocr1al	.8		90		0\n"
 			"gpr		ocr1b	.16		90		0\n"
@@ -2263,7 +2260,6 @@ static bool set_reg_profile(RAnal *anal) {
 			"gpr		tcnt2	.8		90		0\n"
 			"gpr		ocr2a	.8		90		0\n"
 			"gpr		ocr2b	.8		90		0\n"
-			"gpr		twbr	.8		90		0\n"
 			"gpr		twsr	.8		90		0\n"
 			"gpr		twar	.8		90		0\n"
 			"gpr		twdr	.8		90		0\n"
@@ -2276,8 +2272,6 @@ static bool set_reg_profile(RAnal *anal) {
 			"gpr		ubrr0l	.8		90		0\n"
 			"gpr		ubrr0h	.8		90		0\n"
 			"gpr		udr0	.8		90		0\n"
-			"gpr		ubrr0l	.8		90		0\n"
-			"gpr		ubrr0l	.8		90		0\n"
 			;
 		RStrBuf *sb = r_strbuf_new (registers_profile);
 		r_strbuf_append (sb, section_two);
@@ -2319,7 +2313,7 @@ static ut8 *anal_mask_avr(RAnal *anal, int size, const ut8 *data, ut64 at) {
 
 	memset (ret, 0xff, size);
 
-	CPU_MODEL *cpu = get_cpu_model (anal->cpu);
+	CPU_MODEL *cpu = get_cpu_model (anal->config->cpu);
 
 	for (idx = 0; idx + 1 < size; idx += op->size) {
 		OPCODE_DESC* opcode_desc = avr_op_analyze (anal, op, at + idx, data + idx, size - idx, cpu);
@@ -2357,12 +2351,27 @@ RAnalPlugin r_anal_plugin_avr = {
 	.arch = "avr",
 	.esil = true,
 	.archinfo = archinfo,
+	.endian = R_SYS_ENDIAN_LITTLE | R_SYS_ENDIAN_BIG,
 	.bits = 8 | 16, // 24 big regs conflicts
 	.op = &avr_op,
+	.opasm = &avr_encode,
 	.set_reg_profile = &set_reg_profile,
 	.esil_init = esil_avr_init,
 	.esil_fini = esil_avr_fini,
-	.anal_mask = anal_mask_avr
+	.anal_mask = anal_mask_avr,
+	.cpus =
+		"ATmega8," // First one is default
+		"ATmega1280,"
+		"ATmega1281,"
+		"ATmega168,"
+		"ATmega2560,"
+		"ATmega2561,"
+		"ATmega328p,"
+		"ATmega32u4,"
+		"ATmega48,"
+		"ATmega640,"
+		"ATmega88,"
+		"ATxmega128a4u"
 };
 
 #ifndef R2_PLUGIN_INCORE

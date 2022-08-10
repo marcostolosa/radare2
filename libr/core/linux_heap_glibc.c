@@ -446,9 +446,9 @@ static bool GH(r_resolve_main_arena)(RCore *core, GHT *m_arena) {
 
 	if (libc_addr_sta == GHT_MAX || libc_addr_end == GHT_MAX) {
 		if (r_config_get_b (core->config, "cfg.debug")) {
-			eprintf ("Warning: Can't find glibc mapped in memory (see dm)\n");
+			R_LOG_WARN ("Can't find glibc mapped in memory (see dm)");
 		} else {
-			eprintf ("Warning: Can't find arena mapped in memory (see om)\n");
+			R_LOG_WARN ("Can't find arena mapped in memory (see om)");
 		}
 		return false;
 	}
@@ -487,7 +487,7 @@ static bool GH(r_resolve_main_arena)(RCore *core, GHT *m_arena) {
 		}
 		addr_srch += sizeof (GHT);
 	}
-	eprintf ("Warning: Can't find main_arena in mapped memory\n");
+	R_LOG_WARN ("Can't find main_arena in mapped memory");
 	free (ta);
 	return false;
 }
@@ -762,7 +762,7 @@ static void GH(print_heap_bin)(RCore *core, GHT m_arena, MallocState *main_arena
 	case 'g': // dmhbg [bin_num]
 		num_bin = r_num_get (NULL, input + j) - 1;
 		if (num_bin > NBINS - 2) {
-			eprintf ("Error: 0 < bin <= %d\n", NBINS - 1);
+			R_LOG_ERROR ("0 < bin <= %d", NBINS - 1);
 			break;
 		}
 		PRINTF_YA ("  Bin %03"PFMT64u":\n", (ut64)num_bin + 1);
@@ -889,7 +889,7 @@ void GH(print_heap_fastbin)(RCore *core, GHT m_arena, MallocState *main_arena, G
 	case ' ': // dmhf [bin_num]
 		num_bin = r_num_get (NULL, input) - 1;
 		if (num_bin >= NFASTBINS) {
-			eprintf ("Error: 0 < bin <= %d\n", NFASTBINS);
+			R_LOG_ERROR ("0 < bin <= %d", NFASTBINS);
 			break;
 		}
 		if (GH(print_single_linked_list_bin)(core, main_arena, m_arena, offset, num_bin, demangle)) {
@@ -1130,7 +1130,7 @@ static void GH(print_heap_segment)(RCore *core, MallocState *main_arena,
 		return;
 	}
 
-	RANode *top = R_EMPTY, *chunk_node = R_EMPTY, *prev_node = R_EMPTY;
+	RANode *top = {0}, *chunk_node = {0}, *prev_node = {0};
 	char *top_title, *top_data, *node_title, *node_data;
 	bool first_node = true;
 
@@ -1138,7 +1138,7 @@ static void GH(print_heap_segment)(RCore *core, MallocState *main_arena,
 	top_title = r_str_new ("");
 
 	if (!r_io_read_at (core->io, next_chunk, (ut8 *)cnk, sizeof (GH(RHeapChunk)))) {
-		eprintf ("Cannot read");
+		R_LOG_ERROR ("Cannot read");
 		free (cnk);
 		free (cnk_next);
 		r_cons_canvas_free (can);

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <r_userconf.h>
 #include <stdlib.h>
@@ -30,7 +30,9 @@
 #include <r_util.h>
 #include <r_lib.h>
 
-static char** env = NULL;
+static R_TH_LOCAL char** env = NULL;
+static R_TH_LOCAL char *prefix = NULL;
+static R_TH_LOCAL bool unsignable = false;
 
 #if (__linux__ && __GNU_LIBRARY__) || defined(NETBSD_WITH_BACKTRACE) || \
   defined(FREEBSD_WITH_BACKTRACE) || __DragonFly__ || __sun
@@ -136,8 +138,13 @@ static const struct {const char* name; ut64 bit;} arch_bit_array[] = {
     {"rar", R_SYS_ARCH_RAR},
     {"lm32", R_SYS_ARCH_LM32},
     {"v850", R_SYS_ARCH_V850},
+    {"bpf", R_SYS_ARCH_BPF},
     {NULL, 0}
 };
+
+R_API void r_sys_signable(bool v) {
+	unsignable = !v;
+}
 
 R_API int r_sys_fork(void) {
 	if (!r_sandbox_check (R_SANDBOX_GRAIN_EXEC)) {
@@ -166,6 +173,9 @@ R_API int r_sys_sigaction(int *sig, void(*handler)(int)) {
 R_API int r_sys_sigaction(int *sig, void(*handler)(int)) {
 	struct sigaction sigact = { };
 	int ret, i;
+	if (unsignable) {
+		return -1;
+	}
 
 	if (!sig) {
 		return -EINVAL;
@@ -181,7 +191,7 @@ R_API int r_sys_sigaction(int *sig, void(*handler)(int)) {
 	for (i = 0; sig[i] != 0; i++) {
 		ret = sigaction (sig[i], &sigact, NULL);
 		if (ret) {
-			eprintf ("Failed to set signal handler for signal '%d': %s\n", sig[i], strerror(errno));
+			R_LOG_ERROR ("Failed to set signal handler for signal '%d': %s", sig[i], strerror(errno));
 			return ret;
 		}
 	}
@@ -189,6 +199,9 @@ R_API int r_sys_sigaction(int *sig, void(*handler)(int)) {
 }
 #else
 R_API int r_sys_sigaction(int *sig, void(*handler)(int)) {
+	if (unsignable) {
+		return -1;
+	}
 	if (!sig) {
 		return -EINVAL;
 	}
@@ -196,7 +209,7 @@ R_API int r_sys_sigaction(int *sig, void(*handler)(int)) {
 	for (i = 0; sig[i] != 0; i++) {
 		void (*ret)(int) = signal (sig[i], handler);
 		if (ret == SIG_ERR) {
-			eprintf ("Failed to set signal handler for signal '%d': %s\n", sig[i], strerror(errno));
+			R_LOG_ERROR ("Failed to set signal handler for signal '%d': %s", sig[i], strerror(errno));
 			return -1;
 		}
 	}
@@ -225,7 +238,7 @@ R_API int r_sys_truncate(const char *file, int sz) {
 	}
 	int r = _chsize (fd, sz);
 	if (r != 0) {
-		eprintf ("Could not resize '%s' file\n", file);
+		R_LOG_ERROR ("Could not resize '%s' file", file);
 		close (fd);
 		return false;
 	}
@@ -246,7 +259,7 @@ R_API RList *r_sys_dir(const char *path) {
 	char *cfname;
 	HANDLE fh = r_sandbox_opendir (path, &entry);
 	if (fh == INVALID_HANDLE_VALUE) {
-		//IFDGB eprintf ("Cannot open directory %ls\n", wcpath);
+		//IFDGB R_LOG_ERROR ("Cannot open directory %ls", wcpath);
 		return list;
 	}
 	list = r_list_newf (free);
@@ -320,7 +333,7 @@ R_API void r_sys_backtrace(void) {
 #ifdef HAVE_BACKTRACE
 	void *array[10];
 	size_t size = backtrace (array, 10);
-	eprintf ("Backtrace %d stack frames.\n", (int)size);
+	R_LOG_ERROR ("Backtrace %d stack frames", (int)size);
 	backtrace_symbols_fd (array, size, 2);
 #elif __APPLE__
 	void **fp = (void **) __builtin_frame_address (0);
@@ -471,7 +484,6 @@ static int checkcmd(const char *c) {
 R_API int r_sys_crash_handler(const char *cmd) {
 #ifndef __WINDOWS__
 	int sig[] = { SIGINT, SIGSEGV, SIGBUS, SIGQUIT, SIGHUP, 0 };
-
 	if (!checkcmd (cmd)) {
 		return false;
 	}
@@ -480,10 +492,8 @@ R_API int r_sys_crash_handler(const char *cmd) {
 	/* call this outside of the signal handler to init it safely */
 	backtrace (array, 1);
 #endif
-
 	free (crash_handler_cmd);
 	crash_handler_cmd = strdup (cmd);
-
 	r_sys_sigaction (sig, signal_handler);
 #else
 #pragma message ("r_sys_crash_handler : unimplemented for this platform")
@@ -575,7 +585,7 @@ R_API bool r_sys_aslr(int val) {
 	int fd = r_sandbox_open (rva, O_WRONLY, 0644);
 	if (fd != -1) {
 		if (r_sandbox_write (fd, (ut8 *)buf, sizeof (buf)) != sizeof (buf)) {
-			eprintf ("Failed to set RVA\n");
+			R_LOG_ERROR ("Failed to set RVA");
 			ret = false;
 		}
 		close (fd);
@@ -583,26 +593,26 @@ R_API bool r_sys_aslr(int val) {
 #elif __FreeBSD__ && __FreeBSD_version >= 1300000
 	size_t vlen = sizeof (val);
 	if (sysctlbyname ("kern.elf32.aslr.enable", NULL, 0, &val, vlen) == -1) {
-		eprintf ("Failed to set RVA 32 bits\n");
+		R_LOG_ERROR ("Failed to set RVA 32 bits");
 		return false;
 	}
 
 #if __LP64__
 	if (sysctlbyname ("kern.elf64.aslr.enable", NULL, 0, &val, vlen) == -1) {
-		eprintf ("Failed to set RVA 64 bits\n");
+		R_LOG_ERROR ("Failed to set RVA 64 bits");
 		ret = false;
 	}
 #endif
 #elif __NetBSD__
 	size_t vlen = sizeof (val);
 	if (sysctlbyname ("security.pax.aslr.enabled", NULL, 0, &val, vlen) == -1) {
-		eprintf ("Failed to set RVA\n");
+		R_LOG_ERROR ("Failed to set RVA");
 		ret = false;
 	}
 #elif __DragonFly__
 	size_t vlen = sizeof (val);
 	if (sysctlbyname ("vm.randomize_mmap", NULL, 0, &val, vlen) == -1) {
-		eprintf ("Failed to set RVA\n");
+		R_LOG_ERROR ("Failed to set RVA");
 		ret = false;
 	}
 #elif __DragonFly__
@@ -753,7 +763,7 @@ R_API int r_sys_cmd_str_full(const char *cmd, const char *input, int ilen, char 
 		bool ret = true;
 		if (status) {
 			// char *escmd = r_str_escape (cmd);
-			// eprintf ("error code %d (%s): %s\n", WEXITSTATUS (status), escmd, *sterr);
+			// R_LOG_ERROR ("error code %d (%s): %s", WEXITSTATUS (status), escmd, *sterr);
 			// eprintf ("(%s)\n", output);
 			// eprintf ("%s: failed command '%s'\n", __func__, escmd);
 			// free (escmd);
@@ -785,7 +795,7 @@ R_API int r_sys_cmd_str_full(const char *cmd, const char *input, int ilen, char 
 }
 #else
 R_API int r_sys_cmd_str_full(const char *cmd, const char *input, int ilen, char **output, int *len, char **sterr) {
-	eprintf ("r_sys_cmd_str: not yet implemented for this platform\n");
+	R_LOG_ERROR ("RSyscmd.strFull() is not yet implemented for this platform");
 	return false;
 }
 #endif
@@ -858,7 +868,7 @@ R_API bool r_sys_mkdirp(const char *dir) {
 	char slash = R_SYS_DIR[0];
 	char *path = strdup (dir), *ptr = path;
 	if (!path) {
-		eprintf ("r_sys_mkdirp: Unable to allocate memory\n");
+		R_LOG_ERROR ("Unable to allocate memory");
 		return false;
 	}
 	if (*ptr == slash) {
@@ -885,7 +895,9 @@ R_API bool r_sys_mkdirp(const char *dir) {
 		}
 		*ptr = 0;
 		if (!r_sys_mkdir (path) && r_sys_mkdir_failed ()) {
-			eprintf ("r_sys_mkdirp: fail '%s' of '%s'\n", path, dir);
+			if (r_sandbox_check (R_SANDBOX_GRAIN_FILES)) {
+				R_LOG_ERROR ("fail '%s' of '%s'", path, dir);
+			}
 			free (path);
 			return false;
 		}
@@ -919,13 +931,13 @@ R_API void r_sys_perror_str(const char *fun) {
 			0, NULL )) {
 		char *err = r_sys_conv_win_to_utf8 (lpMsgBuf);
 		if (err) {
-			eprintf ("%s: (%#lx) %s%s", fun, dw, err,
+			R_LOG_WARN ("%s: (%#lx) %s%s", fun, dw, err,
 				r_str_endswith (err, "\n") ? "" : "\n");
 			free (err);
 		}
 		LocalFree (lpMsgBuf);
 	} else {
-		eprintf ("%s\n", fun);
+		R_LOG_INFO ("%s", fun);
 	}
 #endif
 }
@@ -985,7 +997,7 @@ R_API int r_sys_run(const ut8 *buf, int len) {
 		ptr += (4096 - pdelta);
 	}
 	if (!ptr || !buf) {
-		eprintf ("r_sys_run: Cannot run empty buffer\n");
+		R_LOG_ERROR ("Cannot run empty buffer");
 		free (p);
 		return false;
 	}
@@ -1011,7 +1023,7 @@ R_API int r_sys_run(const ut8 *buf, int len) {
 	waitpid (pid, &st, 0);
 	if (WIFSIGNALED (st)) {
 		int num = WTERMSIG(st);
-		eprintf ("Got signal %d\n", num);
+		R_LOG_INFO ("Child process received signal %d", num);
 		ret = num;
 	} else {
 		ret = WEXITSTATUS (st);
@@ -1246,7 +1258,7 @@ R_API char *r_sys_whoami(void) {
 #if __WINDOWS__
 	char buf[256];
 	DWORD buf_sz = sizeof (buf);
-	if (!GetUserName ((LPWSTR)buf, (LPDWORD)&buf_sz) ) {
+	if (!GetUserName ((LPSTR)buf, (LPDWORD)&buf_sz) ) {
 		return strdup ("?");
 	}
 	return strdup (buf);
@@ -1274,7 +1286,7 @@ R_API int r_sys_uid(void) {
 	char buf[32];
 	DWORD buf_sz = sizeof (buf);
 	// TODO
-	if (!GetUserName ((LPWSTR)buf, (LPDWORD)&buf_sz) ) {
+	if (!GetUserName ((LPSTR)buf, (LPDWORD)&buf_sz) ) {
 		return 1; //
 	}
 	return 0;
@@ -1318,7 +1330,6 @@ R_API bool r_sys_tts(const char *txt, bool bg) {
 }
 
 R_API const char *r_sys_prefix(const char *pfx) {
-	static R_TH_LOCAL char *prefix = NULL;
 	if (!prefix) {
 #if __WINDOWS__
 		prefix = r_sys_get_src_dir_w32 ();
@@ -1413,10 +1424,12 @@ beach:
 }
 
 R_API void r_sys_info_free(RSysInfo *si) {
-	free (si->sysname);
-	free (si->nodename);
-	free (si->release);
-	free (si->version);
-	free (si->machine);
-	free (si);
+	if (si) {
+		free (si->sysname);
+		free (si->nodename);
+		free (si->release);
+		free (si->version);
+		free (si->machine);
+		free (si);
+	}
 }

@@ -1,15 +1,27 @@
 
 static char *get_reg_profile(RAnal *anal) {
 	const char *p;
-	if (anal->bits == 64) {
+	if (anal->config->bits == 64) {
 		p = \
 		"=PC	pc\n"
 		"=SP	sp\n"
 		"=BP	x29\n"
+		"=R0	x0\n"
+		"=R1	x1\n"
+		"=R2	x2\n"
+		"=R3	x3\n"
+		"=F0	d0\n"
+		"=F1	d1\n"
+		"=F2	d2\n"
+		"=F3	d3\n"
 		"=A0	x0\n"
 		"=A1	x1\n"
 		"=A2	x2\n"
 		"=A3	x3\n"
+		"=A4	x4\n"
+		"=A5	x5\n"
+		"=A6	x6\n"
+		"=A7	x7\n"
 		"=ZF	zf\n"
 		"=SF	nf\n"
 		"=OF	vf\n"
@@ -427,6 +439,42 @@ static char *get_reg_profile(RAnal *anal) {
 		"fpu	q30h	.64	776	0\n"
 		"fpu	q31h	.64	792	0\n"
 		
+		/* scalable vector registers */
+		// these can be more than 128 bit
+		// adding mostly to stop ESIL errors
+		"fpu	z0	.128	288	0\n"
+		"fpu	z1	.128	304	0\n"
+		"fpu	z2	.128	320	0\n"
+		"fpu	z3	.128	336	0\n"
+		"fpu	z4	.128	352	0\n"
+		"fpu	z5	.128	368	0\n"
+		"fpu	z6	.128	384	0\n"
+		"fpu	z7	.128	400	0\n"
+		"fpu	z8	.128	416	0\n"
+		"fpu	z9	.128	432	0\n"
+		"fpu	z10	.128	448	0\n"
+		"fpu	z11	.128	464	0\n"
+		"fpu	z12	.128	480	0\n"
+		"fpu	z13	.128	496	0\n"
+		"fpu	z14	.128	512	0\n"
+		"fpu	z15	.128	528	0\n"
+		"fpu	z16	.128	544	0\n"
+		"fpu	z17	.128	560	0\n"
+		"fpu	z18	.128	576	0\n"
+		"fpu	z19	.128	592	0\n"
+		"fpu	z20	.128	608	0\n"
+		"fpu	z21	.128	624	0\n"
+		"fpu	z22	.128	640	0\n"
+		"fpu	z23	.128	656	0\n"
+		"fpu	z24	.128	672	0\n"
+		"fpu	z25	.128	688	0\n"
+		"fpu	z26	.128	704	0\n"
+		"fpu	z27	.128	720	0\n"
+		"fpu	z28	.128	736	0\n"
+		"fpu	z29	.128	752	0\n"
+		"fpu	z30	.128	768	0\n"
+		"fpu	z31	.128	784	0\n"
+
 		/*  foo */
 		"gpr	fp	.64	232	0\n" // fp = x29
 		"gpr	lr	.64	240	0\n" // lr = x30
@@ -446,6 +494,7 @@ static char *get_reg_profile(RAnal *anal) {
 		"=LR	r14\n"
 		"=SP	sp\n"
 		"=BP	fp\n"
+		"=R0	r0\n"
 		"=A0	r0\n"
 		"=A1	r1\n"
 		"=A2	r2\n"
@@ -594,6 +643,10 @@ static char *get_reg_profile(RAnal *anal) {
 		"fpu	q15	.128	308	0\n"
 		;
 	}
-	const char *snReg = (!strcmp (anal->os, "android") || !strcmp (anal->os, "linux"))? "x8": "x16";
+	const char *os = anal->config->os;
+	if (!os) {
+		os = R_SYS_OS;
+	}
+	const char *snReg = (!strcmp (os, "android") || !strcmp (os, "linux"))? "x8": "x16";
 	return r_str_newf (p, snReg);
 }

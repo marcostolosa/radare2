@@ -23,9 +23,6 @@
  *
  */
 
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
 #include "format.h"
 #include "r_util.h"
 #include "avr_disasm.h"
@@ -169,7 +166,7 @@ static int formatDisassembledOperand(RAsm *a, avrDisassembleContext *context, ch
 #if 0
 		/* If we have an address label, print it, otherwise just print the
 		 * relative distance to the destination address. */
-		if ((fOptions.options & FORMAT_OPTION_ADDRESS_LABEL) && fOptions.addressLabelPrefix != NULL) {
+		if ((fOptions.options & FORMAT_OPTION_ADDRESS_LABEL) && fOptions.addressLabelPrefix) {
 			retVal = sprintf(strOperand, "%s%0*X",
 				fOptions.addressLabelPrefix,
 				fOptions.addressFieldWidth,
@@ -218,7 +215,7 @@ static int formatDisassembledOperand(RAsm *a, avrDisassembleContext *context, ch
 			break;
 		}
 
-		if (!strcmp (r_str_get (a->cpu), "ATmega328p")) {
+		if (!strcmp (r_str_get (a->config->cpu), "ATmega328p")) {
 			switch (dInstruction.operands[operandNum]) {
 			case 0x03:
 				current_register = "pinb";
@@ -391,7 +388,7 @@ static int formatDisassembledOperand(RAsm *a, avrDisassembleContext *context, ch
 				break;
 			}
 		}
-		if (!strcmp (r_str_get (a->cpu), "AT90S1200")) {
+		if (!strcmp (r_str_get (a->config->cpu), "AT90S1200")) {
 			switch (dInstruction.operands[operandNum]) {
 			case 0x08:
 				current_register = "acsr";
@@ -512,7 +509,7 @@ static int analFormatDisassembledOperand(RAnal *a, avrDisassembleContext *contex
 #if 0
 		/* If we have an address label, print it, otherwise just print the
 		 * relative distance to the destination address. */
-		if ((fOptions.options & FORMAT_OPTION_ADDRESS_LABEL) && fOptions.addressLabelPrefix != NULL) {
+		if ((fOptions.options & FORMAT_OPTION_ADDRESS_LABEL) && fOptions.addressLabelPrefix) {
 			retVal = sprintf(strOperand, "%s%0*X",
 				fOptions.addressLabelPrefix,
 				fOptions.addressFieldWidth,
@@ -561,7 +558,7 @@ static int analFormatDisassembledOperand(RAnal *a, avrDisassembleContext *contex
 			break;
 		}
 
-		if (!strcmp (r_str_get (a->cpu), "ATmega328p")) {
+		if (!strcmp (r_str_get (a->config->cpu), "ATmega328p")) {
 			switch (dInstruction.operands[operandNum]) {
 			case 0x03:
 				current_register = "pinb";

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <r_core.h>
 #include <r_types.h>
@@ -63,7 +63,7 @@ static int rabin_show_help(int v) {
 		" -u              unfiltered (no rename duplicated symbols/sections)\n"
 		" -U              resoUrces\n"
 		" -v              display version and quit\n"
-		" -V              Show binary version information\n"
+		" -V              show binary version information\n"
 		" -w              display try/catch blocks\n"
 		" -x              extract bins contained in file\n"
 		" -X [fmt] [f] .. package in fat or zip the given files and bins contained in file\n"
@@ -88,13 +88,14 @@ static int rabin_show_help(int v) {
 		" RABIN2_STRPURGE:  e bin.str.purge    # try to purge false positives\n"
 		" RABIN2_SYMSTORE:  e pdb.symstore     # path to downstream symbol store\n"
 		" RABIN2_SWIFTLIB:  1|0|               # load Swift libsto demangle (default: true)\n"
+		" RABIN2_VERBOSE:   e bin.verbose      # show debugging messages from the parser\n"
 		);
 	}
 	return 1;
 }
 
 static char *stdin_gets(bool liberate) {
-	static char *stdin_buf = NULL;
+	static R_TH_LOCAL char *stdin_buf = NULL;
 #define STDIN_BUF_SIZE 96096
 	if (liberate) {
 		free (stdin_buf);
@@ -349,6 +350,10 @@ static int rabin_do_operation(RBin *bin, const char *op, int rad, const char *ou
 	}
 	RBinFile *bf = r_bin_cur (bin);
 	if (bf) {
+		if (!bf->buf) {
+			R_LOG_ERROR ("Missing data buffer");
+			goto error;
+		}
 		RBuffer *nb = r_buf_new_with_buf (bf->buf);
 		r_buf_free (bf->buf);
 		bf->buf = nb;
@@ -634,6 +639,9 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		r_config_set (core.config, "bin.lang", tmp);
 		free (tmp);
 	}
+	if (r_sys_getenv_asbool ("RABIN2_VERBOSE")) {
+		r_config_set_b (core.config, "bin.verbose", true);
+	}
 	if ((tmp = r_sys_getenv ("RABIN2_DEMANGLE"))) {
 		r_config_set (core.config, "bin.demangle", tmp);
 		free (tmp);
@@ -690,7 +698,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		case 't': set_action (R_BIN_REQ_HASHES); break;
 		case 'w': set_action (R_BIN_REQ_TRYCATCH); break;
 		case 'q':
-			rad = (rad & R_MODE_SIMPLE ?
+			rad = ((rad & R_MODE_SIMPLE || (rad & R_MODE_SIMPLEST))?
 				R_MODE_SIMPLEST : R_MODE_SIMPLE);
 			break;
 		case 'j': rad = R_MODE_JSON; break;
@@ -1125,9 +1133,10 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 	}
 #define isradjson (rad==R_MODE_JSON&&actions>0)
 #define run_action(n,x,y) {\
-	if (action&(x)) {\
-		if (isradjson) pj_k (pj, n);\
+	if (action & (x)) {\
+		if (isradjson) { pj_k (pj, n); } \
 		if (!r_core_bin_info (&core, y, pj, rad, va, &filter, chksum)) {\
+			eprintf ("Missing bin header %s\n", n);\
 			if (isradjson) pj_b (pj, false);\
 		};\
 	}\
@@ -1201,9 +1210,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		if (bf && bf->xtr_data) {
 			rabin_extract (bin, (!arch && !arch_name && !bits));
 		} else {
-			eprintf (
-				"Cannot extract bins from '%s'. No supported "
-				"plugins found!\n", bin->file);
+			eprintf ("Cannot extract bins from '%s'. No supported plugins found!\n", bin->file);
 		}
 	}
 	if (op && action & R_BIN_REQ_OPERATION) {
@@ -1216,6 +1223,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 	pj_free (pj);
 	r_cons_flush ();
 	r_core_fini (&core);
+	r_syscmd_popalld ();
 
 	return 0;
 }

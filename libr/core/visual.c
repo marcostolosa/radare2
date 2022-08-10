@@ -7,17 +7,20 @@
 
 static void visual_refresh(RCore *core);
 
+#define PROMPTSTR "> "
 // remove globals pls
-static int obs = 0;
-static int blocksize = 0;
-static bool autoblocksize = true;
-static int disMode = 0;
-static int hexMode = 0;
-static int printMode = 0;
-static bool snowMode = false;
-static RList *snows = NULL;
-static int color = 1;
-static int zoom = 0;
+static R_TH_LOCAL int obs = 0;
+static R_TH_LOCAL int blocksize = 0;
+static R_TH_LOCAL bool autoblocksize = true;
+static R_TH_LOCAL int disMode = 0;
+static R_TH_LOCAL int hexMode = 0;
+static R_TH_LOCAL int printMode = 0;
+static R_TH_LOCAL bool snowMode = false;
+static R_TH_LOCAL RList *snows = NULL;
+static R_TH_LOCAL int color = 1;
+static R_TH_LOCAL int zoom = 0;
+static R_TH_LOCAL int currentFormat = 0;
+static R_TH_LOCAL int current0format = 0;
 
 typedef struct {
 	int x;
@@ -48,21 +51,19 @@ static const char *printfmtColumns[NPF] = {
 #define PRINT_4_FORMATS 9
 #define PRINT_5_FORMATS 8
 
-static int currentFormat = 0;
-static int current0format = 0;
 static const char *printHexFormats[PRINT_HEX_FORMATS] = {
 	"px", "pxa", "pxr", "prx", "pxb", "pxh", "pxw", "pxq", "pxd", "pxr",
 };
-static int current3format = 0;
+static R_TH_LOCAL int current3format = 0;
 static const char *print3Formats[PRINT_3_FORMATS] = { //  not used at all. its handled by the pd format
 	"pxw 64@r:SP;dr=;drcq;pd $r", // DEBUGGER
 	"pCD"
 };
-static int current4format = 0;
+static R_TH_LOCAL int current4format = 0;
 static const char *print4Formats[PRINT_4_FORMATS] = {
 	"prc", "p2", "prc=a", "pxAv", "pxx", "p=e $r-2", "pq 64", "pk 64", "pri",
 };
-static int current5format = 0;
+static R_TH_LOCAL int current5format = 0;
 static const char *print5Formats[PRINT_5_FORMATS] = {
 	"pca", "pcA", "p8", "pcc", "pss", "pcp", "pcd", "pcj"
 };
@@ -96,7 +97,7 @@ R_API void r_core_visual_applyHexMode(RCore *core, int hexMode) {
 }
 
 R_API void r_core_visual_toggle_decompiler_disasm(RCore *core, bool for_graph, bool reset) {
-	static RConfigHold *hold = NULL; // should be a tab-specific var
+	static R_TH_LOCAL RConfigHold *hold = NULL; // should be a tab-specific var
 	if (hold) {
 		r_config_hold_restore (hold);
 		r_config_hold_free (hold);
@@ -205,7 +206,7 @@ static const char *stackPrintCommand(RCore *core) {
 		if (r_config_get_i (core->config, "stack.bytes")) {
 			return "px";
 		}
-		switch (core->rasm->bits) {
+		switch (core->rasm->config->bits) {
 		case 64: return "pxq"; break;
 		case 32: return "pxw"; break;
 		}
@@ -773,6 +774,8 @@ R_API void r_core_visual_prompt_input(RCore *core) {
 	//r_cons_printf ("\nPress <enter> to return to Visual mode.\n");
 	r_cons_show_cursor (true);
 	core->vmode = false;
+	int ovtmode = r_config_get_i (core->config, "scr.vtmode");
+	r_config_set_i (core->config, "scr.vtmode", 1);
 
 	int curbs = core->blocksize;
 	if (autoblocksize) {
@@ -792,6 +795,7 @@ R_API void r_core_visual_prompt_input(RCore *core) {
 	core->vmode = true;
 	r_cons_enable_mouse (mouse_state && r_config_get_i (core->config, "scr.wheel"));
 	r_cons_show_cursor (true);
+	r_config_set_i (core->config, "scr.vtmode", ovtmode);
 }
 
 R_API int r_core_visual_prompt(RCore *core) {
@@ -800,11 +804,7 @@ R_API int r_core_visual_prompt(RCore *core) {
 	if (PIDX != 2) {
 		core->seltab = 0;
 	}
-#if __UNIX__
-	r_line_set_prompt (Color_RESET ":> ");
-#else
-	r_line_set_prompt (":> ");
-#endif
+	r_line_set_prompt (PROMPTSTR);
 	r_core_visual_showcursor (core, true);
 	r_cons_fgets (buf, sizeof (buf), 0, NULL);
 	if (!strcmp (buf, "q")) {
@@ -1116,7 +1116,7 @@ static void visual_search(RCore *core) {
 		eprintf ("Found in offset 0x%08"PFMT64x" + %d\n", core->offset, core->print->cur);
 		r_cons_any_key (NULL);
 	} else {
-		eprintf ("Cannot find bytes.\n");
+		R_LOG_ERROR ("Cannot find bytes");
 		r_cons_any_key (NULL);
 		r_cons_clear00 ();
 	}
@@ -1357,7 +1357,7 @@ static void addComment(RCore *core, ut64 addr) {
 	r_core_visual_showcursor (core, true);
 	r_cons_flush ();
 	r_cons_set_raw (false);
-	r_line_set_prompt (":> ");
+	r_line_set_prompt (PROMPTSTR);
 	r_cons_enable_mouse (false);
 	if (r_cons_fgets (buf, sizeof (buf), 0, NULL) < 0) {
 		buf[0] = '\0';
@@ -1377,6 +1377,9 @@ static void add_ref(RCore *core) {
 }
 
 static bool delete_ref(RCore *core, RList *xrefs, int choice, int xref) {
+	if (!xrefs) {
+		return 0;
+	}
 	RAnalRef *refi = r_list_get_n (xrefs, choice);
 	if (refi) {
 		if (core->print->cur_enabled) {
@@ -1386,7 +1389,11 @@ static bool delete_ref(RCore *core, RList *xrefs, int choice, int xref) {
 	}
 	return false;
 }
+
 static int follow_ref(RCore *core, RList *xrefs, int choice, int xref) {
+	if (!xrefs) {
+		return 0;
+	}
 	RAnalRef *refi = r_list_get_n (xrefs, choice);
 	if (refi) {
 		if (core->print->cur_enabled) {
@@ -1523,7 +1530,7 @@ repeat:
 				r_str_trim (cmt);
 				r_cons_printf (" %d [%s] 0x%08"PFMT64x" 0x%08"PFMT64x " %s %sref (%s) ; %s\n",
 					idx, cstr, refi->at, refi->addr,
-					r_anal_xrefs_type_tostring (refi->type),
+					r_anal_ref_type_tostring (refi->type),
 					xref ? "x":"", name, cmt);
 				free (cmt);
 				free (name);
@@ -1753,7 +1760,7 @@ static void visual_comma(RCore *core) {
 		char *cwf = r_str_newf ("%s"R_SYS_DIR "%s", cwd, cmtfile);
 		char *odata = r_file_slurp (cwf, NULL);
 		if (!odata) {
-			eprintf ("Could not open '%s'.\n", cwf);
+			R_LOG_ERROR ("Could not open '%s'", cwf);
 			free (cwf);
 			goto beach;
 		}
@@ -1763,7 +1770,7 @@ static void visual_comma(RCore *core) {
 		free (odata);
 		free (cwf);
 	} else {
-		eprintf ("No commafile found.\n");
+		R_LOG_ERROR ("No commafile found");
 	}
 beach:
 	free (comment);
@@ -1979,6 +1986,7 @@ static void cursor_prevrow(RCore *core, bool use_ocur) {
 				r_core_seek (core, prev_addr, true);
 				prev_sz = r_asm_disassemble (core->rasm, &op,
 					core->block, 32);
+				r_asm_op_fini (&op);
 			}
 		} else {
 			prev_sz = roff - prev_roff;
@@ -2050,6 +2058,7 @@ static bool fix_cursor(RCore *core) {
 				p->ocur = R_MAX (p->ocur - sz, 0);
 			}
 			res |= off_is_visible;
+			r_asm_op_fini (&op);
 		}
 	} else if (core->print->cur >= offscreen) {
 		r_core_seek (core, core->offset + p->cols, true);
@@ -2076,8 +2085,8 @@ static bool fix_cursor(RCore *core) {
 	return res;
 }
 
-static bool __ime = false;
-static int __nib = -1;
+static R_TH_LOCAL bool __ime = false;
+static R_TH_LOCAL int __nib = -1;
 
 static bool insert_mode_enabled(RCore *core) {
 	if (!__ime) {
@@ -2446,7 +2455,6 @@ static int process_get_click(RCore *core, int ch) {
 
 R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 	ut8 och = arg[0];
-	RAsmOp op;
 	ut64 offset = core->offset;
 	char buf[4096];
 	const char *key_s;
@@ -2604,7 +2612,7 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 			r_cons_flush ();
 			r_cons_set_raw (false);
 			strcpy (buf, "\"wa ");
-			r_line_set_prompt (":> ");
+			r_line_set_prompt (PROMPTSTR);
 			r_cons_enable_mouse (false);
 			if (r_cons_fgets (buf + 4, sizeof (buf) - 4, 0, NULL) < 0) {
 				buf[0] = '\0';
@@ -2869,7 +2877,7 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 					if (*buf) {
 						const char *creg = core->dbg->creg;
 						if (creg) {
-							r_core_cmdf (core, "dr %s = %s\n", creg, buf);
+							r_core_cmdf (core, "dr %s = %s", creg, buf);
 						}
 					}
 					return true;
@@ -3102,8 +3110,10 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 							times = distance;
 						}
 						while (times--) {
+							RAsmOp op;
 							if (isDisasmPrint (core->printidx)) {
 								r_core_visual_disasm_down (core, &op, &cols);
+								r_asm_op_fini (&op);
 							} else if (!strcmp (__core_visual_print_command (core),
 									"prc")) {
 								cols = r_config_get_i (core->config, "hex.cols");
@@ -3130,10 +3140,12 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 				}
 			} else {
 				if (core->print->screen_bounds > 1 && core->print->screen_bounds >= core->offset) {
+					RAsmOp op;
 					ut64 addr = UT64_MAX;
 					if (isDisasmPrint (core->printidx)) {
 						if (core->print->screen_bounds == core->offset) {
 							r_asm_disassemble (core->rasm, &op, core->block, 32);
+							r_asm_op_fini (&op);
 						}
 						if (addr == core->offset || addr == UT64_MAX) {
 							addr = core->offset + 48;
@@ -3277,6 +3289,7 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 			if (key_s && *key_s) {
 				r_core_cmd0 (core, key_s);
 			} else {
+				// r_core_cmd0 (core, "dsb");
 				__core_visual_step_over (core);
 			}
 			break;
@@ -3381,7 +3394,7 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 					if (core->seltab) {
 						const char *creg = core->dbg->creg;
 						if (creg) {
-							r_core_cmdf (core, "dr %s = %s-1\n", creg, creg);
+							r_core_cmdf (core, "dr %s = %s-1", creg, creg);
 						}
 					} else {
 						int w = r_config_get_i (core->config, "hex.cols");
@@ -3415,7 +3428,7 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 					if (core->seltab) {
 						const char *creg = core->dbg->creg;
 						if (creg) {
-							r_core_cmdf (core, "dr %s = %s+1\n", creg, creg);
+							r_core_cmdf (core, "dr %s = %s+1", creg, creg);
 						}
 					} else {
 						int w = r_config_get_i (core->config, "hex.cols");
@@ -3450,8 +3463,8 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 					if (core->seltab) {
 						const char *creg = core->dbg->creg;
 						if (creg) {
-							int delta = core->rasm->bits / 8;
-							r_core_cmdf (core, "dr %s = %s-%d\n", creg, creg, delta);
+							int delta = core->rasm->config->bits / 8;
+							r_core_cmdf (core, "dr %s = %s-%d", creg, creg, delta);
 						}
 					} else {
 						int w = r_config_get_i (core->config, "hex.cols");
@@ -3493,8 +3506,8 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 					if (core->seltab) {
 						const char *creg = core->dbg->creg;
 						if (creg) {
-							int delta = core->rasm->bits / 8;
-							r_core_cmdf (core, "dr %s = %s+%d\n", creg, creg, delta);
+							int delta = core->rasm->config->bits / 8;
+							r_core_cmdf (core, "dr %s = %s+%d", creg, creg, delta);
 						}
 					} else {
 						int w = r_config_get_i (core->config, "hex.cols");
@@ -3660,7 +3673,7 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 				r_core_visual_seek_animation (core, undo->off);
 				core->print->cur = undo->cursor;
 			} else {
-				eprintf ("Cannot undo\n");
+				R_LOG_ERROR ("Cannot undo");
 			}
 		}
 		break;
@@ -3725,7 +3738,7 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 
 R_API void r_core_visual_title(RCore *core, int color) {
 	bool showDelta = r_config_get_b (core->config, "asm.slow");
-	static ut64 oldpc = 0;
+	static R_TH_LOCAL ut64 oldpc = 0;
 	const char *BEGIN = core->cons->context->pal.prompt;
 	const char *filename;
 	char pos[512], bar[512], pcs[32];
@@ -3848,7 +3861,7 @@ R_API void r_core_visual_title(RCore *core, int color) {
 		r_cons_strcat (BEGIN);
 	}
 	const char *cmd_visual = r_config_get (core->config, "cmd.visual");
-	if (cmd_visual && *cmd_visual) {
+	if (R_STR_ISNOTEMPTY (cmd_visual)) {
 		r_str_ncpy (bar, cmd_visual, sizeof (bar) - 1);
 		bar[10] = '.'; // chop cmdfmt
 		bar[11] = '.'; // chop cmdfmt
@@ -3893,7 +3906,7 @@ R_API void r_core_visual_title(RCore *core, int color) {
 		} else {
 			char pm[32] = "[XADVC]";
 			int i;
-			for(i=0;i<6;i++) {
+			for (i = 0; i < 6; i++) {
 				if (core->printidx == i) {
 					pm[i + 1] = toupper((unsigned char)pm[i + 1]);
 				} else {
@@ -4134,13 +4147,14 @@ static void show_cursor(RCore *core) {
 }
 
 static void visual_refresh(RCore *core) {
-	static ut64 oseek = UT64_MAX;
+	static R_TH_LOCAL ut64 oseek = UT64_MAX;
 	const char *vi, *vcmd, *cmd_str;
 	if (!core) {
 		return;
 	}
 	r_print_set_cursor (core->print, core->print->cur_enabled, core->print->ocur, core->print->cur);
 	core->cons->blankline = true;
+	int notch = r_config_get_i (core->config, "scr.notch");
 
 	int w = visual_responsive (core);
 
@@ -4151,6 +4165,7 @@ static void visual_refresh(RCore *core) {
 	}
 	r_cons_flush ();
 	r_cons_print_clear ();
+	r_cons_strcat (core->cons->context->pal.bgprompt);
 	core->cons->context->noflush = true;
 
 	int hex_cols = r_config_get_i (core->config, "hex.cols");
@@ -4186,10 +4201,15 @@ static void visual_refresh(RCore *core) {
 		}
 		r_cons_gotoxy (0, 0);
 	}
+	int i;
+	for (i = 0; i < notch; i++) {
+		r_cons_printf (R_CONS_CLEAR_LINE"\n");
+	}
 	vi = r_config_get (core->config, "cmd.vprompt");
-	if (vi && *vi) {
+	if (R_STR_ISNOTEMPTY (vi)) {
+#if 1
 		r_core_cmd0 (core, vi);
-#if 0
+#else
 		char *output = r_core_cmd_str (core, vi);
 		r_cons_strcat_at (output, 10, 5, 20, 20);
 		free (output);
@@ -4204,7 +4224,7 @@ static void visual_refresh(RCore *core) {
 		cmd_str = vcmd;
 	} else {
 		if (splitView) {
-			static char debugstr[512];
+			static R_TH_LOCAL char debugstr[512];
 			const char *pxw = NULL;
 			int h = r_num_get (core->num, "$r");
 			int size = (h * 16) / 2;
@@ -4383,14 +4403,17 @@ R_API int r_core_visual(RCore *core, const char *input) {
 	splitPtr = UT64_MAX;
 
 	if (r_cons_get_size (&ch) < 1 || ch < 1) {
-		eprintf ("Cannot create Visual context. Use scr.fix_{columns|rows}\n");
+		R_LOG_ERROR ("Cannot create Visual context. Use scr.fix_{columns|rows}");
 		return 0;
 	}
 
+	int ovtmode = r_config_get_i (core->config, "scr.vtmode");
+	r_config_set_i (core->config, "scr.vtmode", 2);
 	obs = core->blocksize;
 	//r_cons_set_cup (true);
 	if (strchr (input, '?')) {
 		// show V? help message, disables oneliner to open visual help
+		r_config_set_i (core->config, "scr.vtmode", ovtmode);
 		return 0;
 	}
 	core->vmode = false;
@@ -4399,22 +4422,24 @@ R_API int r_core_visual(RCore *core, const char *input) {
 		char *cmd = r_str_newf ("!v%s", input);
 		int ret = r_core_cmd0 (core, cmd);
 		free (cmd);
+		r_config_set_i (core->config, "scr.vtmode", ovtmode);
 		return ret;
 	}
 	while (*input) {
 		int len = *input == 'd'? 2: 1;
 		if (!r_core_visual_cmd (core, input)) {
+			r_config_set_i (core->config, "scr.vtmode", ovtmode);
 			return 0;
 		}
 		input += len;
 	}
-	core->vmode = true;
 
+	core->vmode = true;
 	// disable tee in cons
 	teefile = r_cons_singleton ()->teefile;
 	r_cons_singleton ()->teefile = "";
 
-	static char debugstr[512];
+	static R_TH_LOCAL char debugstr[512];
 	core->print->flags |= R_PRINT_FLAGS_ADDRMOD;
 	do {
 dodo:
@@ -4500,14 +4525,17 @@ dodo:
 				if (IS_PRINTABLE (ch) || ch == '\t' || ch == '\n') {
 					flush_stdin ();
 				} else if (ch == 0x1b) {
-					char chrs[2];
+					char chrs[3];
 					int chrs_read = 1;
 					chrs[0] = r_cons_readchar ();
 					if (chrs[0] == '[') {
 						chrs[1] = r_cons_readchar ();
 						chrs_read++;
-						if (chrs[1] >= 'A' && chrs[1] <= 'D') { // arrow keys
-							flush_stdin ();
+						int ch56 = chrs[1] == '5' || chrs[1] == '6';
+						if ((chrs[1] >= 'A' && chrs[1] <= 'D') || ch56) { // arrow keys
+							if (!ch56 || (chrs[2] = r_cons_readchar ()) == '~') {
+								chrs_read += ch56;
+								flush_stdin ();
 #ifndef __WINDOWS__
 							// Following seems to fix an issue where scrolling slows
 							// down to a crawl for some terminals after some time
@@ -4515,6 +4543,7 @@ dodo:
 							r_cons_set_raw (false);
 							r_cons_set_raw (true);
 #endif
+							}
 						}
 					}
 					(void)r_cons_readpush (chrs, chrs_read);
@@ -4548,6 +4577,7 @@ dodo:
 	core->cons->event_resize = NULL;
 	core->cons->event_data = NULL;
 	r_cons_show_cursor (true);
+	r_config_set_i (core->config, "scr.vtmode", ovtmode);
 	return 0;
 }
 

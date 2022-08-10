@@ -1,8 +1,6 @@
 # handle capstone dependency
 capstone_dep = dependency('capstone', version: '>=3.0.4', required: false)
 if not capstone_dep.found() or not get_option('use_sys_capstone')
-  message('Use bundled capstone')
-
   if get_option('capstone_in_builddir')
     capstone_path = join_paths(meson.current_build_dir(), 'capstone')
   else
@@ -10,6 +8,7 @@ if not capstone_dep.found() or not get_option('use_sys_capstone')
   endif
 
   capstone_version = get_option('use_capstone_version')
+  message('Use bundled capstone: ' + capstone_version)
 
   res = run_command(py3_exe, '-c', '__import__("sys").exit(__import__("os").path.exists("@0@"))'.format(capstone_path))
   if res.returncode() == 0
@@ -20,7 +19,7 @@ if not capstone_dep.found() or not get_option('use_sys_capstone')
     patches_files = []
     # NOTE: when you update CS_TIP or CS_BRA, also update them in shlr/Makefile
     if capstone_version == 'v5'
-      CS_TIP = 'a4ae97c08fe8d1489d20d462c370cdeb3231cea5'
+      CS_TIP = '0d0e684358afd0889b98deaf3941caa9c6855cae'
       CS_BRA = 'next'
       patches_files = [
         'fix-x86-16.patch',
@@ -29,6 +28,9 @@ if not capstone_dep.found() or not get_option('use_sys_capstone')
     elif capstone_version == 'v3'
       CS_TIP = '61bf71c771680033651f16cff832446e421847b1'
       CS_BRA = 'v3'
+      patches_files = [
+        'capstone-include.patch'
+      ]
     elif capstone_version == 'v4'
       CS_TIP = 'a7cac8352f7397aa73bb2e2dcc1b6cdb2e1b8461'
       CS_BRA = 'v4'
@@ -125,8 +127,17 @@ if not capstone_dep.found() or not get_option('use_sys_capstone')
     'arch/TMS320C64x/TMS320C64xModule.c',
   ]
   rel_cs5_files = [
+    'arch/BPF/BPFDisassembler.c',
+    'arch/BPF/BPFInstPrinter.c',
+    'arch/BPF/BPFMapping.c',
+    'arch/BPF/BPFModule.c',
+    'arch/EVM/EVMDisassembler.c',
+    'arch/EVM/EVMInstPrinter.c',
+    'arch/EVM/EVMMapping.c',
+    'arch/EVM/EVMModule.c',
     'arch/X86/X86InstPrinterCommon.c',
-    # Add riscv files
+    'arch/MOS65XX/MOS65XXDisassembler.c',
+    'arch/MOS65XX/MOS65XXModule.c',
     'arch/RISCV/RISCVMapping.c',
     'arch/RISCV/RISCVModule.c',
     'arch/RISCV/RISCVInstPrinter.c',
@@ -187,13 +198,15 @@ if not capstone_dep.found() or not get_option('use_sys_capstone')
     foreach rel_cs_file : rel_cs5_files
       cs_files += [join_paths(capstone_path, rel_cs_file)]
     endforeach
-    cs_c_args += [ '-DCAPSTONE_HAS_RISCV' ]
+    cs_c_args += [
+      '-DCAPSTONE_HAS_BPF',
+      '-DCAPSTONE_HAS_EVM',
+      '-DCAPSTONE_HAS_MOS65XX',
+      '-DCAPSTONE_HAS_RISCV',
+    ]
   endif
 
   capstone_includes = [platform_inc, include_directories(join_paths('capstone','include'))]
-  if capstone_version == 'v4' or capstone_version == 'v5'
-    capstone_includes += [include_directories(join_paths('capstone','include','capstone'))]
-  endif
 
   libr2capstone = static_library('r2capstone', cs_files,
     c_args: cs_c_args,
@@ -227,6 +240,18 @@ bochs_dep = declare_dependency(
   include_directories: bochs_inc
 )
 
+if get_option('blob')
+libr2bochs_static = static_library('r2bochs_static', bochs_files,
+  dependencies: [r_util_static_dep],
+  include_directories: bochs_inc,
+  implicit_include_directories: false
+)
+bochs_static_dep = declare_dependency(
+  link_with: libr2bochs_static,
+  include_directories: bochs_inc
+)
+endif
+
 
 # handle java dependency
 java_files = [
@@ -249,6 +274,18 @@ java_dep = declare_dependency(
   include_directories: java_inc
 )
 
+if get_option('blob')
+libr2java_static = static_library('r2java_static', java_files,
+  dependencies: [r_util_static_dep],
+  include_directories: java_inc,
+  implicit_include_directories: false
+)
+
+java_static_dep = declare_dependency(
+  link_with: libr2java_static,
+  include_directories: java_inc
+)
+endif
 
 # handle qnx dependency
 qnx_files = [
@@ -271,6 +308,19 @@ qnx_dep = declare_dependency(
   link_with: libr2qnx,
   include_directories: qnx_inc
 )
+
+if get_option('blob')
+libr2qnx_static = static_library('r2qnx_static', qnx_files,
+  dependencies: [r_socket_static_dep],
+  include_directories: qnx_inc,
+  implicit_include_directories: false
+)
+
+qnx_static_dep = declare_dependency(
+  link_with: libr2qnx_static,
+  include_directories: qnx_inc
+)
+endif
 
 
 # handle grub dependency
@@ -339,6 +389,19 @@ grub_dep = declare_dependency(
   include_directories: grub_inc
 )
 
+if get_option('blob')
+libr2grub_static = static_library('r2grub_static', grub_files,
+  dependencies: [r_util_static_dep],
+  include_directories: grub_inc,
+  implicit_include_directories: false
+)
+
+grub_static_dep = declare_dependency(
+  link_with: libr2grub_static,
+  include_directories: grub_inc
+)
+endif
+
 # handle winkd dependency
 winkd_files = [
   'winkd/iob_pipe.c',
@@ -361,6 +424,7 @@ winkd_dep = declare_dependency(
   include_directories: winkd_inc
 )
 
+if get_option('blob')
 libr2winkd_static = static_library('r2winkd_static', winkd_files,
   dependencies: [r_hash_static_dep, r_crypto_static_dep, r_socket_static_dep, r_util_static_dep],
   include_directories: winkd_inc,
@@ -371,6 +435,7 @@ winkd_static_dep = declare_dependency(
   link_with: libr2winkd_static,
   include_directories: winkd_inc
 )
+endif
 
 # handle ar dependency
 ar_files = [
@@ -389,6 +454,19 @@ ar_dep = declare_dependency(
   link_with: libr2ar,
   include_directories: ar_inc
 )
+
+if get_option('blob')
+libr2ar_static = static_library('r2ar_static', ar_files,
+  dependencies: [r_util_static_dep],
+  include_directories: ar_inc,
+  implicit_include_directories: false
+)
+
+ar_static_dep = declare_dependency(
+  link_with: libr2ar_static,
+  include_directories: ar_inc
+)
+endif
 
 # handle mpc dependency
 mpc_files = [

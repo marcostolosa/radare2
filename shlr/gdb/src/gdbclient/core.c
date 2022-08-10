@@ -8,9 +8,9 @@
 #include "libgdbr.h"
 #include "gdbr_common.h"
 #include "packet.h"
-#include "r_util/r_strbuf.h"
-#include "r_cons.h"
-#include "r_debug.h"
+#include <r_util/r_strbuf.h>
+#include <r_cons.h>
+#include <r_debug.h>
 
 #if __UNIX__
 #include <errno.h>
@@ -93,6 +93,7 @@ static void gdbr_break_process(void *arg) {
 }
 
 bool gdbr_lock_tryenter(libgdbr_t *g) {
+	r_return_val_if_fail (g, false);
 	if (!r_th_lock_tryenter (g->gdbr_lock)) {
 		return false;
 	}
@@ -102,18 +103,17 @@ bool gdbr_lock_tryenter(libgdbr_t *g) {
 }
 
 bool gdbr_lock_enter(libgdbr_t *g) {
+	r_return_val_if_fail (g, false);
 	r_cons_break_push (gdbr_break_process, g);
 	void *bed = r_cons_sleep_begin ();
 	r_th_lock_enter (g->gdbr_lock);
 	g->gdbr_lock_depth++;
 	r_cons_sleep_end (bed);
-	if (g->isbreaked) {
-		return false;
-	}
-	return true;
+	return !g->isbreaked;
 }
 
 void gdbr_lock_leave(libgdbr_t *g) {
+	r_return_if_fail (g);
 	r_cons_break_pop ();
 	if (g->gdbr_lock_depth < 1) {
 		return;
@@ -304,7 +304,7 @@ end:
 }
 
 int gdbr_select(libgdbr_t *g, int pid, int tid) {
-	char cmd[64] = { 0 };
+	char cmd[64] = {0};
 	int ret = -1;
 
 	if (!gdbr_lock_enter (g)) {
@@ -727,7 +727,7 @@ end:
 }
 
 static int gdbr_read_memory_page(libgdbr_t *g, ut64 address, ut8 *buf, int len) {
-	char command[128] = { 0 };
+	char command[128] = {0};
 	int last, ret_len, pkt;
 	ret_len = 0;
 
@@ -930,7 +930,7 @@ end:
 
 int gdbr_step(libgdbr_t *g, int tid) {
 	int ret = -1;
-	char thread_id[64] = { 0 };
+	char thread_id[64] = {0};
 
 	if (!gdbr_lock_enter (g)) {
 		goto end;
@@ -952,8 +952,8 @@ end:
 }
 
 int gdbr_continue(libgdbr_t *g, int pid, int tid, int sig) {
-	char thread_id[64] = { 0 };
-	char command[16] = { 0 };
+	char thread_id[64] = {0};
+	char command[16] = {0};
 	int ret = -1;
 
 	if (!gdbr_lock_enter (g)) {
@@ -1022,7 +1022,7 @@ end:
 
 int gdbr_write_register(libgdbr_t *g, int index, char *value, int len) {
 	int ret = -1;
-	char command[255] = { 0 };
+	char command[255] = {0};
 	if (!g || !g->stub_features.P) {
 		return -1;
 	}
@@ -1215,7 +1215,7 @@ end:
 }
 
 int send_vcont(libgdbr_t *g, const char *command, const char *thread_id) {
-	char tmp[255] = { 0 };
+	char tmp[255] = {0};
 	int ret = -1;
 	void *bed = NULL;
 
@@ -1304,7 +1304,7 @@ end:
 }
 
 int set_bp(libgdbr_t *g, ut64 address, const char *conditions, enum Breakpoint type, int sizebp) {
-	char tmp[255] = { 0 };
+	char tmp[255] = {0};
 	int ret = -1;
 
 	if (!g) {
@@ -1399,7 +1399,7 @@ int gdbr_remove_hwa(libgdbr_t *g, ut64 address, int sizebp) {
 
 
 int remove_bp(libgdbr_t *g, ut64 address, enum Breakpoint type, int sizebp) {
-	char tmp[255] = { 0 };
+	char tmp[255] = {0};
 	int ret = -1;
 
 	if (!g) {
@@ -1713,7 +1713,7 @@ bool gdbr_is_thread_dead (libgdbr_t *g, int pid, int tid) {
 	if (!gdbr_lock_enter (g)) {
 		goto end;
 	}
-	char msg[64] = { 0 }, thread_id[63] = { 0 };
+	char msg[64] = {0}, thread_id[63] = { 0 };
 	if (write_thread_id (thread_id, sizeof (thread_id) - 1, pid, tid,
 		    g->stub_features.multiprocess) < 0) {
 		goto end;
@@ -1944,10 +1944,10 @@ end:
 }
 
 ut64 gdbr_get_baddr(libgdbr_t *g) {
-	ut64 off, min = UINT64_MAX;
+	ut64 off, min = UT64_MAX;
 	char *ptr;
 	if (!g) {
-		return UINT64_MAX;
+		return UT64_MAX;
 	}
 
 	if (!gdbr_lock_enter (g)) {
@@ -1955,7 +1955,7 @@ ut64 gdbr_get_baddr(libgdbr_t *g) {
 	}
 	if (send_msg (g, "qOffsets") < 0 || read_packet (g, false) < 0
 		    || send_ack (g) < 0 || g->data_len == 0) {
-		min = UINT64_MAX;
+		min = UT64_MAX;
 		goto end;
 	}
 	if (r_str_startswith (g->data, "TextSeg=")) {
@@ -1995,12 +1995,12 @@ ut64 gdbr_get_baddr(libgdbr_t *g) {
 		min = off;
 	}
 	if (!(ptr = strchr (ptr, ';')) || !r_str_startswith (ptr + 1, "Data=")) {
-		min = UINT64_MAX;
+		min = UT64_MAX;
 		goto end;
 	}
 	ptr += strlen (";Data=");
 	if (!isxdigit ((unsigned char)*ptr)) {
-		min = UINT64_MAX;
+		min = UT64_MAX;
 		goto end;
 	}
 	off = strtoull (ptr, NULL, 16);

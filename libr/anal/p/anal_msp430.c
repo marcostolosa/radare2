@@ -10,17 +10,13 @@
 #include "../arch/msp430/msp430_disas.h"
 
 static int msp430_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
-	int ret;
-	struct msp430_cmd cmd;
-
-	memset (&cmd, 0, sizeof (cmd));
-	//op->id = ???;
+	struct msp430_cmd cmd = {0};
 	op->size = -1;
 	op->nopcode = 1;
 	op->type = R_ANAL_OP_TYPE_UNK;
 	op->family = R_ANAL_OP_FAMILY_CPU;
 
-	ret = op->size = msp430_decode_command (buf, len, &cmd);
+	int ret = op->size = msp430_decode_command (buf, len, &cmd);
 	if (mask & R_ANAL_OP_MASK_DISASM) {
 		if (ret < 1) {
 			op->mnemonic = strdup ("invalid");
@@ -51,16 +47,21 @@ static int msp430_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 		switch (cmd.opcode) {
 		case MSP430_RRA:
 		case MSP430_RRC:
-			op->type = R_ANAL_OP_TYPE_ROR; break;
+			op->type = R_ANAL_OP_TYPE_ROR;
+			break;
 		case MSP430_PUSH:
-			op->type = R_ANAL_OP_TYPE_PUSH; break;
+			op->type = R_ANAL_OP_TYPE_PUSH;
+			break;
 		case MSP430_CALL:
 			op->type = R_ANAL_OP_TYPE_CALL;
 			op->fail = addr + op->size;
-			op->jump = r_read_at_le16 (buf, 2);
+			if (len > 4) {
+				op->jump = r_read_at_le16 (buf, 2);
+			}
 			break;
 		case MSP430_RETI:
-			op->type = R_ANAL_OP_TYPE_RET; break;
+			op->type = R_ANAL_OP_TYPE_RET;
+			break;
 		}
 		break;
 	case MSP430_TWOOP:
@@ -104,6 +105,45 @@ static int msp430_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 	return ret;
 }
 
+static bool set_reg_profile(RAnal *anal) {
+	const char *p = \
+		"=PC	pc\n"
+		"=SP	sp\n"
+		"=SN	r0\n"
+		// this is the "new" ABI, the old was reverse order
+		"=A0	r12\n"
+		"=A1	r13\n"
+		"=A2	r14\n"
+		"=A3	r15\n"
+		"gpr	r0	.16 0   0\n"
+		"gpr	r1	.16 2   0\n"
+		"gpr	r2	.16 4   0\n"
+		"gpr	r3	.16 6   0\n"
+		"gpr	r4	.16 8   0\n"
+		"gpr	r5	.16 10  0\n"
+		"gpr	r6	.16 12  0\n"
+		"gpr	r7	.16 14  0\n"
+		"gpr	r8	.16 16  0\n"
+		"gpr	r9	.16 18  0\n"
+		"gpr	r10   .16 20  0\n"
+		"gpr	r11   .16 22  0\n"
+		"gpr	r12   .16 24  0\n"
+		"gpr	r13   .16 26  0\n"
+		"gpr	r14   .16 28  0\n"
+		"gpr	r15   .16 30  0\n"
+
+		"gpr	pc	.16 0 0\n" // same as r0
+		"gpr	sp	.16 2 0\n" // same as r1
+		"flg	sr	.16 4 0\n" // same as r2
+		"flg	c	.1  4 0\n"
+		"flg	z	.1  4.1 0\n"
+		"flg	n	.1  4.2 0\n"
+		// between is SCG1 SCG0 OSOFF CPUOFF GIE
+		"flg	v	.1  4.8 0\n";
+
+	return r_reg_set_profile_string (anal->reg, p);
+}
+
 RAnalPlugin r_anal_plugin_msp430 = {
 	.name = "msp430",
 	.desc = "TI MSP430 code analysis plugin",
@@ -111,4 +151,5 @@ RAnalPlugin r_anal_plugin_msp430 = {
 	.arch = "msp430",
 	.bits = 16,
 	.op = msp430_op,
+	.set_reg_profile = &set_reg_profile,
 };

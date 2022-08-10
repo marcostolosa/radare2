@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake, nibble */
+/* radare - LGPL - Copyright 2009-2022 - pancake, nibble */
 
 #include <r_core.h>
 #include <r_anal.h>
@@ -214,7 +214,7 @@ static int cmdAdd(void *data, const char *input) {
 
 			free (args);
 			if (!fcni) {
-				eprintf ("Could not find function");
+				eprintf ("Could not find function\n");
 				return false;
 			}
 		}
@@ -428,7 +428,7 @@ static void apply_name(RCore *core, RAnalFunction *fcn, RSignItem *it, bool rad)
 	r_return_if_fail (core && fcn && it && it->name);
 	const char *name = it->realname? it->realname: it->name;
 	if (rad) {
-		char *tmp = r_name_filter2 (name);
+		char *tmp = r_name_filter_dup (name);
 		if (tmp) {
 			r_cons_printf ("\"afn %s @ 0x%08" PFMT64x "\"\n", tmp, fcn->addr);
 			free (tmp);
@@ -450,7 +450,7 @@ static void apply_flag(RCore *core, RSignItem *it, ut64 addr, int size, int coun
 	char *name = r_str_newf ("%s.%s.%s_%d", zign_prefix, prefix, it->name, count);
 	if (name) {
 		if (rad) {
-			char *tmp = r_name_filter2 (name);
+			char *tmp = r_name_filter_dup (name);
 			if (tmp) {
 				r_cons_printf ("f %s %d @ 0x%08" PFMT64x "\n", tmp, size, addr);
 				free (tmp);
@@ -466,8 +466,7 @@ static int searchBytesHitCB(RSignItem *it, RSearchKeyword *kw, ut64 addr, void *
 	struct ctxSearchCB *ctx = (struct ctxSearchCB *)user;
 	RAnalFunction *fcn = r_anal_get_fcn_in (ctx->core->anal, addr, 0);
 	if (!fcn) {
-		RCore *c = ctx->core;
-		r_core_af (c, c->offset, NULL, false);
+		r_core_af (ctx->core, addr, NULL, false);
 		fcn = r_anal_get_fcn_in (ctx->core->anal, addr, 0);
 		ctx->newfuncs++;
 		ctx->count++;
@@ -507,7 +506,7 @@ static int fcnMatchCB(RSignItem *it, RAnalFunction *fcn, RSignType *types, void 
 		switch (t) {
 		case R_SIGN_BYTES:
 			ctx->bytes_count++;
-			prefix = "bytes";
+			prefix = "bytes_func";
 			break;
 		case R_SIGN_GRAPH:
 			prefix = "graph";
@@ -1077,7 +1076,7 @@ static bool diff_zig(void *data, const char *input) {
 	}
 
 	if (strtok (NULL, " ")) {
-		eprintf ("too many arguments");
+		eprintf ("too many arguments\n");
 		free (argv);
 		return false;
 	}

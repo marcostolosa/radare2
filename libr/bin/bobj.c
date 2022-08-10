@@ -1,5 +1,7 @@
 /* radare2 - LGPL - Copyright 2009-2022 - pancake, nibble, dso */
 
+#define R_LOG_ORIGIN "bin.obj"
+
 #include <r_bin.h>
 #include <r_util.h>
 #include "i/private.h"
@@ -146,14 +148,14 @@ R_IPI RBinObject *r_bin_object_new(RBinFile *bf, RBinPlugin *plugin, ut64 basead
 	if (plugin && plugin->load_buffer) {
 		if (!plugin->load_buffer (bf, &bo->bin_obj, bf->buf, loadaddr, sdb)) {
 			if (bf->rbin->verbose) {
-				eprintf ("Error in r_bin_object_new: load_buffer failed for %s plugin\n", plugin->name);
+				R_LOG_ERROR ("r_bin_object_new: load_buffer failed for %s plugin", plugin->name);
 			}
 			sdb_free (bo->kv);
 			free (bo);
 			return NULL;
 		}
 	} else {
-		R_LOG_WARN ("Plugin %s should implement load_buffer method.\n", plugin->name);
+		R_LOG_WARN ("Plugin %s should implement load_buffer method", plugin->name);
 		sdb_free (bo->kv);
 		free (bo);
 		return NULL;
@@ -219,8 +221,6 @@ static void filter_classes(RBinFile *bf, RList *list) {
 					r_bin_filter_sym (bf, ht, sym->vaddr, sym);
 				}
 			}
-		} else {
-			eprintf ("Cannot alloc %d byte(s)\n", namepad_len);
 		}
 	}
 	ht_pu_free (db);
@@ -425,7 +425,7 @@ R_API int r_bin_object_set_items(RBinFile *bf, RBinObject *bo) {
 R_IPI RRBTree *r_bin_object_patch_relocs(RBin *bin, RBinObject *bo) {
 	r_return_val_if_fail (bin && bo, NULL);
 
-	static bool first = true;
+	static R_TH_LOCAL bool first = true;
 	// r_bin_object_set_items set o->relocs but there we don't have access
 	// to io so we need to be run from bin_relocs, free the previous reloc and get
 	// the patched ones

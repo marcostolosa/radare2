@@ -10,9 +10,9 @@
 #include "disas-asm.h"
 #include <mybfd.h>
 
-static unsigned long Offset = 0;
-static RStrBuf *buf_global = NULL;
-static unsigned char bytes[4];
+static R_TH_LOCAL unsigned long Offset = 0;
+static R_TH_LOCAL RStrBuf *buf_global = NULL;
+static R_TH_LOCAL unsigned char bytes[4];
 
 static int sparc_buffer_read_memory(bfd_vma memaddr, bfd_byte *myaddr, unsigned int length, struct disassemble_info *info) {
 	int delta = (memaddr - Offset);
@@ -38,7 +38,7 @@ DECLARE_GENERIC_PRINT_ADDRESS_FUNC()
 DECLARE_GENERIC_FPRINTF_FUNC()
 
 static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
-	static struct disassemble_info disasm_obj;
+	struct disassemble_info disasm_obj;
 	if (len < 4) {
 		return -1;
 	}
@@ -55,10 +55,10 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 	disasm_obj.symbol_at_address_func = &symbol_at_address;
 	disasm_obj.memory_error_func = &memory_error_func;
 	disasm_obj.print_address_func = &generic_print_address_func;
-	disasm_obj.endian = a->big_endian;
+	disasm_obj.endian = a->config->big_endian;
 	disasm_obj.fprintf_func = &generic_fprintf_func;
 	disasm_obj.stream = stdout;
-	disasm_obj.mach = ((a->bits == 64)
+	disasm_obj.mach = ((a->config->bits == 64)
 			   ? bfd_mach_sparc_v9b
 			   : 0);
 
@@ -76,7 +76,7 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 RAsmPlugin r_asm_plugin_sparc_gnu = {
 	.name = "sparc.gnu",
 	.arch = "sparc",
-	.bits = 32|64,
+	.bits = 32 | 64,
 	.endian = R_SYS_ENDIAN_BIG | R_SYS_ENDIAN_LITTLE,
 	.license = "GPL3",
 	.desc = "Scalable Processor Architecture",

@@ -1,14 +1,15 @@
-/* radare - LGPL - Copyright 2010-2021 - nibble, mrmacete, pancake */
+/* radare - LGPL - Copyright 2010-2022 - nibble, mrmacete, pancake */
 
-#include <stdio.h>
-#include <r_types.h>
-#include <r_util.h>
-#include "mach0.h"
+#define R_LOG_ORIGIN "bin.macho"
+
 #include <r_hash.h>
+#include "mach0.h"
 
-// TODO: deprecate bprintf and use Eprintf (bin->self)
 #define bprintf if (bin->verbose) eprintf
-#define Eprintf if (mo->verbose) eprintf
+
+#define MACHO_MAX_SECTIONS 4096
+// Microsoft C++: 2048 characters; Intel C++: 2048 characters; g++: No limit
+// see -e bin.maxsymlen
 
 #define IS_PTR_AUTH(x) ((x & (1ULL << 63)) != 0)
 #define IS_PTR_BIND(x) ((x & (1ULL << 62)) != 0)
@@ -43,7 +44,7 @@ static ut64 read_uleb128(ut8 **p, ut8 *end) {
 	ut64 v;
 	*p = (ut8 *)r_uleb128 (*p, end - *p, &v, &error);
 	if (error) {
-		eprintf ("%s", error);
+		R_LOG_ERROR ("%s", error);
 		R_FREE (error);
 		return UT64_MAX;
 	}
@@ -258,9 +259,9 @@ static bool init_hdr(struct MACH0_(obj_t) *bin) {
 	} else {
 		return false; // object files are magic == 0, but body is different :?
 	}
-	len = r_buf_read_at (bin->b, 0 + bin->header_at, machohdrbytes, sizeof (machohdrbytes));
+	len = r_buf_read_at (bin->b, bin->header_at, machohdrbytes, sizeof (machohdrbytes));
 	if (len != sizeof (machohdrbytes)) {
-		bprintf ("Error: read (hdr)\n");
+		bprintf ("read (hdr)\n");
 		return false;
 	}
 	bin->hdr.magic = r_read_ble (&machohdrbytes[0], bin->big_endian, 32);
@@ -295,7 +296,7 @@ static bool parse_segments(struct MACH0_(obj_t) *bin, ut64 off) {
 		return false;
 	}
 	if (!(bin->segs = realloc (bin->segs, bin->nsegs * sizeof(struct MACH0_(segment_command))))) {
-		perror ("realloc (seg)");
+		r_sys_perror ("realloc (seg)");
 		return false;
 	}
 	j = bin->nsegs - 1;
@@ -351,7 +352,7 @@ static bool parse_segments(struct MACH0_(obj_t) *bin, ut64 off) {
 	if (bin->segs[j].nsects > 0) {
 		sect = bin->nsects;
 		bin->nsects += bin->segs[j].nsects;
-		if (bin->nsects > 128) {
+		if (bin->nsects > MACHO_MAX_SECTIONS) {
 			int new_nsects = bin->nsects & 0xf;
 			bprintf ("WARNING: mach0 header contains too many sections (%d). Wrapping to %d\n",
 				 bin->nsects, new_nsects);
@@ -384,7 +385,7 @@ static bool parse_segments(struct MACH0_(obj_t) *bin, ut64 off) {
 		}
 
 		if (!(bin->sects = realloc (bin->sects, bin->nsects * sizeof (struct MACH0_(section))))) {
-			perror ("realloc (sects)");
+			r_sys_perror ("realloc (sects)");
 			bin->nsects = sect;
 			return false;
 		}
@@ -404,15 +405,15 @@ static bool parse_segments(struct MACH0_(obj_t) *bin, ut64 off) {
 			memcpy (&bin->sects[k].segname, &sec[i], 16);
 			i += 16;
 			snprintf (section_flagname, sizeof (section_flagname), "mach0_section_%.16s_%.16s.offset",
-						bin->sects[k].segname, bin->sects[k].sectname);			
+						bin->sects[k].segname, bin->sects[k].sectname);
 			sdb_num_set (bin->kv, section_flagname, offset, 0);
 #if R_BIN_MACH064
 			snprintf (section_flagname, sizeof (section_flagname), "mach0_section_%.16s_%.16s.format",
-						bin->sects[k].segname, bin->sects[k].sectname);		
+						bin->sects[k].segname, bin->sects[k].sectname);
 			sdb_set (bin->kv, section_flagname, "mach0_section64", 0);
 #else
 			snprintf (section_flagname, sizeof (section_flagname), "mach0_section_%.16s_%.16s.format",
-						bin->sects[k].segname, bin->sects[k].sectname);		
+						bin->sects[k].segname, bin->sects[k].sectname);
 			sdb_set (bin->kv, section_flagname, "mach0_section", 0);
 #endif
 
@@ -464,7 +465,7 @@ static bool parse_symtab(struct MACH0_(obj_t) *mo, ut64 off) {
 	}
 	int len = r_buf_read_at (mo->b, off, symt, sizeof (struct symtab_command));
 	if (len != sizeof (struct symtab_command)) {
-		Eprintf ("Error: read (symtab)\n");
+		R_LOG_ERROR ("read (symtab)");
 		return false;
 	}
 	st.cmd = r_read_ble32 (symt, be);
@@ -524,7 +525,7 @@ static bool parse_symtab(struct MACH0_(obj_t) *mo, ut64 off) {
 error:
 	R_FREE (mo->symstr);
 	R_FREE (mo->symtab);
-	Eprintf ("%s\n", error_message);
+	R_LOG_DEBUG ("%s", error_message);
 	return false;
 }
 
@@ -570,7 +571,7 @@ static bool parse_dysymtab(struct MACH0_(obj_t) *bin, ut64 off) {
 	bin->ntoc = bin->dysymtab.ntoc;
 	if (bin->ntoc > 0) {
 		if (!(bin->toc = calloc (bin->ntoc, sizeof (struct dylib_table_of_contents)))) {
-			perror ("calloc (toc)");
+			r_sys_perror ("calloc (toc)");
 			return false;
 		}
 		if (!UT32_MUL (&size_tab, bin->ntoc, sizeof (struct dylib_table_of_contents))){
@@ -602,7 +603,7 @@ static bool parse_dysymtab(struct MACH0_(obj_t) *bin, ut64 off) {
 	ut64 max_nmodtab = (bin->size - bin->dysymtab.modtaboff) / sizeof (struct MACH0_(dylib_module));
 	if (bin->nmodtab > 0 && bin->nmodtab <= max_nmodtab) {
 		if (!(bin->modtab = calloc (bin->nmodtab, sizeof (struct MACH0_(dylib_module))))) {
-			perror ("calloc (modtab)");
+			r_sys_perror ("calloc (modtab)");
 			return false;
 		}
 		if (!UT32_MUL (&size_tab, bin->nmodtab, sizeof (struct MACH0_(dylib_module)))){
@@ -651,7 +652,7 @@ static bool parse_dysymtab(struct MACH0_(obj_t) *bin, ut64 off) {
 	bin->nindirectsyms = bin->dysymtab.nindirectsyms;
 	if (bin->nindirectsyms > 0) {
 		if (!(bin->indirectsyms = calloc (bin->nindirectsyms, sizeof (ut32)))) {
-			perror ("calloc (indirectsyms)");
+			r_sys_perror ("calloc (indirectsyms)");
 			return false;
 		}
 		if (!UT32_MUL (&size_tab, bin->nindirectsyms, sizeof (ut32))){
@@ -862,12 +863,8 @@ static bool parse_signature(struct MACH0_(obj_t) *bin, ut64 off) {
 	super.blob.magic = r_buf_read_ble32_at (bin->b, data, mach0_endian);
 	super.blob.length = r_buf_read_ble32_at (bin->b, data + 4, mach0_endian);
 	super.count = r_buf_read_ble32_at (bin->b, data + 8, mach0_endian);
-	char *verbose = r_sys_getenv ("RABIN2_CODESIGN_VERBOSE");
-	bool isVerbose = false;
-	if (verbose) {
-		isVerbose = *verbose;
-		free (verbose);
-	}
+	// XXX deprecate
+	bool isVerbose = r_sys_getenv_asbool ("RABIN2_CODESIGN_VERBOSE");
 	// to dump all certificates
 	// [0x00053f75]> b 5K;/x 30800609;wtf @@ hit*
 	// then do this:
@@ -878,9 +875,12 @@ static bool parse_signature(struct MACH0_(obj_t) *bin, ut64 off) {
 			bin->signature = (ut8 *)strdup ("Malformed entitlement");
 			break;
 		}
-		struct blob_index_t bi;
+		struct blob_index_t bi = { 0 };
 		if (r_buf_read_at (bin->b, data + 12 + (i * sizeof (struct blob_index_t)),
 			(ut8*)&bi, sizeof (struct blob_index_t)) < sizeof (struct blob_index_t)) {
+			break;
+		}
+		if (i > 32 && idx.type == 0 && idx.offset == 0) {
 			break;
 		}
 		idx.type = r_read_ble32 (&bi.type, mach0_endian);
@@ -1148,7 +1148,7 @@ static int parse_thread(struct MACH0_(obj_t) *bin, struct load_command *lc, ut64
 
 	return true;
 wrong_read:
-	bprintf ("Error: read (thread)\n");
+	R_LOG_ERROR ("read (thread)");
 	return false;
 }
 
@@ -1158,14 +1158,12 @@ static int parse_function_starts(struct MACH0_(obj_t) *bin, ut64 off) {
 	int len;
 
 	if (off > bin->size || off + sizeof (struct linkedit_data_command) > bin->size) {
-		bprintf ("Likely overflow while parsing"
-			" LC_FUNCTION_STARTS command\n");
+		bprintf ("Likely overflow while parsing LC_FUNCTION_STARTS command");
 	}
 	bin->func_start = NULL;
 	len = r_buf_read_at (bin->b, off, sfc, sizeof (struct linkedit_data_command));
 	if (len < 1) {
-		bprintf ("Failed to get data while parsing"
-			" LC_FUNCTION_STARTS command\n");
+		R_LOG_WARN ("Failed to get data while parsing LC_FUNCTION_STARTS command");
 	}
 	fc.cmd = r_read_ble32 (&sfc[0], bin->big_endian);
 	fc.cmdsize = r_read_ble32 (&sfc[4], bin->big_endian);
@@ -1175,21 +1173,18 @@ static int parse_function_starts(struct MACH0_(obj_t) *bin, ut64 off) {
 	if ((int)fc.datasize > 0) {
 		ut8 *buf = calloc (1, fc.datasize + 1);
 		if (!buf) {
-			bprintf ("Failed to allocate buffer\n");
 			return false;
 		}
 		bin->func_size = fc.datasize;
 		if (fc.dataoff > bin->size || fc.dataoff + fc.datasize > bin->size) {
 			free (buf);
-			bprintf ("Likely overflow while parsing "
-				"LC_FUNCTION_STARTS command\n");
+			R_LOG_WARN ("Likely overflow while parsing LC_FUNCTION_STARTS command");
 			return false;
 		}
 		len = r_buf_read_at (bin->b, fc.dataoff, buf, fc.datasize);
 		if (len != fc.datasize) {
 			free (buf);
-			bprintf ("Failed to get data while parsing"
-				" LC_FUNCTION_STARTS\n");
+			R_LOG_WARN ("Failed to get data while parsing LC_FUNCTION_STARTS");
 			return false;
 		}
 		buf[fc.datasize] = 0; // null-terminated buffer
@@ -1213,7 +1208,7 @@ static int parse_dylib(struct MACH0_(obj_t) *bin, ut64 off) {
 
 	void *relibs = realloc (bin->libs, bin->nlibs * R_BIN_MACH0_STRING_LENGTH);
 	if (!relibs) {
-		perror ("realloc (libs)");
+		r_sys_perror ("realloc (libs)");
 		return false;
 	}
 	bin->libs = relibs;
@@ -1510,14 +1505,15 @@ static bool parse_chained_fixups(struct MACH0_(obj_t) *bin, ut32 offset, ut32 si
 	if (header.starts_offset > size) {
 		return false;
 	}
-	ut32 segs_count;
-	if ((segs_count = r_buf_read_le32_at (bin->b, starts_at)) == UT32_MAX) {
+	ut32 segs_count = r_buf_read_le32_at (bin->b, starts_at);
+	if (segs_count == UT32_MAX || segs_count == 0) {
 		return false;
 	}
 	bin->chained_starts = R_NEWS0 (struct r_dyld_chained_starts_in_segment *, segs_count);
 	if (!bin->chained_starts) {
 		return false;
 	}
+	bin->segs_count = segs_count;
 	bin->fixups_header = header;
 	bin->fixups_offset = offset;
 	bin->fixups_size = size;
@@ -1699,6 +1695,7 @@ static bool reconstruct_chained_fixup(struct MACH0_(obj_t) *bin) {
 	}
 	R_FREE (opcodes);
 
+	bin->segs_count = bin->nsegs;
 	return true;
 }
 
@@ -1714,20 +1711,21 @@ static int init_items(struct MACH0_(obj_t) *bin) {
 	bin->os = 0;
 	bin->has_crypto = 0;
 	if (bin->hdr.sizeofcmds > bin->size) {
-		bprintf ("Warning: chopping hdr.sizeofcmds\n");
+		R_LOG_WARN ("chopping hdr.sizeofcmds because it's larger than the file size");
 		bin->hdr.sizeofcmds = bin->size - 128;
 		//return false;
 	}
+	bool noFuncStarts = r_sys_getenv_asbool ("RABIN2_MACHO_NOFUNCSTARTS");
 	//bprintf ("Commands: %d\n", bin->hdr.ncmds);
 	for (i = 0, off = sizeof (struct MACH0_(mach_header)) + bin->header_at; \
 			i < bin->hdr.ncmds; i++, off += lc.cmdsize) {
 		if (off > bin->size || off + sizeof (struct load_command) > bin->size) {
-			bprintf ("mach0: out of bounds command\n");
+			R_LOG_WARN ("out of bounds macho command");
 			return false;
 		}
 		len = r_buf_read_at (bin->b, off, loadc, sizeof (struct load_command));
 		if (len < 1) {
-			bprintf ("Error: read (lc) at 0x%08"PFMT64x"\n", off);
+			R_LOG_ERROR ("read (lc) at 0x%08"PFMT64x, off);
 			return false;
 		}
 		lc.cmd = r_read_ble32 (&loadc[0], bin->big_endian);
@@ -1982,9 +1980,13 @@ static int init_items(struct MACH0_(obj_t) *bin) {
 			/* TODO */
 			break;
 		case LC_FUNCTION_STARTS:
-			sdb_set (bin->kv, cmd_flagname, "function_starts", 0);
-			if (!parse_function_starts (bin, off)) {
-				bprintf ("Cannot parse LC_FUNCTION_STARTS\n");
+			if (noFuncStarts) {
+				// do nothing here
+			} else {
+				sdb_set (bin->kv, cmd_flagname, "function_starts", 0);
+				if (!parse_function_starts (bin, off)) {
+					R_LOG_WARN ("Cannot parse LC_FUNCTION_STARTS");
+				}
 			}
 			break;
 		case LC_REEXPORT_DYLIB:
@@ -2090,7 +2092,7 @@ static bool init(struct MACH0_(obj_t) *mo) {
 		return false;
 	}
 	if (!init_items (mo)) {
-		Eprintf ("Warning: Cannot initialize items\n");
+		R_LOG_WARN ("Cannot initialize items");
 	}
 	mo->baddr = MACH0_(get_baddr)(mo);
 	return true;
@@ -2123,8 +2125,10 @@ void *MACH0_(mach0_free)(struct MACH0_(obj_t) *mo) {
 	free (mo->signature);
 	free (mo->intrp);
 	free (mo->compiler);
+	r_list_free (mo->symbols_cache);
+	r_list_free (mo->sections_cache);
 	if (mo->chained_starts) {
-		for (i = 0; i < mo->nsegs; i++) {
+		for (i = 0; i < mo->nsegs && i < mo->segs_count; i++) {
 			if (mo->chained_starts[i]) {
 				free (mo->chained_starts[i]->page_start);
 				free (mo->chained_starts[i]);
@@ -2139,9 +2143,11 @@ void *MACH0_(mach0_free)(struct MACH0_(obj_t) *mo) {
 
 void MACH0_(opts_set_default)(struct MACH0_(opts_t) *options, RBinFile *bf) {
 	r_return_if_fail (options && bf && bf->rbin);
+	options->bf = bf;
 	options->header_at = 0;
 	options->symbols_off = 0;
 	options->verbose = bf->rbin->verbose;
+	options->maxsymlen = bf->rbin->maxsymlen;
 }
 
 static void *duplicate_ptr(void *p) {
@@ -2198,12 +2204,20 @@ struct MACH0_(obj_t) *MACH0_(new_buf)(RBuffer *buf, struct MACH0_(opts_t) *optio
 		bin->b = r_buf_ref (buf);
 		bin->main_addr = UT64_MAX;
 		bin->kv = sdb_new (NULL, "bin.mach0", 0);
-		bin->size = r_buf_size (bin->b);
+		ut64 sz = r_buf_size (buf); // bin->b);
 		if (options) {
+#if 0
+			if (options->bf->loadaddr == UT64_MAX - sz) {
+				// handle the negative binsize problem when source io returns -1 as size. assume its 2MB
+				// sz = 4 * 1024 * 1024;
+			}
+#endif
 			bin->verbose = options->verbose;
 			bin->header_at = options->header_at;
+			bin->maxsymlen = options->maxsymlen;
 			bin->symbols_off = options->symbols_off;
 		}
+		bin->size = sz;
 		if (!init (bin)) {
 			return MACH0_(mach0_free)(bin);
 		}
@@ -2227,7 +2241,7 @@ static int prot2perm(int x) {
 	return r;
 }
 
-static bool __isDataSection(RBinSection *sect) {
+static bool is_data_section(RBinSection *sect) {
 	if (strstr (sect->name, "_cstring")) {
 		return true;
 	}
@@ -2275,7 +2289,7 @@ RList *MACH0_(get_segments)(RBinFile *bf) {
 		}
 	}
 	if (bin->nsects > 0) {
-		int last_section = R_MIN (bin->nsects, 128); // maybe drop this limit?
+		int last_section = R_MIN (bin->nsects, MACHO_MAX_SECTIONS);
 		for (i = 0; i < last_section; i++) {
 			RBinSection *s = R_NEW0 (RBinSection);
 			if (!s) {
@@ -2300,7 +2314,10 @@ RList *MACH0_(get_segments)(RBinFile *bf) {
 			char *section_name = r_str_ndup (bin->sects[i].sectname, 16);
 			char *segment_name = r_str_newf ("%u.%s", (ut32)i, bin->segs[segment_index].segname);
 			s->name = r_str_newf ("%s.%s", segment_name, section_name);
-			s->is_data = __isDataSection (s);
+			if (strstr (s->name, "__const")) {
+				s->format = r_str_newf ("Cd 4[%"PFMT64d"]", s->size / 4);
+			}
+			s->is_data = is_data_section (s);
 			if (strstr (section_name, "interpos") || strstr (section_name, "__mod_")) {
 #if R_BIN_MACH064
 				const int ws = 8;
@@ -2317,7 +2334,7 @@ RList *MACH0_(get_segments)(RBinFile *bf) {
 	return list;
 }
 
-// XXX this function is called so many times
+// XXX this function is called so many times, should return cached RList instead
 struct section_t *MACH0_(get_sections)(struct MACH0_(obj_t) *bin) {
 	r_return_val_if_fail (bin, NULL);
 	struct section_t *sections;
@@ -2352,11 +2369,11 @@ struct section_t *MACH0_(get_sections)(struct MACH0_(obj_t) *bin) {
 	if (!bin->sects) {
 		return NULL;
 	}
-	to = R_MIN (bin->nsects, 128); // limit number of sections here to avoid fuzzed bins
+	to = R_MIN (bin->nsects, MACHO_MAX_SECTIONS);
 	if (to < 1) {
 		return NULL;
 	}
-	if (!(sections = calloc (bin->nsects + 1, sizeof (struct section_t)))) {
+	if (!(sections = calloc (to + 1, sizeof (struct section_t)))) {
 		return NULL;
 	}
 	for (i = 0; i < to; i++) {
@@ -2378,9 +2395,9 @@ struct section_t *MACH0_(get_sections)(struct MACH0_(obj_t) *bin) {
 		}
 		snprintf (sections[i].name, sizeof (sections[i].name),
 			"%d.%s.%s", (int)i, raw_segname, sectname);
-		sections[i].last = 0;
+		sections[i].last = false;
 	}
-	sections[i].last = 1;
+	sections[i].last = true;
 	return sections;
 }
 
@@ -2477,6 +2494,9 @@ static char *get_name(struct MACH0_(obj_t) *mo, ut32 stridx, bool filter) {
 			len = i;
 			break;
 		}
+	}
+	if (mo->maxsymlen > 0 && len > mo->maxsymlen) {
+		return NULL;
 	}
 	if (len > 0) {
 		char *res = r_str_ndup (symstr, len);
@@ -2660,20 +2680,17 @@ static void fill_exports_list(struct MACH0_(obj_t) *bin, const char *name, ut64 
 	r_list_append (list, sym);
 }
 
-// TODO: Return RList<RBinSymbol> // 2x speedup
 const RList *MACH0_(get_symbols_list)(struct MACH0_(obj_t) *bin) {
-	static RList * cache = NULL; // XXX DONT COMMIT WITH THIS
 	struct symbol_t *symbols;
-	size_t j, s, symbols_size, symbols_count;
+	size_t i, j, s, symbols_size, symbols_count;
 	ut32 to, from;
-	size_t i;
 
 	r_return_val_if_fail (bin, NULL);
-	if (cache) {
-		return cache;
+	if (bin->symbols_cache) {
+		return bin->symbols_cache;
 	}
 	RList *list = r_list_newf ((RListFree)r_bin_symbol_free);
-	cache = list;
+	bin->symbols_cache = list;
 
 	HtPP *hash = ht_pp_new0 ();
 	if (!hash) {
@@ -2784,6 +2801,9 @@ const RList *MACH0_(get_symbols_list)(struct MACH0_(obj_t) *bin) {
 		if (parse_import_stub (bin, &symbol, i)) {
 			j++;
 			RBinSymbol *sym = R_NEW0 (RBinSymbol);
+			if (!sym) {
+				break;
+			}
 			sym->vaddr = symbol.addr;
 			sym->paddr = symbol.offset;
 			sym->name = symbol.name;
@@ -2802,16 +2822,15 @@ const RList *MACH0_(get_symbols_list)(struct MACH0_(obj_t) *bin) {
 		// 2 is for func.eh (exception handlers?)
 		int section = st->n_sect;
 		if (section == 1 && j < symbols_count) { // text ??st->n_type == 1) maybe wrong
-			RBinSymbol *sym = R_NEW0(RBinSymbol);
+			RBinSymbol *sym = R_NEW0 (RBinSymbol);
+			if (!sym) {
+				break;
+			}
 			/* is symbol */
 			sym->vaddr = st->n_value;
 			sym->paddr = addr_to_offset (bin, symbols[j].addr);
 			sym->is_imported = symbols[j].is_imported;
-			if (st->n_type & N_EXT) {
-				sym->type = "EXT";
-			} else {
-				sym->type = "LOCAL";
-			}
+			sym->type = (st->n_type & N_EXT)? "EXT": "LOCAL";
 			char *sym_name = get_name (bin, st->n_strx, false);
 			if (sym_name) {
 				sym->name = sym_name;
@@ -2838,7 +2857,7 @@ const RList *MACH0_(get_symbols_list)(struct MACH0_(obj_t) *bin) {
 	}
 	ht_pp_free (hash);
 	// bin->symbols = symbols;
-    free (symbols);
+	free (symbols);
 	return list;
 }
 
@@ -2880,11 +2899,15 @@ const struct symbol_t *MACH0_(get_symbols)(struct MACH0_(obj_t) *bin) {
 
 	int bits = MACH0_(get_bits_from_hdr) (&bin->hdr);
 	if (bin->symtab && bin->symstr) {
+		int n0 = bin->dysymtab.nextdefsym;
+		int n1 = bin->dysymtab.nlocalsym;
+		int n2 = bin->dysymtab.nundefsym;
+		int n3 = bin->nsymtab;
+		symbols_count = R_MAX (n0, 0);
+		symbols_count += R_MAX (n1, 0);
+		symbols_count += R_MAX (n2, 0);
+		symbols_count += R_MAX (n3, 0);
 		/* parse dynamic symbol table */
-		symbols_count = (bin->dysymtab.nextdefsym + \
-				bin->dysymtab.nlocalsym + \
-				bin->dysymtab.nundefsym );
-		symbols_count += bin->nsymtab;
 		if (symbols_count < 0 || ((st64)symbols_count * 2) > ST32_MAX) {
 			eprintf ("Symbols count overflow\n");
 			ht_pp_free (hash);
@@ -2941,6 +2964,10 @@ const struct symbol_t *MACH0_(get_symbols)(struct MACH0_(obj_t) *bin) {
 					: R_BIN_MACH0_SYMBOL_TYPE_LOCAL;
 				stridx = bin->symtab[i].n_strx;
 				symbols[j].name = get_name (bin, stridx, false);
+				if (!symbols[j].name) {
+					j--;
+					continue;
+				}
 				symbols[j].last = false;
 
 				const char *name = symbols[j].name;
@@ -3173,7 +3200,7 @@ static void parse_relocation_info(struct MACH0_(obj_t) *bin, RSkipList *relocs, 
 	for (i = 0; i < num; i++) {
 		struct relocation_info a_info = info[i];
 		ut32 sym_num = a_info.r_symbolnum;
-		if (sym_num > bin->nsymtab) {
+		if (sym_num >= bin->nsymtab) {
 			continue;
 		}
 
@@ -3784,7 +3811,7 @@ struct addr_t *MACH0_(get_entrypoint)(struct MACH0_(obj_t) *bin) {
 
 void MACH0_(kv_loadlibs)(struct MACH0_(obj_t) *bin) {
 	int i;
-	char lib_flagname[128];	
+	char lib_flagname[128];
 	for (i = 0; i < bin->nlibs; i++) {
 		snprintf (lib_flagname, sizeof (lib_flagname), "libs.%d.name", i);
 		sdb_set (bin->kv, lib_flagname, bin->libs[i], 0);
@@ -4225,7 +4252,7 @@ void MACH0_(mach_headerfields)(RBinFile *bf) {
 	}
 #define READWORD() \
 		if (r_buf_read_at (buf, addr, (ut8*)wordbuf, 4) != 4) { \
-			eprintf ("Invalid address in buffer."); \
+			eprintf ("Invalid address in buffer.\n"); \
 			break; \
 		} \
 		addr += 4; \
@@ -4558,7 +4585,7 @@ struct MACH0_(mach_header) *MACH0_(get_hdr)(RBuffer *buf) {
 
 void MACH0_(iterate_chained_fixups)(struct MACH0_(obj_t) *bin, ut64 limit_start, ut64 limit_end, ut32 event_mask, RFixupCallback callback, void * context) {
 	int i = 0;
-	for (; i < bin->nsegs; i++) {
+	for (; i < bin->nsegs && i < bin->segs_count; i++) {
 		if (!bin->chained_starts[i]) {
 			continue;
 		}
@@ -4573,6 +4600,9 @@ void MACH0_(iterate_chained_fixups)(struct MACH0_(obj_t) *bin, ut64 limit_start,
 			ut64 page_end_idx = (R_MIN (limit_end, end) - start) / page_size;
 			for (; page_idx <= page_end_idx; page_idx++) {
 				if (page_idx >= bin->chained_starts[i]->page_count) {
+					break;
+				}
+				if (!bin->chained_starts[i]->page_start) {
 					break;
 				}
 				ut16 page_start = bin->chained_starts[i]->page_start[page_idx];
@@ -4597,7 +4627,9 @@ void MACH0_(iterate_chained_fixups)(struct MACH0_(obj_t) *bin, ut64 limit_start,
 					ut8 key = 0, addr_div = 0;
 					ut16 diversity = 0;
 					ut32 ordinal = UT32_MAX;
-					if (pointer_format == DYLD_CHAINED_PTR_ARM64E) {
+					switch (pointer_format) {
+					case DYLD_CHAINED_PTR_ARM64E:
+						{
 						stride = 8;
 						bool is_auth = IS_PTR_AUTH (raw_ptr);
 						bool is_bind = IS_PTR_BIND (raw_ptr);
@@ -4633,7 +4665,10 @@ void MACH0_(iterate_chained_fixups)(struct MACH0_(obj_t) *bin, ut64 limit_start,
 							delta = p->next;
 							ptr_value = ((ut64)p->high8 << 56) | p->target;
 						}
-					} else if (pointer_format == DYLD_CHAINED_PTR_ARM64E_USERLAND24) {
+						}
+						break;
+					case DYLD_CHAINED_PTR_ARM64E_USERLAND24:
+						{
 						stride = 8;
 						struct dyld_chained_ptr_arm64e_bind24 *bind =
 								(struct dyld_chained_ptr_arm64e_bind24 *) &raw_ptr;
@@ -4670,7 +4705,11 @@ void MACH0_(iterate_chained_fixups)(struct MACH0_(obj_t) *bin, ut64 limit_start,
 								ptr_value = bin->baddr + (((ut64)p->high8 << 56) | p->target);
 							}
 						}
-					} else if (pointer_format == DYLD_CHAINED_PTR_64_OFFSET) {
+						}
+						break;
+					case DYLD_CHAINED_PTR_64:
+					case DYLD_CHAINED_PTR_64_OFFSET:
+						{
 						stride = 4;
 						struct dyld_chained_ptr_64_bind *bind =
 								(struct dyld_chained_ptr_64_bind *) &raw_ptr;
@@ -4684,73 +4723,79 @@ void MACH0_(iterate_chained_fixups)(struct MACH0_(obj_t) *bin, ut64 limit_start,
 								(struct dyld_chained_ptr_64_rebase *) &raw_ptr;
 							event = R_FIXUP_EVENT_REBASE;
 							delta = p->next;
-							ptr_value = bin->baddr + (((ut64)p->high8 << 56) | p->target);
+							ptr_value = ((ut64)p->high8 << 56) | p->target;
+							if (pointer_format == DYLD_CHAINED_PTR_64_OFFSET) {
+								ptr_value += bin->baddr;
+							}
 						}
-					} else {
+						}
+						break;
+					default:
 						eprintf ("Unsupported chained pointer format %d\n", pointer_format);
 						return;
 					}
 					if (cursor >= limit_start && cursor <= limit_end - 8 && (event & event_mask) != 0) {
 						bool carry_on;
 						switch (event) {
-							case R_FIXUP_EVENT_BIND: {
-								RFixupBindEventDetails event_details;
+						case R_FIXUP_EVENT_BIND: {
+							RFixupBindEventDetails event_details;
 
-								event_details.type = event;
-								event_details.bin = bin;
-								event_details.offset = cursor;
-								event_details.raw_ptr = raw_ptr;
-								event_details.ordinal = ordinal;
-								event_details.addend = addend;
+							event_details.type = event;
+							event_details.bin = bin;
+							event_details.offset = cursor;
+							event_details.raw_ptr = raw_ptr;
+							event_details.ordinal = ordinal;
+							event_details.addend = addend;
 
-								carry_on = callback (context, (RFixupEventDetails *) &event_details);
-								break;
-							}
-							case R_FIXUP_EVENT_BIND_AUTH: {
-								RFixupBindAuthEventDetails event_details;
+							carry_on = callback (context, (RFixupEventDetails *) &event_details);
+							break;
+						}
+						case R_FIXUP_EVENT_BIND_AUTH: {
+							RFixupBindAuthEventDetails event_details;
 
-								event_details.type = event;
-								event_details.bin = bin;
-								event_details.offset = cursor;
-								event_details.raw_ptr = raw_ptr;
-								event_details.ordinal = ordinal;
-								event_details.key = key;
-								event_details.addr_div = addr_div;
-								event_details.diversity = diversity;
+							event_details.type = event;
+							event_details.bin = bin;
+							event_details.offset = cursor;
+							event_details.raw_ptr = raw_ptr;
+							event_details.ordinal = ordinal;
+							event_details.key = key;
+							event_details.addr_div = addr_div;
+							event_details.diversity = diversity;
 
-								carry_on = callback (context, (RFixupEventDetails *) &event_details);
-								break;
-							}
-							case R_FIXUP_EVENT_REBASE: {
-								RFixupRebaseEventDetails event_details;
+							carry_on = callback (context, (RFixupEventDetails *) &event_details);
+							break;
+						}
+						case R_FIXUP_EVENT_REBASE: {
+							RFixupRebaseEventDetails event_details;
 
-								event_details.type = event;
-								event_details.bin = bin;
-								event_details.offset = cursor;
-								event_details.raw_ptr = raw_ptr;
-								event_details.ptr_value = ptr_value;
+							event_details.type = event;
+							event_details.bin = bin;
+							event_details.offset = cursor;
+							event_details.raw_ptr = raw_ptr;
+							event_details.ptr_value = ptr_value;
 
-								carry_on = callback (context, (RFixupEventDetails *) &event_details);
-								break;
-							}
-							case R_FIXUP_EVENT_REBASE_AUTH: {
-								RFixupRebaseAuthEventDetails event_details;
+							carry_on = callback (context, (RFixupEventDetails *) &event_details);
+							break;
+						}
+						case R_FIXUP_EVENT_REBASE_AUTH: {
+							RFixupRebaseAuthEventDetails event_details;
 
-								event_details.type = event;
-								event_details.bin = bin;
-								event_details.offset = cursor;
-								event_details.raw_ptr = raw_ptr;
-								event_details.ptr_value = ptr_value;
-								event_details.key = key;
-								event_details.addr_div = addr_div;
-								event_details.diversity = diversity;
+							event_details.type = event;
+							event_details.bin = bin;
+							event_details.offset = cursor;
+							event_details.raw_ptr = raw_ptr;
+							event_details.ptr_value = ptr_value;
+							event_details.key = key;
+							event_details.addr_div = addr_div;
+							event_details.diversity = diversity;
 
-								carry_on = callback (context, (RFixupEventDetails *) &event_details);
-								break;
-							}
-							default:
-								eprintf ("Unexpected event while iterating chained fixups\n");
-								carry_on = false;
+							carry_on = callback (context, (RFixupEventDetails *) &event_details);
+							break;
+						}
+						default:
+							eprintf ("Unexpected event while iterating chained fixups\n");
+							carry_on = false;
+							break;
 						}
 						if (!carry_on) {
 							return;

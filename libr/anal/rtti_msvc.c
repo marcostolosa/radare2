@@ -69,15 +69,16 @@ static bool rtti_msvc_read_complete_object_locator(RVTableContext *context, ut64
 	if (!context->anal->iob.read_at (context->anal->iob.io, addr, buf, colSize)) {
 		return false;
 	}
+	bool be = context->anal->config->big_endian;
 
-	ut32 (*read_at_32)(const void *src, size_t offset) = context->anal->big_endian ? r_read_at_be32 : r_read_at_le32;
+	ut32 (*read_at_32)(const void *src, size_t offset) = be? r_read_at_be32 : r_read_at_le32;
 	col->signature = read_at_32 (buf, 0);
 	col->vtable_offset = read_at_32 (buf, 4);
 	col->cd_offset = read_at_32 (buf, 8);
 
 	int offsetSize = R_MIN (context->word_size, 4);
-	col->type_descriptor_addr = (ut32) r_read_ble (buf + 12, (bool) context->anal->big_endian, offsetSize * 8);
-	col->class_descriptor_addr = (ut32) r_read_ble (buf + 12 + offsetSize, (bool) context->anal->big_endian, offsetSize * 8);
+	col->type_descriptor_addr = (ut32) r_read_ble (buf + 12, be, offsetSize * 8);
+	col->class_descriptor_addr = (ut32) r_read_ble (buf + 12 + offsetSize, be, offsetSize * 8);
 	if (context->word_size == 8) {
 		// 64bit is special:
 		// Type Descriptor and Class Hierarchy Descriptor addresses are computed
@@ -106,12 +107,13 @@ static bool rtti_msvc_read_class_hierarchy_descriptor(RVTableContext *context, u
 		return false;
 	}
 
-	ut32 (*read_at_32)(const void *src, size_t offset) = context->anal->big_endian ? r_read_at_be32 : r_read_at_le32;
+	const bool be = context->anal->config->big_endian;
+	ut32 (*read_at_32)(const void *src, size_t offset) = be? r_read_at_be32 : r_read_at_le32;
 	chd->signature = read_at_32 (buf, 0);
 	chd->attributes = read_at_32 (buf, 4);
 	chd->num_base_classes = read_at_32 (buf, 8);
 	if (context->word_size <= 4) {
-		chd->base_class_array_addr = (ut32) r_read_ble (buf + 12, (bool) context->anal->big_endian, context->word_size * 8);
+		chd->base_class_array_addr = (ut32) r_read_ble (buf + 12, be, context->word_size * 8);
 	} else {
 		// 64bit is special, like in Complete Object Locator.
 		// Only the offset from the base from Complete Object Locator
@@ -139,10 +141,10 @@ static bool rtti_msvc_read_base_class_descriptor(RVTableContext *context, ut64 a
 	if (!context->anal->iob.read_at (context->anal->iob.io, addr, buf, bcdSize)) {
 		return false;
 	}
-
-	ut32 (*read_at_32)(const void *src, size_t offset) = context->anal->big_endian ? r_read_at_be32 : r_read_at_le32;
+	const bool be = context->anal->config->big_endian;
+	ut32 (*read_at_32)(const void *src, size_t offset) = be? r_read_at_be32 : r_read_at_le32;
 	int typeDescriptorAddrSize = R_MIN (context->word_size, 4);
-	bcd->type_descriptor_addr = (ut32) r_read_ble (buf, (bool) context->anal->big_endian, typeDescriptorAddrSize * 8);
+	bcd->type_descriptor_addr = (ut32) r_read_ble (buf, be, typeDescriptorAddrSize * 8);
 	size_t offset = (size_t) typeDescriptorAddrSize;
 	bcd->num_contained_bases = read_at_32 (buf, offset);
 	bcd->where.mdisp = read_at_32 (buf, offset + sizeof (ut32));
@@ -167,7 +169,7 @@ static RList *rtti_msvc_read_base_class_array(RVTableContext *context, ut32 num_
 
 	if (num_base_classes > BASE_CLASSES_MAX) {
 		if (context->anal->verbose) {
-			eprintf ("Warning: Length of base class array at 0x%08"PFMT64x" exceeds %d.\n", addr, BASE_CLASSES_MAX);
+			R_LOG_WARN ("Length of base class array at 0x%08"PFMT64x" exceeds %d", addr, BASE_CLASSES_MAX);
 		}
 		num_base_classes = BASE_CLASSES_MAX;
 	}
@@ -193,7 +195,8 @@ static RList *rtti_msvc_read_base_class_array(RVTableContext *context, ut32 num_
 				r_list_free (ret);
 				return NULL;
 			}
-			ut32 (*read_32)(const void *src) = context->anal->big_endian ? r_read_be32 : r_read_le32;
+			bool be = context->anal->config->big_endian;
+			ut32 (*read_32)(const void *src) = be? r_read_be32 : r_read_le32; // TODO: use ble32 instead
 			ut32 bcdOffset = read_32 (tmp);
 			if (bcdOffset == UT32_MAX) {
 				break;
@@ -421,7 +424,7 @@ R_API char *r_anal_rtti_msvc_demangle_class_name(RVTableContext *context, const 
 R_API void r_anal_rtti_msvc_print_complete_object_locator(RVTableContext *context, ut64 addr, int mode) {
 	rtti_complete_object_locator col;
 	if (!rtti_msvc_read_complete_object_locator (context, addr, &col)) {
-		eprintf ("Failed to parse Complete Object Locator at 0x%08"PFMT64x"\n", addr);
+		R_LOG_ERROR ("Failed to parse Complete Object Locator at 0x%08"PFMT64x, addr);
 		return;
 	}
 
@@ -439,9 +442,9 @@ R_API void r_anal_rtti_msvc_print_complete_object_locator(RVTableContext *contex
 }
 
 R_API void r_anal_rtti_msvc_print_type_descriptor(RVTableContext *context, ut64 addr, int mode) {
-	rtti_type_descriptor td = { 0 };
+	rtti_type_descriptor td = {0};
 	if (!rtti_msvc_read_type_descriptor (context, addr, &td)) {
-		eprintf ("Failed to parse Type Descriptor at 0x%08"PFMT64x"\n", addr);
+		R_LOG_ERROR ("Failed to parse Type Descriptor at 0x%08"PFMT64x, addr);
 		return;
 	}
 
@@ -463,7 +466,7 @@ R_API void r_anal_rtti_msvc_print_type_descriptor(RVTableContext *context, ut64 
 R_API void r_anal_rtti_msvc_print_class_hierarchy_descriptor(RVTableContext *context, ut64 addr, int mode) {
 	rtti_class_hierarchy_descriptor chd;
 	if (!rtti_msvc_read_class_hierarchy_descriptor (context, addr, &chd)) {
-		eprintf ("Failed to parse Class Hierarchy Descriptor at 0x%08"PFMT64x"\n", addr);
+		R_LOG_ERROR ("Failed to parse Class Hierarchy Descriptor at 0x%08"PFMT64x, addr);
 		return;
 	}
 
@@ -483,7 +486,7 @@ R_API void r_anal_rtti_msvc_print_class_hierarchy_descriptor(RVTableContext *con
 R_API void r_anal_rtti_msvc_print_base_class_descriptor(RVTableContext *context, ut64 addr, int mode) {
 	rtti_base_class_descriptor bcd;
 	if (!rtti_msvc_read_base_class_descriptor (context, addr, &bcd)) {
-		eprintf ("Failed to parse Base Class Descriptor at 0x%08"PFMT64x"\n", addr);
+		R_LOG_ERROR ("Failed to parse Base Class Descriptor at 0x%08"PFMT64x, addr);
 		return;
 	}
 
@@ -514,17 +517,17 @@ static bool rtti_msvc_print_complete_object_locator_recurse(RVTableContext *cont
 	rtti_complete_object_locator col;
 	if (!rtti_msvc_read_complete_object_locator (context, colAddr, &col)) {
 		if (!strict) {
-			eprintf ("Failed to parse Complete Object Locator at 0x%08"PFMT64x" (referenced from 0x%08"PFMT64x")\n", colAddr, colRefAddr);
+			R_LOG_ERROR ("Failed to parse Complete Object Locator at 0x%08"PFMT64x" (referenced from 0x%08"PFMT64x")", colAddr, colRefAddr);
 		}
 		return false;
 	}
 
 	// type descriptor
 	ut64 typeDescriptorAddr = rtti_msvc_addr (context, colAddr, col.object_base, col.type_descriptor_addr);
-	rtti_type_descriptor td = { 0 };
+	rtti_type_descriptor td = {0};
 	if (!rtti_msvc_read_type_descriptor (context, typeDescriptorAddr, &td)) {
 		if (!strict) {
-			eprintf ("Failed to parse Type Descriptor at 0x%08"PFMT64x"\n", typeDescriptorAddr);
+			R_LOG_ERROR ("Failed to parse Type Descriptor at 0x%08"PFMT64x, typeDescriptorAddr);
 		}
 		return false;
 	}
@@ -534,7 +537,7 @@ static bool rtti_msvc_print_complete_object_locator_recurse(RVTableContext *cont
 	rtti_class_hierarchy_descriptor chd;
 	if (!rtti_msvc_read_class_hierarchy_descriptor (context, classHierarchyDescriptorAddr, &chd)) {
 		if (!strict) {
-			eprintf ("Failed to parse Class Hierarchy Descriptor at 0x%08"PFMT64x"\n", classHierarchyDescriptorAddr);
+			R_LOG_ERROR ("Failed to parse Class Hierarchy Descriptor at 0x%08"PFMT64x, classHierarchyDescriptorAddr);
 		}
 		rtti_type_descriptor_fini (&td);
 		return false;
@@ -550,7 +553,7 @@ static bool rtti_msvc_print_complete_object_locator_recurse(RVTableContext *cont
 	RList *baseClassArray = rtti_msvc_read_base_class_array (context, chd.num_base_classes, base, baseClassArrayOffset);
 	if (!baseClassArray) {
 		if (!strict) {
-			eprintf ("Failed to parse Base Class Array starting at 0x%08"PFMT64x"\n", base + baseClassArrayOffset);
+			R_LOG_ERROR ("Failed to parse Base Class Array starting at 0x%08"PFMT64x, base + baseClassArrayOffset);
 		}
 		rtti_type_descriptor_fini (&td);
 		return false;
@@ -591,7 +594,7 @@ static bool rtti_msvc_print_complete_object_locator_recurse(RVTableContext *cont
 		}
 
 		ut64 baseTypeDescriptorAddr = rtti_msvc_addr (context, colAddr, col.object_base, bcd->type_descriptor_addr);
-		rtti_type_descriptor btd = { 0 };
+		rtti_type_descriptor btd = {0};
 		if (rtti_msvc_read_type_descriptor (context, baseTypeDescriptorAddr, &btd)) {
 			if (use_json) {
 				pj_k (pj, "type_desc");
@@ -602,7 +605,7 @@ static bool rtti_msvc_print_complete_object_locator_recurse(RVTableContext *cont
 			rtti_type_descriptor_fini (&btd);
 		} else {
 			if (!strict) {
-				eprintf ("Failed to parse Type Descriptor at 0x%08"PFMT64x"\n", baseTypeDescriptorAddr);
+				R_LOG_ERROR ("Failed to parse Type Descriptor at 0x%08"PFMT64x, baseTypeDescriptorAddr);
 			}
 		}
 
@@ -766,7 +769,7 @@ RecoveryCompleteObjectLocator *recovery_anal_complete_object_locator(RRTTIMSVCAn
 		}
 		if (!td->valid) {
 			if (context->vt_context->anal->verbose) {
-				eprintf ("Warning: type descriptor of base is invalid.\n");
+				R_LOG_WARN ("type descriptor of base is invalid");
 			}
 			continue;
 		}
@@ -781,7 +784,7 @@ RecoveryCompleteObjectLocator *recovery_anal_complete_object_locator(RRTTIMSVCAn
 RecoveryTypeDescriptor *recovery_anal_type_descriptor(RRTTIMSVCAnalContext *context, ut64 addr, RecoveryCompleteObjectLocator *col) {
 	RecoveryTypeDescriptor *td = ht_up_find (context->addr_td, addr, NULL);
 	if (td) {
-		if (col != NULL) {
+		if (col) {
 			td->col = col;
 		}
 		return td;
@@ -811,7 +814,7 @@ static char *unique_class_name(RAnal *anal, const char *original_name) {
 
 	char *name = NULL;
 	if (anal->verbose) {
-		eprintf ("Warning: class name %s already taken!\n", original_name);
+		R_LOG_WARN ("class name %s already taken!", original_name);
 	}
 	int i = 1;
 
@@ -855,14 +858,14 @@ static void recovery_apply_bases(RRTTIMSVCAnalContext *context, const char *clas
 	r_vector_foreach (base_descs, base_desc) {
 		RecoveryTypeDescriptor *base_td = base_desc->td;
 		if (!base_td->valid) {
-			eprintf ("Warning Base td is invalid!\n");
+			R_LOG_WARN ("Invalid base td");
 			continue;
 		}
 
 		const char *base_class_name;
 		if (!base_td->col) {
 			if (context->vt_context->anal->verbose) {
-				eprintf ("Warning: Base td %s has no col. Falling back to recovery from td only.\n", base_td->td.name);
+				R_LOG_WARN ("Base td %s has no col. Falling back to recovery from td only", base_td->td.name);
 			}
 			base_class_name = recovery_apply_type_descriptor (context, base_td);
 		} else {
@@ -871,7 +874,7 @@ static void recovery_apply_bases(RRTTIMSVCAnalContext *context, const char *clas
 
 		if (!base_class_name) {
 			if (context->vt_context->anal->verbose) {
-				eprintf ("Failed to convert !base td->col or td to a class\n");
+				R_LOG_WARN ("Failed to convert !base td->col or td to a class");
 			}
 			continue;
 		}
@@ -893,7 +896,7 @@ static const char *recovery_apply_complete_object_locator(RRTTIMSVCAnalContext *
 
 	if (!col->td) {
 		if (context->vt_context->anal->verbose) {
-			eprintf ("Warning: no td for col at 0x%"PFMT64x"\n", col->addr);
+			R_LOG_WARN ("no td for col at 0x%"PFMT64x, col->addr);
 		}
 		return NULL;
 	}
@@ -901,14 +904,14 @@ static const char *recovery_apply_complete_object_locator(RRTTIMSVCAnalContext *
 	RAnal *anal = context->vt_context->anal;
 
 	const char *existing = ht_up_find (context->col_td_classes, col->addr, NULL);
-	if (existing != NULL) {
+	if (existing) {
 		return existing;
 	}
 
 	char *name = r_anal_rtti_msvc_demangle_class_name (context->vt_context, col->td->td.name);
 	if (!name) {
 		if (context->vt_context->anal->verbose) {
-			eprintf ("Failed to demangle a class name: \"%s\"\n", col->td->td.name);
+			R_LOG_ERROR ("Failed to demangle a class name: \"%s\"", col->td->td.name);
 		}
 		name = strdup (col->td->td.name);
 		if (!name) {
@@ -942,14 +945,14 @@ static const char *recovery_apply_type_descriptor(RRTTIMSVCAnalContext *context,
 	RAnal *anal = context->vt_context->anal;
 
 	const char *existing = ht_up_find (context->col_td_classes, td->addr, NULL);
-	if (existing != NULL) {
+	if (existing) {
 		return existing;
 	}
 
 	char *name = r_anal_rtti_msvc_demangle_class_name (context->vt_context, td->td.name);
 	if (!name) {
 		if (context->vt_context->anal->verbose) {
-			eprintf("Failed to demangle a class name: \"%s\"\n", td->td.name);
+			R_LOG_ERROR ("Failed to demangle a class name: \"%s\"", td->td.name);
 		}
 		name = strdup (td->td.name);
 		if (!name) {

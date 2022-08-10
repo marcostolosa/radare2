@@ -45,10 +45,10 @@ R_API int r_socket_rap_client_open(RSocket *s, const char *file, int rw) {
 		if (buf[0] == (char)(RAP_PACKET_OPEN | RAP_PACKET_REPLY)) {
 			fd = r_read_at_be32 (buf + 1, 1);
 		} else {
-			eprintf ("RapClientOpen: Bad packet 0x%02x\n", buf[0]);
+			R_LOG_ERROR ("RapClientOpen: Bad packet 0x%02x", buf[0]);
 		}
 	} else {
-		eprintf ("Cannot read 5 bytes from server\n");
+		R_LOG_ERROR ("Cannot read 5 bytes from server");
 	}
 	free (buf);
 	return fd;
@@ -93,17 +93,17 @@ R_API char *r_socket_rap_client_command(RSocket *s, const char *cmd, RCoreBind *
 		(void) r_socket_read_block (s, (ut8*)bufr, 5);
 	}
 	if (bufr[0] != (char)(RAP_PACKET_CMD | RAP_PACKET_REPLY)) {
-		eprintf ("Error: Wrong reply for command 0x%02x\n", bufr[0]);
+		R_LOG_ERROR ("Wrong reply for command 0x%02x", bufr[0]);
 		return NULL;
 	}
 	size_t cmd_len = r_read_at_be32 (bufr, 1);
 	if (cmd_len < 1 || cmd_len > 16384) {
-		eprintf ("Error: cmd_len is wrong\n");
+		R_LOG_ERROR ("cmd_len is wrong");
 		return NULL;
 	}
 	char *cmd_output = calloc (1, cmd_len + 1);
 	if (!cmd_output) {
-		eprintf ("Error: Allocating cmd output\n");
+		R_LOG_ERROR ("Allocating cmd output");
 		return NULL;
 	}
 	r_socket_read_block (s, (ut8*)cmd_output, cmd_len);
@@ -163,8 +163,7 @@ R_API int r_socket_rap_client_read(RSocket *s, ut8 *buf, int count) {
 	// recv
 	int ret = r_socket_read_block (s, tmp, 5);
 	if (ret != 5 || tmp[0] != (RAP_PACKET_READ | RAP_PACKET_REPLY)) {
-		eprintf ("__rap_read: Unexpected rap read reply "
-			"(%d=0x%02x) expected (%d=0x%02x)\n",
+		eprintf ("__rap_read: Unexpected rap read reply (%d=0x%02x) expected (%d=0x%02x)\n",
 			ret, tmp[0], 2, (RAP_PACKET_READ | RAP_PACKET_REPLY));
 		return -1;
 	}

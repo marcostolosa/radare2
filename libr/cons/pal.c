@@ -23,6 +23,7 @@ static struct {
 	{ "flow", r_offsetof (RConsPrintablePalette, flow), r_offsetof (RConsPalette, flow) },
 	{ "flow2", r_offsetof (RConsPrintablePalette, flow2), r_offsetof (RConsPalette, flow2) },
 	{ "prompt", r_offsetof (RConsPrintablePalette, prompt), r_offsetof (RConsPalette, prompt) },
+	{ "bgprompt", r_offsetof (RConsPrintablePalette, bgprompt), r_offsetof (RConsPalette, bgprompt) },
 	{ "offset", r_offsetof (RConsPrintablePalette, offset), r_offsetof (RConsPalette, offset) },
 	{ "input", r_offsetof (RConsPrintablePalette, input), r_offsetof (RConsPalette, input) },
 	{ "invalid", r_offsetof (RConsPrintablePalette, invalid), r_offsetof (RConsPalette, invalid) },
@@ -205,6 +206,7 @@ R_API void r_cons_pal_init(RConsContext *ctx) {
 	ctx->cpal.pop                = (RColor) RColor_MAGENTA;
 	// ctx->cpal.pop.attr           = R_CONS_ATTR_BOLD;
 	ctx->cpal.prompt             = (RColor) RColor_YELLOW;
+	ctx->cpal.bgprompt           = (RColor) RColor_NULL;
 	ctx->cpal.push               = (RColor) RColor_MAGENTA;
 	ctx->cpal.crypto             = (RColor) RColor_BGBLUE;
 	ctx->cpal.reg                = (RColor) RColor_CYAN;
@@ -315,7 +317,7 @@ R_API char *r_cons_pal_parse(const char *str, R_NULLABLE RColor *outcol) {
 		if (!outcol) {
 			r_cons_rgb_str (out, sizeof (out), &rcolor);
 		}
-	} else if (!strncmp (fgcolor, "#", 1)) { // "#00ff00" HTML format
+	} else if (fgcolor[0] == '#') { // "#00ff00" HTML format
 		if (strlen (fgcolor + 1) == 6) {
 			const char *kule = fgcolor + 1;
 			rcolor.r = rgbnum (kule[0], kule[1]);
@@ -325,9 +327,9 @@ R_API char *r_cons_pal_parse(const char *str, R_NULLABLE RColor *outcol) {
 				r_cons_rgb_str (out, sizeof (out), &rcolor);
 			}
 		} else {
-			eprintf ("Invalid html color code\n");
+			R_LOG_WARN ("Invalid html color code");
 		}
-	} else if (!strncmp (fgcolor, "rgb:", 4)) { // "rgb:123" rgb format
+	} else if (r_str_startswith (fgcolor, "rgb:")) { // "rgb:123" rgb format
 		if (strlen (fgcolor + 4) == 3) { // "rgb:RGB"
 			rcolor.r = rgbnum (fgcolor[4], '0');
 			rcolor.g = rgbnum (fgcolor[5], '0');
@@ -345,7 +347,7 @@ R_API char *r_cons_pal_parse(const char *str, R_NULLABLE RColor *outcol) {
 		}
 	}
 	// Handle second color (bgcolor)
-	if (bgcolor && !strncmp (bgcolor, "rgb:", 4)) { // "rgb:123" rgb format
+	if (bgcolor && r_str_startswith (bgcolor, "rgb:")) { // "rgb:123" rgb format
 		rcolor.a |= ALPHA_BG;
 		if (strlen (bgcolor + 4) == 3) {
 			rcolor.r2 = rgbnum (bgcolor[4], '0');
@@ -390,18 +392,18 @@ R_API char *r_cons_pal_parse(const char *str, R_NULLABLE RColor *outcol) {
 		// Parse extra attributes.
 		const char *p = attr;
 		while (p) {
-			if (!strncmp(p, "bold", 4)) {
+			if (r_str_startswith (p, "bold")) {
 				rcolor.attr |= R_CONS_ATTR_BOLD;
-			} else if (!strncmp(p, "dim", 3)) {
+			} else if (r_str_startswith (p, "dim")) {
 				rcolor.attr |= R_CONS_ATTR_DIM;
-			} else if (!strncmp(p, "italic", 6)) {
+			} else if (r_str_startswith (p, "italic")) {
 				rcolor.attr |= R_CONS_ATTR_ITALIC;
-			} else if (!strncmp(p, "underline", 9)) {
+			} else if (r_str_startswith (p, "underline")) {
 				rcolor.attr |= R_CONS_ATTR_UNDERLINE;
-			} else if (!strncmp(p, "blink", 5)) {
+			} else if (r_str_startswith (p, "blink")) {
 				rcolor.attr |= R_CONS_ATTR_BLINK;
 			} else {
-				eprintf ("Failed to parse terminal attributes: %s\n", p);
+				R_LOG_ERROR ("Failed to parse terminal attributes: %s", p);
 				break;
 			}
 			p = strchr (p, ' ');
@@ -553,16 +555,16 @@ R_API void r_cons_pal_list(int rad, const char *arg) {
 			}
 			hasnext = (keys[i + 1].name) ? "\n" : "";
 			// TODO Need to replace the '.' char because this is not valid CSS
-			char *name = strdup (keys[i].name);
-			int j, len = strlen (name);
+			char *sname = strdup (keys[i].name);
+			int j, len = strlen (sname);
 			for (j = 0; j < len; j++) {
-				if (name[j] == '.') {
-					name[j] = '_';
+				if (sname[j] == '.') {
+					sname[j] = '_';
 				}
 			}
 			r_cons_printf (".%s%s { color: rgb(%d, %d, %d); }%s",
-				prefix, name, rcolor->r, rcolor->g, rcolor->b, hasnext);
-			free (name);
+				prefix, sname, rcolor->r, rcolor->g, rcolor->b, hasnext);
+			free (sname);
 			}
 			break;
 		case 'h':
@@ -625,7 +627,7 @@ R_API int r_cons_pal_set(const char *key, const char *val) {
 			return true;
 		}
 	}
-	eprintf ("r_cons_pal_set: Invalid color %s\n", key);
+	R_LOG_ERROR ("r_cons_pal_set: Invalid color %s", key);
 	return false;
 }
 
@@ -644,7 +646,10 @@ R_API RColor r_cons_pal_get(const char *key) {
 
 /* Get the RColor at specified index */
 R_API RColor r_cons_pal_get_i(int index) {
-	return *(RCOLOR_AT (index));
+	if (index >= 0 && index < keys_len) {
+		return *(RCOLOR_AT (index));
+	}
+	return *(RCOLOR_AT (0));
 }
 
 /* Get color name at index */

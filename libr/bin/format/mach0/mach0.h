@@ -122,6 +122,8 @@ struct MACH0_(opts_t) {
 	bool verbose;
 	ut64 header_at;
 	ut64 symbols_off;
+	int maxsymlen;
+	RBinFile *bf;
 };
 
 struct MACH0_(obj_t) {
@@ -130,6 +132,7 @@ struct MACH0_(obj_t) {
 	char *intrp;
 	char *compiler;
 	int nsegs;
+	int segs_count;
 	struct r_dyld_chained_starts_in_segment **chained_starts;
 	struct dyld_chained_fixups_header fixups_header;
 	ut64 fixups_offset;
@@ -143,6 +146,7 @@ struct MACH0_(obj_t) {
 	int nsymtab;
 	ut32 *indirectsyms;
 	int nindirectsyms;
+	int maxsymlen;
 
 	RBinImport **imports_by_ord;
 	size_t imports_by_ord_size;
@@ -193,6 +197,10 @@ struct MACH0_(obj_t) {
 	ut64 main_addr;
 	int (*original_io_read)(RIO *io, RIODesc *fd, ut8 *buf, int count);
 	bool rebasing_buffer;
+	RList *symbols_cache;
+	RList *sections_cache;
+	ut8 *internal_buffer;
+	int internal_buffer_size;
 };
 
 typedef struct {

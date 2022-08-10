@@ -106,7 +106,7 @@ static const char *file_or_fd(RMagic *ms, const char *inname, int fd) {
 	 * one extra for terminating '\0', and
 	 * some overlapping space for matches near EOF
 	 */
-#define SLOP (1 + sizeof(union VALUETYPE))
+#define SLOP (1 + sizeof (union VALUETYPE))
 	if (!(buf = malloc (HOWMANY + SLOP))) {
 		return NULL;
 	}
@@ -126,7 +126,7 @@ static const char *file_or_fd(RMagic *ms, const char *inname, int fd) {
 			ispipe = true;
 		}
 	} else {
-		int flags = O_RDONLY|O_BINARY;
+		int flags = O_RDONLY | O_BINARY;
 
 		if (stat (inname, &sb) == 0 && S_ISFIFO (sb.st_mode)) {
 #if O_NONBLOCK
@@ -255,13 +255,13 @@ R_API bool r_magic_load(RMagic* ms, const char *magicfile) {
 R_API bool r_magic_compile(RMagic *ms, const char *magicfile) {
 	struct mlist *ml = file_apprentice (ms, magicfile, strlen (magicfile), FILE_COMPILE);
 	free_mlist (ml);
-	return ml != NULL;
+	return ml;
 }
 
 R_API bool r_magic_check(RMagic *ms, const char *magicfile) {
 	struct mlist *ml = file_apprentice (ms, magicfile, strlen (magicfile), FILE_CHECK);
 	free_mlist (ml);
-	return ml != NULL;
+	return ml;
 }
 
 R_API const char* r_magic_descriptor(RMagic *ms, int fd) {

@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2013-2021 - pancake */
+/* radare2 - LGPL - Copyright 2013-2022 - pancake */
 
 #include <r_asm.h>
 #include <r_lib.h>
@@ -37,7 +37,7 @@ static bool check_features(RAsm *a, cs_insn *insn) {
 		if (!name) {
 			return true;
 		}
-		if (!strstr (a->features, name)) {
+		if (a->config->features && !strstr (a->config->features, name)) {
 			return false;
 		}
 	}
@@ -111,34 +111,36 @@ static void check_itblock(RAsm *a, cs_insn *insn) {
 }
 
 static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
-	static int omode = -1;
-	static int obits = 32;
-	bool disp_hash = a->immdisp;
+	static R_TH_LOCAL int omode = -1;
+	static R_TH_LOCAL int obits = 32;
 	cs_insn* insn = NULL;
 	int ret, n = 0;
 	bool found = false;
 	ut64 itcond;
+	const int bits = a->config->bits;
 
 	cs_mode mode = 0;
-	mode |= (a->bits == 16)? CS_MODE_THUMB: CS_MODE_ARM;
-	mode |= (a->big_endian)? CS_MODE_BIG_ENDIAN: CS_MODE_LITTLE_ENDIAN;
-	if (mode != omode || a->bits != obits) {
+	mode |= (bits == 16)? CS_MODE_THUMB: CS_MODE_ARM;
+	mode |= (a->config->big_endian)? CS_MODE_BIG_ENDIAN: CS_MODE_LITTLE_ENDIAN;
+	if (mode != omode || bits != obits) {
 		cs_close (&cd);
 		cd = 0; // unnecessary
 		omode = mode;
-		obits = a->bits;
+		obits = bits;
 	}
 
-	if (a->cpu) {
-		if (strstr (a->cpu, "cortex")) {
+	const char *cpu = a->config->cpu;
+	if (R_STR_ISNOTEMPTY (cpu)) {
+		if (strstr (cpu, "cortex")) {
 			mode |= CS_MODE_MCLASS;
 		}
-		if (a->bits != 64 && strstr (a->cpu, "v8")) {
+		if (bits != 64 && strstr (cpu, "v8")) {
 			mode |= CS_MODE_V8;
 		}
 	}
-	if (a->features && a->bits != 64) {
-		if (strstr (a->features, "v8")) {
+	const char *features = a->config->features;
+	if (features && bits != 64) {
+		if (strstr (features, "v8")) {
 			mode |= CS_MODE_V8;
 		}
 	}
@@ -146,8 +148,13 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 		op->size = 4;
 		r_strbuf_set (&op->buf_asm, "");
 	}
+	bool needs_init = cd != 0;
 	if (!cd || mode != omode) {
-		ret = (a->bits == 64)?
+		if (!needs_init) {
+			cs_close (&cd);
+			cd = 0;
+		}
+		ret = (bits == 64)?
 			cs_open (CS_ARCH_ARM64, mode, &cd):
 			cs_open (CS_ARCH_ARM, mode, &cd);
 		if (ret) {
@@ -155,12 +162,13 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 			goto beach;
 		}
 	}
-	cs_option (cd, CS_OPT_SYNTAX, (a->syntax == R_ASM_SYNTAX_REGNUM)
-			? CS_OPT_SYNTAX_NOREGNAME
-			: CS_OPT_SYNTAX_DEFAULT);
-	cs_option (cd, CS_OPT_DETAIL, (a->features && *a->features)
-		? CS_OPT_ON: CS_OPT_OFF);
-	cs_option (cd, CS_OPT_DETAIL, CS_OPT_ON);
+	if (!needs_init) {
+		cs_option (cd, CS_OPT_SYNTAX, (a->config->syntax == R_ASM_SYNTAX_REGNUM)
+				? CS_OPT_SYNTAX_NOREGNAME
+				: CS_OPT_SYNTAX_DEFAULT);
+		cs_option (cd, CS_OPT_DETAIL, R_STR_ISNOTEMPTY (features) ? CS_OPT_ON: CS_OPT_OFF);
+		cs_option (cd, CS_OPT_DETAIL, CS_OPT_ON);
+	}
 	if (!buf) {
 		goto beach;
 	}
@@ -177,7 +185,7 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 	if (op) {
 		op->size = 0;
 	}
-	if (a->features && *a->features) {
+	if (R_STR_ISNOTEMPTY (features)) {
 		if (!check_features (a, insn) && op) {
 			op->size = insn->size;
 			r_strbuf_set (&op->buf_asm, "illegal");
@@ -205,14 +213,12 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 			insn->mnemonic,
 			insn->op_str[0]? " ": "",
 			insn->op_str);
-		if (!disp_hash) {
-			r_str_replace_char (opstr, '#', 0);
-		}
+		r_str_replace_char (opstr, '#', '\x00');
 		r_strbuf_set (&op->buf_asm, opstr);
 	}
 	cs_free (insn, n);
 	beach:
-	cs_close (&cd);
+	// cs_close (&cd);
 	if (op) {
 		if (!*r_strbuf_get (&op->buf_asm)) {
 			r_strbuf_set (&op->buf_asm, "invalid");
@@ -223,17 +229,18 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 }
 
 static int assemble(RAsm *a, RAsmOp *op, const char *buf) {
-	const bool is_thumb = (a->bits == 16);
+	const int bits = a->config->bits;
+	const bool is_thumb = (bits == 16);
 	int opsize;
 	ut32 opcode = UT32_MAX;
-	if (a->bits == 64) {
+	if (bits == 64) {
 		if (!arm64ass (buf, a->pc, &opcode)) {
 			return -1;
 		}
 	} else {
 		opcode = armass_assemble (buf, a->pc, is_thumb);
-		if (a->bits != 32 && a->bits != 16) {
-			eprintf ("Error: ARM assembler only supports 16 or 32 bits\n");
+		if (bits != 32 && bits != 16) {
+			R_LOG_ERROR ("ARM assembler only supports 16 or 32 bits");
 			return -1;
 		}
 	}
@@ -241,18 +248,19 @@ static int assemble(RAsm *a, RAsmOp *op, const char *buf) {
 		return -1;
 	}
 	ut8 opbuf[4];
+	const bool be = a->config->big_endian;
 	if (is_thumb) {
 		const int o = opcode >> 16;
 		opsize = o > 0? 4: 2;
 		if (opsize == 4) {
-			if (a->big_endian) {
+			if (be) {
 				r_write_le16 (opbuf, opcode >> 16);
 				r_write_le16 (opbuf + 2, opcode & UT16_MAX);
 			} else {
 				r_write_be32 (opbuf, opcode);
 			}
 		} else if (opsize == 2) {
-			if (a->big_endian) {
+			if (be) {
 				r_write_le16 (opbuf, opcode & UT16_MAX);
 			} else {
 				r_write_be16 (opbuf, opcode & UT16_MAX);
@@ -260,7 +268,7 @@ static int assemble(RAsm *a, RAsmOp *op, const char *buf) {
 		}
 	} else {
 		opsize = 4;
-		if (a->big_endian) {
+		if (be) {
 			r_write_le32 (opbuf, opcode);
 		} else {
 			r_write_be32 (opbuf, opcode);

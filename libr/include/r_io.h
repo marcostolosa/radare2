@@ -10,9 +10,9 @@
 #include "r_skyline.h"
 #include <r_util/r_w32dw.h>
 
-#define R_IO_SEEK_SET	0
-#define R_IO_SEEK_CUR	1
-#define R_IO_SEEK_END	2
+#define R_IO_SEEK_SET 0
+#define R_IO_SEEK_CUR 1
+#define R_IO_SEEK_END 2
 
 #define R_IO_UNDOS 64
 
@@ -135,7 +135,7 @@ typedef struct r_io_t {
 	char *args;
 	REvent *event;
 	PrintfCallback cb_printf;
-	RCoreBind corebind;
+	RCoreBind coreb;
 	// TODO Wrap ... well its more like a proxy, should unify across OS instead of using separate apis
 	bool want_ptrace_wrap;
 #if __WINDOWS__
@@ -225,6 +225,7 @@ typedef struct r_io_bank_t {
 	RQueue *todo;	// needed for operating on submap tree
 	RRBNode *last_used;
 	ut32 id;	// for fast selection with RIDStorage
+	bool drain_me;	// speedup r_io_nread_at
 } RIOBank;
 
 typedef struct r_io_cache_t {
@@ -327,7 +328,7 @@ R_API bool r_io_map_exists_for_id(RIO *io, ut32 id);
 R_API RIOMap *r_io_map_get(RIO *io, ut32 id);
 R_API RIOMap *r_io_map_add(RIO *io, int fd, int flags, ut64 delta, ut64 addr, ut64 size);
 R_API RIOMap *r_io_map_add_bottom(RIO *io, int fd, int flags, ut64 delta, ut64 addr, ut64 size);
-R_API RIOMap *r_io_map_get_at(RIO *io, ut64 addr);		//returns the map at vaddr with the highest priority
+R_API RIOMap *r_io_map_get_at(RIO *io, ut64 vaddr); // returns the map at vaddr with the highest priority
 R_API RIOMap *r_io_map_get_by_ref(RIO *io, RIOMapRef *ref);
 R_API bool r_io_map_is_mapped(RIO* io, ut64 addr);
 R_API RIOMap *r_io_map_get_paddr(RIO *io, ut64 paddr);		//returns the map at paddr with the highest priority
@@ -415,7 +416,7 @@ R_API bool r_io_shift(RIO *io, ut64 start, ut64 end, st64 move);
 R_API ut64 r_io_seek(RIO *io, ut64 offset, int whence);
 R_API void r_io_fini(RIO *io);
 R_API void r_io_free(RIO *io);
-#define r_io_bind_init(x) memset(&x,0,sizeof(x))
+#define r_io_bind_init(x) memset (&(x), 0, sizeof (x))
 
 R_API bool r_io_plugin_init(RIO *io);
 R_API bool r_io_plugin_add(RIO *io, RIOPlugin *plugin);
@@ -585,6 +586,7 @@ extern RIOPlugin r_io_plugin_gprobe;
 extern RIOPlugin r_io_plugin_fd;
 extern RIOPlugin r_io_plugin_socket;
 extern RIOPlugin r_io_plugin_isotp;
+extern RIOPlugin r_io_plugin_xalz;
 
 #if __cplusplus
 }

@@ -6,10 +6,10 @@
 #include <ctype.h>
 #include <limits.h>
 
-static int mousemode = 0;
-static int disMode = 0;
-static int discroll = 0;
-static bool graphCursor = false;
+static R_TH_LOCAL int mousemode = 0;
+static R_TH_LOCAL int disMode = 0;
+static R_TH_LOCAL int discroll = 0;
+static R_TH_LOCAL bool graphCursor = false;
 static const char *mousemodes[] = {
 	"canvas-y",
 	"canvas-x",
@@ -318,7 +318,9 @@ static void mini_RANode_print(const RAGraph *g, const RANode *n, int cur, bool d
 				snprintf (title, sizeof (title) - 1, "__%s__", str);
 			}
 			append_shortcut (g, title, n->title, sizeof (title) - strlen (title));
-			W (r_str_ansi_crop (title, delta_x, 0, 20, 1));
+			char *res = r_str_ansi_crop (title, delta_x, 0, 20, 1);
+			W (res);
+			free (res);
 		}
 	} else {
 		snprintf (title, sizeof (title) - 1,
@@ -2178,7 +2180,7 @@ static char *get_bb_body(RCore *core, RAnalBlock *b, int opts, RAnalFunction *fc
 		if (b->jump > b->addr) {
 			RAnalBlock *jumpbb = r_anal_get_block_at (b->anal, b->jump);
 			if (jumpbb && r_list_contains (jumpbb->fcns, fcn)) {
-				if (emu && core->anal->last_disasm_reg != NULL && !jumpbb->parent_reg_arena) {
+				if (emu && core->anal->last_disasm_reg && !jumpbb->parent_reg_arena) {
 					jumpbb->parent_reg_arena = r_reg_arena_dup (core->anal->reg, core->anal->last_disasm_reg);
 				}
 				if (jumpbb->parent_stackptr == INT_MAX) {
@@ -2191,7 +2193,7 @@ static char *get_bb_body(RCore *core, RAnalBlock *b, int opts, RAnalFunction *fc
 		if (b->fail > b->addr) {
 			RAnalBlock *failbb = r_anal_get_block_at (b->anal, b->fail);
 			if (failbb && r_list_contains (failbb->fcns, fcn)) {
-				if (emu && core->anal->last_disasm_reg != NULL && !failbb->parent_reg_arena) {
+				if (emu && core->anal->last_disasm_reg && !failbb->parent_reg_arena) {
 					failbb->parent_reg_arena = r_reg_arena_dup (core->anal->reg, core->anal->last_disasm_reg);
 				}
 				if (failbb->parent_stackptr == INT_MAX) {
@@ -2485,7 +2487,7 @@ static bool get_cgnodes(RAGraph *g, RCore *core, RAnalFunction *fcn) {
 	refs = r_anal_function_get_refs (fcn);
 	r_list_foreach (refs, iter, ref) {
 		title = get_title (ref->addr);
-		if (r_agraph_get_node (g, title) != NULL) {
+		if (r_agraph_get_node (g, title)) {
 			continue;
 		}
 		free (title);
@@ -2975,10 +2977,6 @@ static void agraph_print_edges(RAGraph *g) {
 					style.color = LINE_NONE;
 					break;
 				}
-			}
-			if (!*b->title) {
-				/// XXX non-colorized edges happen because of those ghost nodes
-				// eprintf ("%s|%s%c", a->title, b->title, 10);
 			}
 			if (!R_STR_ISEMPTY (a->title) && !R_STR_ISEMPTY (b->title)) {
 				ut64 aa = r_num_get (NULL, a->title);
@@ -3490,9 +3488,7 @@ static int agraph_print(RAGraph *g, int is_interactive, RCore *core, RAnalFuncti
 			w - title_len, 1, ' ');
 	}
 
-
 	r_cons_canvas_print_region (g->can);
-
 
 	if (is_interactive) {
 		r_cons_newline ();
@@ -4261,8 +4257,8 @@ R_API int r_core_visual_graph(RCore *core, RAGraph *g, RAnalFunction *_fcn, int 
 		h = 25;
 		can = r_cons_canvas_new (w, h);
 		if (!can) {
-			eprintf ("Cannot create RCons.canvas context. Invalid screen "
-					"size? See scr.columns + scr.rows\n");
+			R_LOG_ERROR ("Cannot create RCons.canvas context. Invalid screen "
+					"size? See scr.columns + scr.rows");
 			r_config_hold_free (hc);
 			return false;
 		}
@@ -4328,7 +4324,7 @@ R_API int r_core_visual_graph(RCore *core, RAGraph *g, RAnalFunction *_fcn, int 
 	grd->fs = is_interactive == 1;
 	grd->core = core;
 	grd->follow_offset = _fcn == NULL;
-	grd->fcn = fcn != NULL? &fcn: NULL;
+	grd->fcn = fcn? &fcn: NULL;
 	ret = agraph_refresh (grd);
 	if (!ret || is_interactive != 1) {
 		r_cons_newline ();
@@ -4604,7 +4600,7 @@ R_API int r_core_visual_graph(RCore *core, RAGraph *g, RAnalFunction *_fcn, int 
 			if (undo) {
 				r_core_seek (core, undo->off, false);
 			} else {
-				eprintf ("Cannot undo\n");
+				R_LOG_ERROR ("Cannot undo");
 			}
 			if (r_config_get_i (core->config, "graph.few")) {
 				g->need_reload_nodes = true;
@@ -4617,7 +4613,7 @@ R_API int r_core_visual_graph(RCore *core, RAGraph *g, RAnalFunction *_fcn, int 
 			if (undo) {
 				r_core_seek (core, undo->off, false);
 			} else {
-				eprintf ("Cannot redo\n");
+				R_LOG_ERROR ("Cannot redo");
 			}
 			if (r_config_get_i (core->config, "graph.few")) {
 				g->need_reload_nodes = true;
@@ -5050,7 +5046,7 @@ R_API RAGraph *create_agraph_from_graph(const RGraph/*<RGraphNodeInfo>*/ *graph)
 	}
 	result_agraph->need_reload_nodes = false;
 	// Cache lookup to build edges
-	HtPPOptions pointer_options = { 0 };
+	HtPPOptions pointer_options = {0};
 	HtPP /*<RGraphNode *node, RANode *anode>*/ *hashmap = ht_pp_new_opt (&pointer_options);
 	
 	if (!hashmap) {

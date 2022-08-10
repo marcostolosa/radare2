@@ -224,11 +224,6 @@ static int r_line_readchar_utf8(ut8 *s, int slen) {
 		return -1;
 	}
 	*s = ch;
-#if 0
-	if ((t = read (0, s, 1)) != 1) {
-		return t;
-	}
-#endif
 	*s = r_cons_controlz (*s);
 	if (*s < 0x80) {
 		len = 1;
@@ -245,7 +240,7 @@ static int r_line_readchar_utf8(ut8 *s, int slen) {
 		return -1;
 	}
 	for (i = 1; i < len; i++) {
-		int ch = r_cons_readchar ();
+		ch = r_cons_readchar ();
 		if (ch != -1) {
 			s[i] = ch;
 		}
@@ -260,8 +255,7 @@ static int r_line_readchar_utf8(ut8 *s, int slen) {
 
 #if __WINDOWS__
 static int r_line_readchar_win(ut8 *s, int slen) { // this function handle the input in console mode
-	r_sys_backtrace();
-	INPUT_RECORD irInBuf = { { 0 } };
+	INPUT_RECORD irInBuf = { {0} };
 	BOOL ret;
 	DWORD mode, out;
 	char buf[5] = {0};
@@ -515,22 +509,28 @@ R_API void r_line_hist_free(void) {
 }
 
 /* load history from file. TODO: if file == NULL load from ~/.<prg>.history or so */
+#if R2_580
+R_API bool r_line_hist_load(const char *file) {
+#else
 R_API int r_line_hist_load(const char *file) {
-	FILE *fd;
-	char buf[R_LINE_BUFSIZE], *path = r_str_home (file);
-	if (!path) {
+#endif
+	r_return_val_if_fail (file, false);
+	char *buf = calloc (1, R_LINE_BUFSIZE);
+	FILE *fd = r_sandbox_fopen (file, "rb");
+	if (!fd) {
+		free (buf);
 		return false;
 	}
-	if (!(fd = r_sandbox_fopen (path, "r"))) {
-		free (path);
-		return false;
-	}
-	while (fgets (buf, sizeof (buf), fd) != NULL) {
+	memset (buf, 0, R_LINE_BUFSIZE);
+	while (fgets (buf, R_LINE_BUFSIZE - 1, fd)) {
 		r_str_trim_tail (buf);
-		r_line_hist_add (buf);
+		if (*buf) {
+			r_line_hist_add (buf);
+		}
+		memset (buf, 0, R_LINE_BUFSIZE);
 	}
 	fclose (fd);
-	free (path);
+	free (buf);
 	return true;
 }
 
@@ -538,13 +538,15 @@ R_API bool r_line_hist_save(const char *file) {
 	r_return_val_if_fail (file && *file, false);
 	int i;
 	bool ret = false;
-	char *p, *path = r_str_home (file);
+	char *path = r_str_home (file);
 	if (path) {
-		p = (char *) r_str_lastbut (path, R_SYS_DIR[0], NULL);	// TODO: use fs
+		char *p = (char *) r_str_lastbut (path, R_SYS_DIR[0], NULL);	// TODO: use fs
 		if (p) {
 			*p = 0;
 			if (!r_sys_mkdirp (path)) {
-				eprintf ("Could not save history into %s\n", path);
+				if (r_sandbox_check (R_SANDBOX_GRAIN_FILES)) {
+					R_LOG_ERROR ("Could not save history into %s", path);
+				}
 				goto end;
 			}
 			*p = R_SYS_DIR[0];
@@ -556,11 +558,9 @@ R_API bool r_line_hist_save(const char *file) {
 					fputs (I.history.data[i], fd);
 					fputs ("\n", fd);
 				}
-				fclose (fd);
 				ret = true;
-			} else {
-				fclose (fd);
 			}
+			fclose (fd);
 		}
 	}
 end:
@@ -778,7 +778,7 @@ R_API void r_line_autocomplete(void) {
 	if (argc == 1) {
 		const char *end_word = r_sub_str_rchr (I.buffer.data,
 			I.buffer.index, strlen (I.buffer.data), ' ');
-		const char *t = end_word != NULL?
+		const char *t = end_word?
 				end_word: I.buffer.data + I.buffer.index;
 		int largv0 = strlen (r_str_get (argv[0]));
 		size_t len_t = strlen (t);
@@ -934,6 +934,10 @@ static inline void delete_till_end(void) {
 	I.buffer.index = I.buffer.index > 0 ? I.buffer.index - 1 : 0;
 }
 
+static const char *promptcolor (void) {
+	return r_cons_singleton ()->context->pal.bgprompt;
+}
+
 static void __print_prompt(void) {
 	RCons *cons = r_cons_singleton ();
 	int columns = r_cons_get_size (NULL) - 2;
@@ -942,16 +946,17 @@ static void __print_prompt(void) {
 		r_cons_gotoxy (0,  cons->rows);
 		r_cons_flush ();
 	}
+	printf ("%s", promptcolor ());
 	r_cons_clear_line (0);
 	if (cons->context->color_mode > 0) {
-		printf ("\r%s%s", Color_RESET, I.prompt);
+		printf ("\r%s%s%s", Color_RESET, promptcolor (), I.prompt);
 	} else {
 		printf ("\r%s", I.prompt);
 	}
 	if (I.buffer.length > 0) {
 		fwrite (I.buffer.data, I.buffer.length, 1, stdout);
 	}
-	printf ("\r%s", I.prompt);
+	printf ("\r%s%s%s", promptcolor (), I.prompt, promptcolor ());
 	if (I.buffer.index > cols) {
 		printf ("< ");
 		i = I.buffer.index - cols;
@@ -1092,7 +1097,7 @@ static void __update_prompt_color(void) {
 		} else {
 			BEGIN = cons->context->pal.prompt;
 		}
-		END = cons->context->pal.reset;
+	//	END = cons->context->pal.reset;
 	}
 	char *prompt = r_str_escape (I.prompt);		// remote the color
 	free (I.prompt);
@@ -1104,7 +1109,7 @@ static void __vi_mode(void) {
 	I.vi_mode = CONTROL_MODE;
 	__update_prompt_color ();
 	const char *gcomp_line = "";
-	static int gcomp = 0;
+	static R_TH_LOCAL int gcomp = 0;
 	for (;;) {
 		int rep = 0;
 		if (I.echo) {
@@ -1342,9 +1347,9 @@ static void dietline_print_risprompt(const char *gcomp_line) {
 R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 	int rows;
 	const char *gcomp_line = "";
-	static int gcomp_idx = 0;
-	static bool yank_flag = 0;
-	static int gcomp = 0;
+	static R_TH_LOCAL int gcomp_idx = 0;
+	static R_TH_LOCAL bool yank_flag = 0;
+	static R_TH_LOCAL int gcomp = 0;
 	signed char buf[10];
 #if USE_UTF8
 	int utflen;
@@ -1549,7 +1554,7 @@ R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 					if (clipText) {
 						char *txt = r_sys_conv_win_to_utf8 (clipText);
 						if (!txt) {
-							R_LOG_ERROR ("Failed to allocate memory\n");
+							R_LOG_ERROR ("Failed to allocate memory");
 							break;
 						}
 						int len = strlen (txt);
@@ -2056,15 +2061,14 @@ _end:
 	r_cons_set_raw (0);
 	r_cons_enable_mouse (mouse_status);
 	if (I.echo) {
-		printf ("\r%s%s\n", I.prompt, I.buffer.data);
+		printf ("\r%s%s%s%s\n", I.prompt, promptcolor (), I.buffer.data, Color_RESET);
 		fflush (stdout);
 	}
 
 	R_FREE (I.sel_widget);
 
-	// should be here or not?
-	if (!memcmp (I.buffer.data, "!history", 8)) {
-		// if (I.buffer.data[0]=='!' && I.buffer.data[1]=='\0') {
+	// shouldnt be here
+	if (r_str_startswith (I.buffer.data, "!history")) {
 		r_line_hist_list ();
 		return "";
 	}

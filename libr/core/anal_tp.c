@@ -15,9 +15,9 @@ static bool anal_emul_init(RCore *core, RConfigHold *hc, RDebugTrace **dt, RAnal
 	core->dbg->trace = r_debug_trace_new ();
 	core->anal->esil->trace = r_anal_esil_trace_new (core->anal->esil);
 	r_config_hold (hc, "esil.romem", "dbg.trace", "esil.nonull", "dbg.follow", NULL);
-	r_config_set (core->config, "esil.romem", "true");
-	r_config_set (core->config, "dbg.trace", "true");
-	r_config_set (core->config, "esil.nonull", "true");
+	r_config_set_b (core->config, "esil.romem", true);
+	r_config_set_b (core->config, "dbg.trace", true);
+	r_config_set_b (core->config, "esil.nonull", true);
 	r_config_set_i (core->config, "dbg.follow", false);
 	const char *bp = r_reg_get_name (core->anal->reg, R_REG_NAME_BP);
 	const char *sp = r_reg_get_name (core->anal->reg, R_REG_NAME_SP);
@@ -100,7 +100,7 @@ static void __var_retype(RAnal *anal, RAnalVar *var, const char *vname, const ch
 		expand = "unsigned long long";
 	}
 	const char *tmp = strstr (expand, "int");
-	bool is_default = tmp != NULL;
+	bool is_default = tmp;
 	if (!is_default && strncmp (var->type, "void", 4)) {
 		// return since type is already propagated
 		// except for "void *", since "void *" => "char *" is possible
@@ -161,7 +161,7 @@ static void get_src_regname(RCore *core, ut64 addr, char *regname, int size) {
 	memset (regname, 0, size);
 	RRegItem *ri = r_reg_get (anal->reg, op_esil, -1);
 	if (ri) {
-		if ((anal->bits == 64) && (ri->size == 32)) {
+		if ((anal->config->bits == 64) && (ri->size == 32)) {
 			const char *reg = r_reg_32_to_64 (anal->reg, op_esil);
 			if (reg) {
 				free (op_esil);
@@ -304,11 +304,11 @@ static void type_match(RCore *core, char *fcn_name, ut64 addr, ut64 baddr, const
 		stack_rev = true;
 	}
 	place = r_anal_cc_arg (anal, cc, 0);
-	if (place && r_str_startswith ("stack", place)) {
+	if (place && r_str_startswith (place, "stack")) {
 		in_stack = true;
 	}
 	if (verbose && !strncmp (fcn_name, "sym.imp.", 8)) {
-		eprintf ("Warning: Missing function definition for '%s'\n", fcn_name + 8);
+		R_LOG_WARN ("Missing function definition for '%s'", fcn_name + 8);
 	}
 	if (!max) {
 		if (!in_stack) {
@@ -321,6 +321,7 @@ static void type_match(RCore *core, char *fcn_name, ut64 addr, ut64 baddr, const
 	if (max > 7) {
 		max = DEFAULT_MAX;
 	}
+	const int bytes = anal->config->bits / 8;
 	for (i = 0; i < max; i++) {
 		int arg_num = stack_rev ? (max - 1 - i) : i;
 		char *type = NULL;
@@ -340,7 +341,7 @@ static void type_match(RCore *core, char *fcn_name, ut64 addr, ut64 baddr, const
 		if (!in_stack) {
 			//XXX: param arg_num must be fixed to support floating point register
 			place = r_anal_cc_arg (anal, cc, arg_num);
-			if (place && r_str_startswith ("stack", place)) {
+			if (place && r_str_startswith (place, "stack")) {
 				in_stack = true;
 			}
 		}
@@ -446,7 +447,7 @@ static void type_match(RCore *core, char *fcn_name, ut64 addr, ut64 baddr, const
 			r_anal_op_free (op);
 			r_anal_op_free (next_op);
 		}
-		size += anal->bits / 8;
+		size += bytes;
 		free (type);
 	}
 	r_list_free (types);
@@ -508,6 +509,7 @@ static bool fast_step(RCore *core, RAnalOp *aop) {
 }
 
 R_API void r_core_anal_type_match(RCore *core, RAnalFunction *fcn) {
+	const int op_tions = R_ANAL_OP_MASK_BASIC | R_ANAL_OP_MASK_VAL | R_ANAL_OP_MASK_ESIL | R_ANAL_OP_MASK_HINT;
 	RAnalBlock *bb;
 	RListIter *it;
 	RAnalOp aop = {0};
@@ -549,6 +551,7 @@ R_API void r_core_anal_type_match(RCore *core, RAnalFunction *fcn) {
 	dtrace->ht = ht_pp_new_size (fcn->ninstr, opt.dupvalue, opt.freefn, opt.calcsizeV);
 	dtrace->ht->opt = opt;
 
+	const bool be = core->rasm->config->big_endian;
 	char *fcn_name = NULL;
 	char *ret_type = NULL;
 	bool str_flag = false;
@@ -573,14 +576,14 @@ repeat:
 	// TODO: Use ut64
 	size_t bblist_size = r_list_length (fcn->bbs);
 	ut64 *bblist = calloc (sizeof (ut64), bblist_size + 1);
-	int i = 0;
+	int j = 0;
 	r_list_foreach (fcn->bbs, it, bb) {
-		bblist[i++] = bb->addr;
+		bblist[j++] = bb->addr;
 	}
-	for (i = 0; i < bblist_size; i++) {
-		bb = r_anal_get_block_at (core->anal, bblist[i]);
+	for (j = 0; j < bblist_size; j++) {
+		bb = r_anal_get_block_at (core->anal, bblist[j]);
 		if (!bb) {
-			eprintf ("Warning: basic block at 0x%08"PFMT64x" was removed during analysis.\n", bblist[i]);
+			R_LOG_WARN ("basic block at 0x%08"PFMT64x" was removed during analysis", bblist[j]);
 			retries--;
 			free (bblist);
 			goto repeat;
@@ -607,7 +610,7 @@ repeat:
 				// stop emulating this bb if pc is outside the basic block boundaries
 				break;
 			}
-			ret = r_anal_op (anal, &aop, addr, buf + i, bb_size - i, R_ANAL_OP_MASK_BASIC | R_ANAL_OP_MASK_VAL | R_ANAL_OP_MASK_ESIL | R_ANAL_OP_MASK_HINT);
+			ret = r_anal_op (anal, &aop, addr, buf + i, bb_size - i, op_tions);
 			if (ret <= 0) {
 				i += minopcode;
 				addr += minopcode;
@@ -633,7 +636,7 @@ repeat:
 			if (i < bblist_size) {
 				bb = r_anal_get_block_at (core->anal, bb_addr);
 				if (!bb) {
-					eprintf ("Warning: basic block at 0x%08"PFMT64x" was removed during analysis.\n", bblist[i]);
+					R_LOG_WARN ("basic block at 0x%08"PFMT64x" was removed during analysis", bblist[i]);
 					retries--;
 					free (bblist);
 					goto repeat;
@@ -696,8 +699,8 @@ repeat:
 						RAnalOp *mop = r_core_anal_op (core, mov_addr, R_ANAL_OP_MASK_VAL | R_ANAL_OP_MASK_BASIC);
 						if (mop) {
 							RAnalVar *mopvar = r_anal_get_used_function_var (anal, mop->addr);
-							ut32 type = mop->type & R_ANAL_OP_TYPE_MASK;
-							if (type == R_ANAL_OP_TYPE_MOV) {
+							ut32 vt = mop->type & R_ANAL_OP_TYPE_MASK;
+							if (vt == R_ANAL_OP_TYPE_MOV) {
 								__var_rename (anal, mopvar, "canary", addr);
 							}
 						}
@@ -729,8 +732,7 @@ repeat:
 					}
 					if (ret_reg && (strstr (ret_reg, foo) || (tmp && strstr (ret_reg, tmp)))) {
 						resolved = true;
-					} else if (type == R_ANAL_OP_TYPE_MOV &&
-							(next_op && next_op->type == R_ANAL_OP_TYPE_MOV)){
+					} else if (type == R_ANAL_OP_TYPE_MOV && (next_op && next_op->type == R_ANAL_OP_TYPE_MOV)) {
 						// Progate return type passed using pointer
 						// int *ret; *ret = strlen(s);
 						// TODO: memref check , dest and next src match
@@ -764,7 +766,7 @@ repeat:
 				if (prev_dest && (type == R_ANAL_OP_TYPE_MOV || type == R_ANAL_OP_TYPE_STORE)) {
 					char reg[REGNAME_SIZE] = {0};
 					get_src_regname (core, addr, reg, sizeof (reg));
-					bool match = strstr (prev_dest, reg) != NULL;
+					bool match = strstr (prev_dest, reg);
 					if (str_flag && match) {
 						__var_retype (anal, var, NULL, "const char *", false, false);
 					}
@@ -811,9 +813,9 @@ repeat:
 			case R_ANAL_OP_TYPE_LOAD:
 				if (aop.ptr && aop.refptr && aop.ptr != UT64_MAX) {
 					if (type == R_ANAL_OP_TYPE_LOAD) {
-						ut8 buf[256] = {0};
-						r_io_read_at (core->io, aop.ptr, buf, sizeof (buf) - 1);
-						ut64 ptr = r_read_ble (buf, core->print->big_endian, aop.refptr * 8);
+						ut8 sbuf[256] = {0};
+						r_io_read_at (core->io, aop.ptr, sbuf, sizeof (sbuf) - 1);
+						ut64 ptr = r_read_ble (sbuf, be, aop.refptr * 8);
 						if (ptr && ptr != UT64_MAX) {
 							RFlagItem *f = r_flag_get_by_spaces (core->flags, ptr, R_FLAGS_FS_STRINGS, NULL);
 							if (f) {

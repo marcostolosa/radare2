@@ -50,7 +50,6 @@ extern "C" {
 #endif
 
 /* constants */
-#define CONS_MAX_USER 102400
 #define CONS_BUFSZ 0x4f00
 #define STR_IS_NULL(x) (!x || !x[0])
 
@@ -110,6 +109,7 @@ typedef struct r_cons_grep_t {
 	int end[R_CONS_GREP_WORDS];
 	bool icase;
 	bool ascart;
+	bool code;
 } RConsGrep;
 
 enum { ALPHA_RESET = 0x00, ALPHA_FG = 0x01, ALPHA_BG = 0x02, ALPHA_FGBG = 0x03 };
@@ -165,6 +165,7 @@ typedef struct r_cons_palette_t {
 	RColor other;
 	RColor pop;
 	RColor prompt;
+	RColor bgprompt;
 	RColor push;
 	RColor crypto;
 	RColor reg;
@@ -240,6 +241,7 @@ typedef struct r_cons_printable_palette_t {
 	char *other;
 	char *pop;
 	char *prompt;
+	char *bgprompt;
 	char *push;
 	char *crypto;
 	char *reg;
@@ -494,6 +496,7 @@ typedef struct r_cons_t {
 	bool dotted_lines;
 	int linesleep;
 	int pagesize;
+	int maxpage;
 	char *break_word;
 	int break_word_len;
 	ut64 timeout; // must come from r_time_now_mono()
@@ -521,6 +524,7 @@ typedef struct r_cons_t {
 
 #define R_CONS_KEY_ESC 0x1b
 
+#define R_CONS_CLEAR_FROM_CURSOR_TO_EOL "\x1b[0K\r"
 #define R_CONS_CLEAR_LINE "\x1b[2K\r"
 #define R_CONS_CLEAR_SCREEN "\x1b[2J\r"
 #define R_CONS_CLEAR_FROM_CURSOR_TO_END "\x1b[0J\r"
@@ -860,7 +864,7 @@ R_API void r_cons_line(int x, int y, int x2, int y2, int ch);
 R_API void r_cons_show_cursor(int cursor);
 R_API char *r_cons_swap_ground(const char *col);
 R_API bool r_cons_drop(int n);
-R_API void r_cons_chop(void);
+R_API void r_cons_chop(void); // XXX R2_580 this function hasnt been implemented and nobody miss it, just rimraf't
 R_API void r_cons_set_raw(bool b);
 R_API void r_cons_set_interactive(bool b);
 R_API void r_cons_set_last_interactive(void);
@@ -881,6 +885,7 @@ R_API int r_cons_write(const char *str, int len);
 R_API void r_cons_newline(void);
 R_API void r_cons_filter(void);
 R_API void r_cons_flush(void);
+// R2_580 - R_API char *r_cons_drain(void);
 R_API void r_cons_print_fps(int col);
 R_API void r_cons_last(void);
 R_API int r_cons_less_str(const char *str, const char *exitkeys);
@@ -892,6 +897,7 @@ R_API void r_cons_visual_write(char *buffer);
 R_API bool r_cons_is_utf8(void);
 R_API bool r_cons_is_windows(void);
 R_API void r_cons_cmd_help(const char *help[], bool use_color);
+R_API void r_cons_cmd_help_json(const char *help[]);
 R_API void r_cons_cmd_help_match(const char *help[], bool use_color, R_BORROW R_NONNULL char *cmd, char spec, bool exact);
 R_API void r_cons_log_stub(const char *output, const char *funcname, const char *filename,
  unsigned int lineno, unsigned int level, const char *tag, const char *fmtstr, ...) R_PRINTF_CHECK(7, 8);
@@ -1089,7 +1095,7 @@ struct r_line_t {
 	RLineHud *hud;
 	RList *sdbshell_hist;
 	RListIter *sdbshell_hist_iter;
-	int vtmode;
+	int vtmode; // R2_580 duplicated and unused from the global RCons.vtmode
 }; /* RLine */
 
 #ifdef R_API

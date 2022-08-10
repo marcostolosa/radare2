@@ -1,17 +1,13 @@
 /* radare - LGPL - Copyright 2021 - pancake */
 
-// seven segmented ascii-art text
-
-#include <stdio.h>
-#include <stdlib.h>
 #include <r_util.h>
-
 
 typedef struct {
 	char ch;
 	const char *l[3];
 } SevenSegments;
 
+// seven segment ascii-art text
 static const SevenSegments ss_lc[] = {
 	{ '0', {" __ ",
 		"| /|",
@@ -229,7 +225,7 @@ static const SevenSegments ss_lc[] = {
 		" _  ",
 		" /_ "}
 	},
-	{ '\0', { 0 }}
+	{ '\0', {0}}
 };
 
 static const SevenSegments ss[] = {
@@ -449,7 +445,7 @@ static const SevenSegments ss[] = {
 		"  / ",
 		" /_ "}
 	},
-	{ '\0', { 0 }}
+	{ '\0', {0}}
 };
 
 R_API char *r_str_ss(const char* msg, const char *nl, int cs) {

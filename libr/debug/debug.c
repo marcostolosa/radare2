@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake, jduck, TheLemonMan, saucec0de */
+/* radare - LGPL - Copyright 2009-2022 - pancake, jduck, TheLemonMan, saucec0de */
 
 #include <r_debug.h>
 #include <r_drx.h>
@@ -35,7 +35,7 @@ R_API void r_debug_bp_update(RDebug *dbg) {
 	RListIter *iter;
 	r_list_foreach (dbg->bp->bps, iter, bp) {
 		if (bp->expr) {
-			bp->addr = dbg->corebind.numGet (dbg->corebind.core, bp->expr);
+			bp->addr = dbg->coreb.numGet (dbg->coreb.core, bp->expr);
 		}
 	}
 }
@@ -124,7 +124,7 @@ static int r_debug_bp_hit(RDebug *dbg, RRegItem *pc_ri, ut64 pc, RBreakpointItem
 	}
 
 	if (!dbg->pc_at_bp_set) {
-		eprintf ("failed to determine position of pc after breakpoint");
+		R_LOG_ERROR ("failed to determine position of pc after breakpoint");
 	}
 
 	if (dbg->pc_at_bp) {
@@ -182,8 +182,8 @@ static int r_debug_bp_hit(RDebug *dbg, RRegItem *pc_ri, ut64 pc, RBreakpointItem
 	/* now that we've cleaned up after the breakpoint, call the other
 	 * potential breakpoint handlers
 	 */
-	if (dbg->corebind.core && dbg->corebind.bphit) {
-		dbg->corebind.bphit (dbg->corebind.core, b);
+	if (dbg->coreb.core && dbg->coreb.bphit) {
+		dbg->coreb.bphit (dbg->coreb.core, b);
 	}
 	return true;
 }
@@ -300,13 +300,13 @@ R_API RBreakpointItem *r_debug_bp_add(RDebug *dbg, ut64 addr, int hw, bool watch
 				}
 				perm = ((map->perm & 1) << 2) | (map->perm & 2) | ((map->perm & 4) >> 2);
 				if (!(perm & R_BP_PROT_EXEC)) {
-					eprintf ("Warning: setting bp within mapped memory without exec perm\n");
+					R_LOG_WARN ("setting bp within mapped memory without exec perm");
 				}
 				break;
 			}
 		}
 		if (!valid) {
-			eprintf ("Warning: module's base addr + delta is not a valid address\n");
+			R_LOG_WARN ("module's base addr + delta is not a valid address");
 			free (module_name);
 			return NULL;
 		}
@@ -507,71 +507,103 @@ R_API bool r_debug_set_arch(RDebug *dbg, const char *arch, int bits) {
 	return false;
 }
 
-/*
- * Save 4096 bytes from %esp
+/* Inject and execute shellcode
+ * If restore is enabled, save the program state, including 4k on the stack.
+ * This can be disabled with ignore_stack. Enabling this option results in only
+ * registers being restored. It has no effect if restore is not enabled.
+ *
+ * The bytes overwritten at the program counter are always restored.
+ *
  * TODO: Add support for reverse stack architectures
- * Also known as r_debug_inject()
+ *
+ * XXX: This function will advance your seek to the end of the injected code.
  */
-R_API ut64 r_debug_execute(RDebug *dbg, const ut8 *buf, int len, int restore) {
-	int orig_sz;
-	ut8 stackbackup[4096];
-	ut8 *backup, *orig = NULL;
-	RRegItem *ri, *risp, *ripc;
-	ut64 rsp, rpc, ra0 = 0LL;
+R_API bool r_debug_execute(RDebug *dbg, const ut8 *buf, int len, R_OUT ut64 *ret, bool restore, bool ignore_stack) {
+	ut8 stack_backup[4096];
+	ut8 *pc_backup = NULL, *reg_backup = NULL;
+	int reg_backup_sz;
+	RRegItem *ri_sp, *ri_pc, *ri_ret;
+	ut64 reg_sp, reg_pc, bp_addr;
+
+	r_return_val_if_fail (dbg && buf && len > 0, false);
+
 	if (r_debug_is_dead (dbg)) {
 		return false;
 	}
-	ripc = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_PC], R_REG_TYPE_GPR);
-	risp = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_SP], R_REG_TYPE_GPR);
-	if (ripc) {
-		r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false);
-		orig = r_reg_get_bytes (dbg->reg, R_REG_TYPE_ALL, &orig_sz);
-		if (!orig) {
-			eprintf ("Cannot get register arena bytes\n");
-			return 0LL;
-		}
-		rpc = r_reg_get_value (dbg->reg, ripc);
-		rsp = r_reg_get_value (dbg->reg, risp);
 
-		backup = malloc (len);
-		if (!backup) {
-			free (orig);
-			return 0LL;
-		}
-		dbg->iob.read_at (dbg->iob.io, rpc, backup, len);
-		dbg->iob.read_at (dbg->iob.io, rsp, stackbackup, len);
+	ri_pc = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_PC], R_REG_TYPE_GPR);
+	ri_sp = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_SP], R_REG_TYPE_GPR);
 
-		r_bp_add_sw (dbg->bp, rpc+len, dbg->bpsize, R_BP_PROT_EXEC);
-
-		/* execute code here */
-		dbg->iob.write_at (dbg->iob.io, rpc, buf, len);
-		//r_bp_add_sw (dbg->bp, rpc+len, 4, R_BP_PROT_EXEC);
-		r_debug_continue (dbg);
-		//r_bp_del (dbg->bp, rpc+len);
-		/* TODO: check if stopped in breakpoint or not */
-
-		r_bp_del (dbg->bp, rpc+len);
-		dbg->iob.write_at (dbg->iob.io, rpc, backup, len);
-		if (restore) {
-			dbg->iob.write_at (dbg->iob.io, rsp, stackbackup, len);
-		}
-
-		r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false);
-		ri = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_A0], R_REG_TYPE_GPR);
-		ra0 = r_reg_get_value (dbg->reg, ri);
-		if (restore) {
-			r_reg_read_regs (dbg->reg, orig, orig_sz);
-		} else {
-			r_reg_set_value (dbg->reg, ripc, rpc);
-		}
-		r_debug_reg_sync (dbg, R_REG_TYPE_GPR, true);
-		free (backup);
-		free (orig);
-		eprintf ("ra0=0x%08"PFMT64x"\n", ra0);
-	} else {
-		eprintf ("r_debug_execute: Cannot get program counter\n");
+	if (!ri_pc) {
+		R_LOG_ERROR ("r_debug_execute: Cannot get program counter");
+		return false;
 	}
-	return (ra0);
+
+	if (restore && !ignore_stack && !ri_sp) {
+		R_LOG_ERROR ("r_debug_execute: Cannot get stack pointer");
+		return false;
+	}
+
+	r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false);
+	reg_backup = r_reg_get_bytes (dbg->reg, R_REG_TYPE_ALL, &reg_backup_sz);
+
+	if (!reg_backup) {
+		R_LOG_ERROR ("Cannot get register arena bytes");
+		return false;
+	}
+
+	reg_pc = r_reg_get_value (dbg->reg, ri_pc);
+	reg_sp = r_reg_get_value (dbg->reg, ri_sp);
+
+	pc_backup = malloc (len);
+	if (!pc_backup) {
+		free (reg_backup);
+		return false;
+	}
+
+	/* Store bytes at PC */
+	dbg->iob.read_at (dbg->iob.io, reg_pc, pc_backup, len);
+	if (restore && !ignore_stack) {
+		/* Store bytes at stack */
+		dbg->iob.read_at (dbg->iob.io, reg_sp, stack_backup, 4096);
+	}
+
+	bp_addr = reg_pc + len;
+	r_bp_add_sw (dbg->bp, bp_addr, dbg->bpsize, R_BP_PROT_EXEC);
+
+	dbg->iob.write_at (dbg->iob.io, reg_pc, buf, len);
+	r_debug_continue (dbg);
+	/* TODO: check if stopped in breakpoint or not */
+
+	/* Restore bytes at PC */
+	r_bp_del (dbg->bp, bp_addr);
+	dbg->iob.write_at (dbg->iob.io, reg_pc, pc_backup, len);
+
+	r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false);
+
+	/* Propagate return value */
+	if (ret) {
+		ri_ret = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_R0], R_REG_TYPE_GPR);
+		*ret = r_reg_get_value (dbg->reg, ri_ret);
+	}
+
+	if (restore) {
+		if (!ignore_stack) {
+			/* Restore stack */
+			dbg->iob.write_at (dbg->iob.io, reg_sp, stack_backup, 4096);
+		}
+		/* Restore registers */
+		r_reg_read_regs (dbg->reg, reg_backup, reg_backup_sz);
+	} else {
+		/* Restore PC */
+		r_reg_set_value (dbg->reg, ri_pc, reg_pc);
+	}
+	r_debug_reg_sync (dbg, R_REG_TYPE_GPR, true);
+
+	free (pc_backup);
+	free (reg_backup);
+
+	return true;
 }
 
 R_API int r_debug_startv(struct r_debug_t *dbg, int argc, char **argv) {
@@ -611,7 +643,7 @@ R_API bool r_debug_select(RDebug *dbg, int pid, int tid) {
 #endif
 	if (pid == -1 && tid == -1) {
 		if (dbg->pid != -1) {
-			eprintf ("Child %d is dead\n", dbg->pid);
+			R_LOG_ERROR ("Child %d is dead", dbg->pid);
 		}
 	}
 	if (pid < 0 || tid < 0) {
@@ -631,12 +663,12 @@ R_API bool r_debug_select(RDebug *dbg, int pid, int tid) {
 			free (pidcmd);
 		}
 	} else {
-		eprintf ("Cannot find pid for child %d\n", dbg->pid);
+		R_LOG_ERROR ("Cannot find pid for child %d", dbg->pid);
 	}
 
 	// Synchronize with the current thread's data
-	if (dbg->corebind.core) {
-		RCore *core = (RCore *)dbg->corebind.core;
+	if (dbg->coreb.core) {
+		RCore *core = (RCore *)dbg->coreb.core;
 
 		r_reg_arena_swap (core->dbg->reg, true);
 		r_debug_reg_sync (dbg, R_REG_TYPE_ALL, false);
@@ -754,7 +786,7 @@ R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp) {
 			/* get the program coounter */
 			pc_ri = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_PC], -1);
 			if (!pc_ri) { /* couldn't find PC?! */
-				eprintf ("Couldn't find the program counter!\n");
+				R_LOG_ERROR ("Couldn't find the program counter!");
 				return R_DEBUG_REASON_ERROR;
 			}
 
@@ -774,7 +806,7 @@ R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp) {
 			}
 			/* if we hit a tracing breakpoint, we need to continue in
 			 * whatever mode the user desired. */
-			if (dbg->corebind.core && b && b->cond) {
+			if (dbg->coreb.core && b && b->cond) {
 				reason = R_DEBUG_REASON_COND;
 			}
 			if (b && b->trace) {
@@ -989,7 +1021,7 @@ R_API int r_debug_step(RDebug *dbg, int steps) {
 			dbg->session->maxcnum++;
 			dbg->session->bp = 0;
 			if (!r_debug_trace_ins_before (dbg)) {
-				eprintf ("trace_ins_before: failed");
+				R_LOG_ERROR ("trace_ins_before: failed");
 			}
 		}
 
@@ -999,13 +1031,13 @@ R_API int r_debug_step(RDebug *dbg, int steps) {
 			ret = r_debug_step_hard (dbg, &bp);
 		}
 		if (!ret) {
-			eprintf ("Stepping failed!\n");
+			R_LOG_ERROR ("Stepping failed!");
 			return steps_taken;
 		}
 
 		if (dbg->session && dbg->recoil_mode == R_DBG_RECOIL_NONE) {
 			if (!r_debug_trace_ins_after (dbg)) {
-				eprintf ("trace_ins_after: failed");
+				R_LOG_ERROR ("trace_ins_after: failed");
 			}
 			dbg->session->reasontype = dbg->reason.type;
 			dbg->session->bp = bp;
@@ -1077,7 +1109,7 @@ R_API int r_debug_step_over(RDebug *dbg, int steps) {
 		}
 		// Analyze the opcode
 		if (!r_anal_op (dbg->anal, &op, pc, buf + (pc - buf_pc), sizeof (buf) - (pc - buf_pc), R_ANAL_OP_MASK_BASIC)) {
-			eprintf ("debug-step-over: Decode error at %"PFMT64x"\n", pc);
+			R_LOG_ERROR ("debug-step-over: Decode error at %"PFMT64x, pc);
 			return steps_taken;
 		}
 		if (op.fail == -1) {
@@ -1089,13 +1121,13 @@ R_API int r_debug_step_over(RDebug *dbg, int steps) {
 		// Skip over all the subroutine calls
 		if (isStepOverable (op.type)) {
 			if (!r_debug_continue_until (dbg, ins_size)) {
-				eprintf ("Could not step over call @ 0x%"PFMT64x"\n", pc);
+				R_LOG_ERROR ("Could not step over call @ 0x%"PFMT64x, pc);
 				return steps_taken;
 			}
 		} else if ((op.prefix & (R_ANAL_OP_PREFIX_REP | R_ANAL_OP_PREFIX_REPNE | R_ANAL_OP_PREFIX_LOCK))) {
-			//eprintf ("REP: skip to next instruction...\n");
+			//R_LOG_ERROR ("REP: skip to next instruction");
 			if (!r_debug_continue_until (dbg, ins_size)) {
-				eprintf ("step over failed over rep\n");
+				R_LOG_ERROR ("step over failed over rep");
 				return steps_taken;
 			}
 		} else {
@@ -1108,7 +1140,7 @@ R_API int r_debug_step_over(RDebug *dbg, int steps) {
 
 R_API bool r_debug_goto_cnum(RDebug *dbg, ut32 cnum) {
 	if (cnum > dbg->session->maxcnum) {
-		eprintf ("Error: out of cnum range\n");
+		R_LOG_ERROR ("out of cnum range");
 		return false;
 	}
 	dbg->session->cnum = cnum;
@@ -1157,9 +1189,9 @@ R_API int r_debug_continue_kill(RDebug *dbg, int sig) {
 			if (reg->cnum <= dbg->session->cnum) {
 				continue;
 			}
-			has_bp = r_bp_get_in (dbg->bp, reg->data, R_BP_PROT_EXEC) != NULL;
+			has_bp = r_bp_get_in (dbg->bp, reg->data, R_BP_PROT_EXEC);
 			if (has_bp) {
-				eprintf ("hit breakpoint at: 0x%" PFMT64x " cnum: %d\n", reg->data, reg->cnum);
+				R_LOG_INFO ("hit breakpoint at: 0x%" PFMT64x " cnum: %d", reg->data, reg->cnum);
 				r_debug_goto_cnum (dbg, reg->cnum);
 				return dbg->tid;
 			}
@@ -1197,12 +1229,12 @@ repeat:
 		return 0;
 	}
 
-	if (dbg->corebind.core) {
-		RCore *core = (RCore *)dbg->corebind.core;
+	if (dbg->coreb.core) {
+		RCore *core = (RCore *)dbg->coreb.core;
 		RNum *num = core->num;
 		if (reason == R_DEBUG_REASON_COND) {
-			if (bp && bp->cond && dbg->corebind.cmd) {
-				dbg->corebind.cmd (dbg->corebind.core, bp->cond);
+			if (bp && bp->cond && dbg->coreb.cmd) {
+				dbg->coreb.cmd (dbg->coreb.core, bp->cond);
 			}
 			if (num->value) {
 				goto repeat;
@@ -1210,8 +1242,8 @@ repeat:
 		}
 	}
 	if (reason == R_DEBUG_REASON_BREAKPOINT &&
-	   ((bp && !bp->enabled) || (!bp && !r_cons_is_breaked () && dbg->corebind.core &&
-					dbg->corebind.cfggeti (dbg->corebind.core, "dbg.bpsysign")))) {
+	   ((bp && !bp->enabled) || (!bp && !r_cons_is_breaked () && dbg->coreb.core &&
+					dbg->coreb.cfggeti (dbg->coreb.core, "dbg.bpsysign")))) {
 		goto repeat;
 	}
 
@@ -1383,7 +1415,7 @@ R_API int r_debug_continue_until_optype(RDebug *dbg, int type, int over) {
 		}
 		// Analyze the opcode
 		if (!r_anal_op (dbg->anal, &op, pc, buf + (pc - buf_pc), sizeof (buf) - (pc - buf_pc), R_ANAL_OP_MASK_BASIC)) {
-			eprintf ("Decode error at %"PFMT64x"\n", pc);
+			R_LOG_ERROR ("Decode error at %"PFMT64x, pc);
 			return false;
 		}
 		if (op.type == type) {
@@ -1395,7 +1427,7 @@ R_API int r_debug_continue_until_optype(RDebug *dbg, int type, int over) {
 			: r_debug_step (dbg, 1);
 
 		if (!ret) {
-			eprintf ("r_debug_step: failed\n");
+			R_LOG_ERROR ("r_debug_step: failed");
 			break;
 		}
 		n++;
@@ -1409,7 +1441,7 @@ static int r_debug_continue_until_internal(RDebug *dbg, ut64 addr, bool block) {
 		return false;
 	}
 	// Check if there was another breakpoint set at addr
-	bool has_bp = r_bp_get_in (dbg->bp, addr, R_BP_PROT_EXEC) != NULL;
+	bool has_bp = r_bp_get_in (dbg->bp, addr, R_BP_PROT_EXEC);
 	if (!has_bp) {
 		r_bp_add_sw (dbg->bp, addr, dbg->bpsize, R_BP_PROT_EXEC);
 	}
@@ -1451,7 +1483,7 @@ R_API bool r_debug_continue_back(RDebug *dbg) {
 	RRegItem *ripc = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_PC], R_REG_TYPE_GPR);
 	RVector *vreg = ht_up_find (dbg->session->registers, ripc->offset | (ripc->arena << 16), NULL);
 	if (!vreg) {
-		eprintf ("Error: cannot find PC change vector");
+		R_LOG_ERROR ("cannot find PC change vector");
 		return false;
 	}
 	RDebugChangeReg *reg;
@@ -1459,7 +1491,7 @@ R_API bool r_debug_continue_back(RDebug *dbg) {
 		if (reg->cnum >= dbg->session->cnum) {
 			continue;
 		}
-		has_bp = r_bp_get_in (dbg->bp, reg->data, R_BP_PROT_EXEC) != NULL;
+		has_bp = r_bp_get_in (dbg->bp, reg->data, R_BP_PROT_EXEC);
 		if (has_bp) {
 			cnum = reg->cnum;
 			eprintf ("hit breakpoint at: 0x%" PFMT64x " cnum: %d\n", reg->data, reg->cnum);
@@ -1521,12 +1553,12 @@ R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc) {
 	}
 
 	if (!r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false)) {
-		eprintf ("--> cannot read registers\n");
+		R_LOG_ERROR ("--> cannot read registers");
 		return -1;
 	}
 	reg = (int)r_debug_reg_get_err (dbg, "SN", &err, NULL);
 	if (err) {
-		eprintf ("Cannot find 'sn' register for current arch-os.\n");
+		R_LOG_ERROR ("Cannot find 'sn' register for current arch-os");
 		return -1;
 	}
 	for (;;) {
@@ -1560,8 +1592,8 @@ R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc) {
 		}
 		reg = show_syscall (dbg, "SN");
 
-		if (dbg->corebind.core && dbg->corebind.syshit) {
-			dbg->corebind.syshit (dbg->corebind.core);
+		if (dbg->coreb.core && dbg->coreb.syshit) {
+			dbg->coreb.syshit (dbg->coreb.core);
 		}
 
 		if (n_sc == -1) {
@@ -1734,6 +1766,13 @@ R_API ut64 r_debug_get_baddr(RDebug *dbg, const char *file) {
 		}
 	}
 	return 0LL;
+}
+
+R_API int r_debug_cmd(RDebug *dbg, const char *s) {
+	if (dbg->h && dbg->h->cmd) {
+		return dbg->h->cmd (dbg, s);
+	}
+	return 0;
 }
 
 R_API void r_debug_bp_rebase(RDebug *dbg, ut64 old_base, ut64 new_base) {

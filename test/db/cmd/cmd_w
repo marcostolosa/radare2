@@ -272,6 +272,39 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=wtf base64
+CMDS=<<EOF
+wx 01020304
+wtf base64:dGVzdGZpbGU== 4
+wx 00000000
+wff testfile
+p8 4
+rm testfile
+EOF
+EXPECT=<<EOF
+01020304
+EOF
+EXPECT_ERR=<<EOF
+INFO: Dumped 4 bytes from 0x00000000 into testfile
+EOF
+RUN
+
+NAME=wtf base64 with alias
+CMDS=<<EOF
+wx 01020304
+wtf base64:JGQ= 4
+wx 00000000
+wff $d
+p8 4
+EOF
+EXPECT=<<EOF
+01020304
+EOF
+EXPECT_ERR=<<EOF
+INFO: Dumped 4 bytes from 0x00000000 into $d
+EOF
+RUN
+
 NAME=wf
 FILE=-
 CMDS=<<EOF
@@ -328,10 +361,10 @@ nop
 EOF
 RUN
 
-NAME=wb
+NAME=wX
 FILE=-
 CMDS=<<EOF
-wb 0102 @!20
+wX 0102 @!20
 p8 20
 EOF
 EXPECT=<<EOF
@@ -343,7 +376,7 @@ NAME=wm
 FILE=-
 CMDS=<<EOF
 wm f0ff
-wb 010203 @!20
+wX 010203 @!20
 p8 20
 EOF
 EXPECT=<<EOF

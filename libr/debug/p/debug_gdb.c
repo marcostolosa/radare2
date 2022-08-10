@@ -94,15 +94,6 @@ static int r_debug_gdb_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 	memcpy ((void*)(volatile void*)buf, desc->data, R_MIN (copy_size, size));
 	memset ((void*)(volatile void*)reg_buf, 0, buflen);
 	memcpy ((void*)(volatile void*)reg_buf, desc->data, copy_size);
-#if 0
-	int i;
-	//for(i=0;i<168;i++) {
-	for(i=0;i<copy_size;i++) {
-		if (!(i%16)) printf ("\n0x%08x  ", i);
-		printf ("%02x ", buf[i]); //(ut8)desc->data[i]);
-	}
-	printf("\n");
-#endif
 	return desc->data_len;
 }
 
@@ -115,7 +106,7 @@ static RList *r_debug_gdb_map_get(RDebug* dbg) { //TODO
 	if (desc->get_baddr) {
 		desc->get_baddr = false;
 		ut64 baddr;
-		if ((baddr = gdbr_get_baddr (desc)) != UINT64_MAX) {
+		if ((baddr = gdbr_get_baddr (desc)) != UT64_MAX) {
 			if (!(retlist = r_list_new ())) {
 				return NULL;
 			}
@@ -288,11 +279,11 @@ static int r_debug_gdb_reg_write(RDebug *dbg, int type, const ut8 *buf, int size
 		return -1;
 	}
 	int buflen = 0;
-	int bits = dbg->anal->bits;
+	int bits = dbg->anal->config->bits;
 	const char *pcname = r_reg_get_name (dbg->anal->reg, R_REG_NAME_PC);
 	RRegItem *reg = r_reg_get (dbg->anal->reg, pcname, 0);
 	if (reg) {
-		if (dbg->anal->bits != reg->size) {
+		if (bits != reg->size) {
 			bits = reg->size;
 		}
 	}
@@ -379,10 +370,10 @@ static bool r_debug_gdb_attach(RDebug *dbg, int pid) {
 			support_hw_bp = UNKNOWN;
 			desc = &g->desc;
 			int arch = r_sys_arch_id (dbg->arch);
-			int bits = dbg->anal->bits;
+			int bits = dbg->anal->config->bits;
 			gdbr_set_architecture (desc, arch, bits);
 		} else {
-			eprintf ("ERROR: Underlying IO descriptor is not a GDB one..\n");
+			R_LOG_ERROR ("Underlying IO descriptor is not a GDB one");
 		}
 	}
 	return true;
@@ -405,7 +396,7 @@ static bool r_debug_gdb_detach(RDebug *dbg, int pid) {
 static const char *r_debug_gdb_reg_profile(RDebug *dbg) {
 	check_connection (dbg);
 	int arch = r_sys_arch_id (dbg->arch);
-	int bits = dbg->anal->bits;
+	int bits = dbg->anal->config->bits;
 	// XXX This happens when radare2 set dbg.backend before opening io_gdb
 	if (!desc) {
 		return gdbr_get_reg_profile (arch, bits);

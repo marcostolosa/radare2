@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +11,6 @@
 #include <r_cons.h>
 #include <r_lib.h>
 #include <r_io.h>
-
 
 typedef struct {
 	RIO *io;
@@ -35,6 +34,7 @@ typedef struct {
 	RPrint *pr;
 	RList *keywords;
 	const char *mask;
+	const char *valstr;
 	const char *curfile;
 	PJ *pj;
 } RafindOptions;
@@ -179,7 +179,7 @@ static int show_help(const char *argv0, int line) {
 	" -h         show this help\n"
 	" -i         identify filetype (r2 -nqcpm file)\n"
 	" -j         output in JSON\n"
-	" -L         List all io plugins (same as r2 for now)\n"
+	" -L         list all io plugins (same as r2 for now)\n"
 	" -m         magic search, file-type carver\n"
 	" -M [str]   set a binary mask to be applied on keywords\n"
 	" -n         do not stop on read errors\n"
@@ -189,6 +189,7 @@ static int show_help(const char *argv0, int line) {
 	" -t [to]    stop search at address 'to'\n"
 	" -q         quiet: fewer output do not show headings or filenames.\n"
 	" -v         print version and exit\n"
+	" -V [s:num] search for given value (-V 4:123) // assume local endian\n"
 	" -x [hex]   search for hexpair string (909090) (can be used multiple times)\n"
 	" -X         show hexdump of search results\n"
 	" -z         search for zero-terminated strings\n"
@@ -279,16 +280,22 @@ static int rafind_open_file(RafindOptions *ro, const char *file, const ut8 *data
 	}
 	if (ro->mode == R_SEARCH_KEYWORD) {
 		r_list_foreach (ro->keywords, iter, kw) {
+			RSearchKeyword *k = NULL;
 			if (ro->hexstr) {
 				if (ro->mask) {
-					r_search_kw_add (rs, r_search_keyword_new_hex (kw, ro->mask, NULL));
+					k = r_search_keyword_new_hex (kw, ro->mask, NULL);
 				} else {
-					r_search_kw_add (rs, r_search_keyword_new_hexmask (kw, NULL));
+					k = r_search_keyword_new_hexmask (kw, NULL);
 				}
 			} else if (ro->widestr) {
-				r_search_kw_add (rs, r_search_keyword_new_wide (kw, ro->mask, NULL, 0));
+				k = r_search_keyword_new_wide (kw, ro->mask, NULL, 0);
 			} else {
-				r_search_kw_add (rs, r_search_keyword_new_str (kw, ro->mask, NULL, 0));
+				k = r_search_keyword_new_str (kw, ro->mask, NULL, 0);
+			}
+			if (k) {
+				r_search_kw_add (rs, k);
+			} else {
+				eprintf ("Invalid keyword\n");
 			}
 		}
 	}
@@ -384,7 +391,7 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 		return show_help (argv[0], 0);
 	}
 	RGetopt opt;
-	r_getopt_init (&opt, argc, argv, "a:ie:b:cjmM:s:S:x:Xzf:F:t:E:rqnhvZL");
+	r_getopt_init (&opt, argc, argv, "a:ie:b:cjmM:s:S:x:Xzf:F:t:E:rqnhvZLV:");
 	while ((c = r_getopt_next (&opt)) != -1) {
 		switch (c) {
 		case 'a':
@@ -472,8 +479,8 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 			break;
 		case 'x':
 			ro.mode = R_SEARCH_KEYWORD;
-			ro.hexstr = 1;
-			ro.widestr = 0;
+			ro.hexstr = true;
+			ro.widestr = false;
 			r_list_append (ro.keywords, (void*)opt.arg);
 			break;
 		case 'X':
@@ -481,6 +488,50 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 			break;
 		case 'q':
 			ro.quiet = true;
+			break;
+		case 'V':
+			{
+				char *arg = strdup (opt.arg);
+				char *colon = strchr (arg, ':');
+				ut8 buf[8] = {0};
+				int size = (R_SYS_BITS & R_SYS_BITS_64)? 8: 4;
+				ut64 value = 0;
+				// TODO: const int endian = R_SYS_ENDIAN;
+				if (colon) {
+					*colon++ = 0;
+					size = atoi (arg);
+					size = R_MIN (8, size);
+					size = R_MAX (1, size);
+					value = r_num_math (NULL, colon);
+				} else {
+					value = r_num_math (NULL, arg);
+				}
+				switch (size) {
+				case 1:
+					buf[0] = value;
+					break;
+				case 2:
+					r_write_le16 (buf, value);
+					break;
+				case 4:
+					r_write_le32 (buf, value);
+					break;
+				case 8:
+					r_write_le64 (buf, value);
+					break;
+				default:
+					R_LOG_ERROR ("Invalid value size. Must be 1, 2, 4 or 8");
+					return 1;
+				}
+				char *hexdata = r_hex_bin2strdup ((ut8*)buf, size);
+				if (hexdata) {
+					ro.align = size;
+					ro.mode = R_SEARCH_KEYWORD;
+					ro.hexstr = true;
+					ro.widestr = false;
+					r_list_append (ro.keywords, (void*)hexdata);
+				}
+			}
 			break;
 		case 'v':
 			return r_main_version_print ("rafind2");

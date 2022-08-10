@@ -10,8 +10,8 @@
 #define STANDARD_OPERAND_COUNT_DWARF3 12
 #define R_BIN_DWARF_INFO 1
 
-// endianness setting global
-static bool big_end = false;
+// TODO: kill this global
+static R_TH_LOCAL bool big_end = false;
 
 /* This macro seems bad regarding to endianess XXX, use only for single byte */
 #define READ(buf, type)                                             \
@@ -344,7 +344,7 @@ static bool is_printable_lang(ut64 attr_code) {
 	if (attr_code >= sizeof (dwarf_langs) / sizeof (dwarf_langs[0])) {
 		return false;
 	}
-	return dwarf_langs[attr_code] != NULL;
+	return dwarf_langs[attr_code];
 }
 
 static inline bool is_printable_attr(ut64 attr_code) {
@@ -402,7 +402,7 @@ static inline ut64 dwarf_read_address(size_t size, const ut8 **buf, const ut8 *b
 	default:
 		result = 0;
 		*buf += size;
-		eprintf ("Weird dwarf address size: %u.", (int)size);
+		eprintf ("Weird dwarf address size: %u.\n", (int)size);
 	}
 	return result;
 }
@@ -417,11 +417,9 @@ static int add_sdb_include_dir(Sdb *s, const char *incl, int idx) {
 static void line_header_fini(RBinDwarfLineHeader *hdr) {
 	if (hdr) {
 		size_t i;
-
 		for (i = 0; i < hdr->file_names_count; i ++) {
 			free (hdr->file_names[i].name);
 		}
-
 		free (hdr->std_opcode_lengths);
 		free (hdr->file_names);
 	}
@@ -832,7 +830,7 @@ static const ut8 *parse_spec_opcode(
 	regs->line += line_increment;
 	if (mode == R_MODE_PRINT) {
 		print ("  Special opcode %d: ", adj_opcode);
-		print ("advance Address by %"PFMT64d" to 0x%"PFMT64x" and Line by %d to %"PFMT64d"\n",
+		print ("advance Address by %"PFMT64d " to 0x%"PFMT64x" and Line by %d to %"PFMT64d"\n",
 			advance_adr, regs->address, line_increment, regs->line);
 	}
 	if (binfile && binfile->sdb_addrinfo && hdr->file_names) {
@@ -1039,7 +1037,7 @@ static bool parse_line_raw(const RBin *a, const ut8 *obuf, ut64 len, int mode) {
 	const ut8 *buf_end = obuf + len;
 	const ut8 *tmpbuf = NULL;
 
-	RBinDwarfLineHeader hdr = { 0 };
+	RBinDwarfLineHeader hdr = {0};
 	ut64 buf_size;
 
 	// each iteration we read one header AKA comp. unit
@@ -1459,10 +1457,10 @@ static void print_attr_value(const RBinDwarfAttrValue *val, PrintfCallback print
 		print ("%u", val->flag);
 		break;
 	case DW_FORM_sdata:
-		print ("%"PFMT64d"", val->sconstant);
+		print ("%"PFMT64d, val->sconstant);
 		break;
 	case DW_FORM_udata:
-		print ("%"PFMT64u"", val->uconstant);
+		print ("%"PFMT64u, val->uconstant);
 		break;
 	case DW_FORM_ref_addr:
 	case DW_FORM_ref1:
@@ -1498,10 +1496,10 @@ static void print_attr_value(const RBinDwarfAttrValue *val, PrintfCallback print
 	case DW_FORM_addrx4:
 	case DW_FORM_loclistx:
 	case DW_FORM_rnglistx:
-		print ("0x%"PFMT64x"", val->address);
+		print ("0x%"PFMT64x, val->address);
 		break;
 	case DW_FORM_implicit_const:
-		print ("0x%"PFMT64d"", val->uconstant);
+		print ("0x%"PFMT64d, val->uconstant);
 		break;
 	default:
 		print ("Unknown attr value form %"PFMT64d"\n", val->attr_form);
@@ -2090,7 +2088,7 @@ static RBinDwarfDebugInfo *parse_info_raw(Sdb *sdb, RBinDwarfDebugAbbrev *da,
 		}
 
 		if (da->decls->count >= da->capacity) {
-			eprintf ("Warning: malformed dwarf have not enough buckets for decls.\n");
+			R_LOG_WARN ("malformed dwarf have not enough buckets for decls");
 		}
 		r_warn_if_fail (da->count <= da->capacity);
 

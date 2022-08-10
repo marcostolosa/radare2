@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2020-2021 - thestr4ng3r */
+/* radare - LGPL - Copyright 2020-2022 - pancake, thestr4ng3r */
 
 #include "r2r.h"
 
@@ -47,11 +47,11 @@ static bool create_pipe_overlap(HANDLE *pipe_read, HANDLE *pipe_write, LPSECURIT
 	return true;
 }
 
-R_API bool r2r_subprocess_init(void) {
+R_DEPRECATE R_API bool r2r_subprocess_init(void) {
 	return true;
 }
 
-R_API void r2r_subprocess_fini(void) {
+R_DEPRECATE R_API void r2r_subprocess_fini(void) {
 	// nothing to do
 }
 
@@ -199,8 +199,8 @@ R_API R2RSubprocess *r2r_subprocess_start(
 		goto error;
 	}
 
-	PROCESS_INFORMATION proc_info = { 0 };
-	STARTUPINFOA start_info = { 0 };
+	PROCESS_INFORMATION proc_info = {0};
+	STARTUPINFOA start_info = {0};
 	start_info.cb = sizeof (start_info);
 	start_info.hStdError = stderr_write;
 	start_info.hStdOutput = stdout_write;
@@ -250,12 +250,12 @@ error:
 }
 
 R_API bool r2r_subprocess_wait(R2RSubprocess *proc, ut64 timeout_ms) {
-	OVERLAPPED stdout_overlapped = { 0 };
+	OVERLAPPED stdout_overlapped = {0};
 	stdout_overlapped.hEvent = CreateEvent (NULL, TRUE, FALSE, NULL);
 	if (!stdout_overlapped.hEvent) {
 		return false;
 	}
-	OVERLAPPED stderr_overlapped = { 0 };
+	OVERLAPPED stderr_overlapped = {0};
 	stderr_overlapped.hEvent = CreateEvent (NULL, TRUE, FALSE, NULL);
 	if (!stderr_overlapped.hEvent) {
 		CloseHandle (stdout_overlapped.hEvent);
@@ -644,11 +644,10 @@ error:
 }
 
 R_API bool r2r_subprocess_wait(R2RSubprocess *proc, ut64 timeout_ms) {
-	ut64 timeout_abs;
+	ut64 timeout_abs = 0;
 	if (timeout_ms != UT64_MAX) {
 		timeout_abs = r_time_now_mono () + timeout_ms * R_USEC_PER_MSEC;
 	}
-
 	int r = 0;
 	bool stdout_eof = false;
 	bool stderr_eof = false;
@@ -738,7 +737,9 @@ R_API bool r2r_subprocess_wait(R2RSubprocess *proc, ut64 timeout_ms) {
 }
 
 R_API void r2r_subprocess_kill(R2RSubprocess *proc) {
-	kill (proc->pid, SIGKILL);
+	if (kill (proc->pid, SIGKILL) == -1) {
+		r_sys_perror ("kill");
+	}
 }
 
 R_API void r2r_subprocess_stdin_write(R2RSubprocess *proc, const ut8 *buf, size_t buf_size) {
@@ -884,8 +885,10 @@ static R2RProcessOutput *run_r2_test(R2RRunConfig *config, ut64 timeout_ms, cons
 	r_pvector_push (&args, "-N");
 	RListIter *it;
 	void *extra_arg, *file_arg;
-	r_list_foreach (extra_args, it, extra_arg) {
-		r_pvector_push (&args, extra_arg);
+	if (extra_args) {
+		r_list_foreach (extra_args, it, extra_arg) {
+			r_pvector_push (&args, extra_arg);
+		}
 	}
 	r_pvector_push (&args, "-Qc");
 #if __WINDOWS__
@@ -1094,6 +1097,9 @@ R_API R2RAsmTestOutput *r2r_run_asm_test(R2RRunConfig *config, R2RAsmTest *test)
 			goto rip;
 		}
 		ut8 *bytes = malloc (hexlen);
+		if (!bytes) {
+			goto rip;
+		}
 		int byteslen = r_hex_str2bin (hex, bytes);
 		if (byteslen <= 0) {
 			free (bytes);
@@ -1177,11 +1183,6 @@ R_API R2RProcessOutput *r2r_run_fuzz_test(R2RRunConfig *config, R2RFuzzTest *tes
 	const char *cmd = "aaa";
 	RList *files = r_list_new ();
 	r_list_push (files, test->file);
-#if ASAN
-	if (r_str_endswith (test->file, "/swift_read")) {
-		cmd = "?F";
-	}
-#endif
 	R2RProcessOutput *ret = run_r2_test (config, config->timeout_ms, cmd, files, NULL, false, runner, user);
 	r_list_free (files);
 	return ret;
@@ -1229,7 +1230,6 @@ static bool check_cmd_asan_result(R2RProcessOutput *out) {
 			&& !strstr (out->out, "FATAL:"));
 	bool stderr_success = !out->err || (!strstr (out->err, "Sanitizer")
 			&& !strstr (out->err, "runtime error:");
-
 	return stdout_success && stderr_success;
 }
 #endif
@@ -1264,11 +1264,12 @@ R_API R2RTestResultInfo *r2r_run_test(R2RRunConfig *config, R2RTest *test) {
 			R2RAsmTest *at = test->asm_test;
 			R2RAsmTestOutput *out = r2r_run_asm_test (config, at);
 			success = r2r_check_asm_test (out, at);
-			if (!success) {
-				eprintf ("\n[rasm2:error] code: %s vs %s\n", at->disasm, out->disasm);
+			const bool is_broken = at->mode & R2R_ASM_TEST_MODE_BROKEN;
+			if (!success && !is_broken) {
 				char *b0 = r_hex_bin2strdup (at->bytes, at->bytes_size);
 				char *b1 = r_hex_bin2strdup (out->bytes, out->bytes_size);
-				eprintf ("[rasm2:error] data: %s vs %s\n", b0, b1);
+				eprintf ("\n"Color_RED"- %s"Color_RESET" # %s\n", at->disasm, b0);
+				eprintf (Color_GREEN"+ %s"Color_RESET" # %s\n", out->disasm, b1);
 				free (b0);
 				free (b1);
 			}

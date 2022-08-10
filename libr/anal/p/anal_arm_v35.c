@@ -61,6 +61,30 @@ static bool is_mem(OperandClass op) {
 #define ISPREINDEX64() ((OPCOUNT64() == 3) && (insn->operands[2].operandClass == MEM_PRE_IDX))
 #define ISPOSTINDEX64() ((OPCOUNT64() == 4) && (insn->operands[2].operandClass == MEM_POST_IDX))
 
+#if 0
+// TODO: Add support for thumb2 disassembler
+// #include "armv7.h"
+#include "../../asm/arch/arm/v35arm64/arch-armv7/armv7_disasm/armv7.c"
+R_API int disassemble_armv7(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
+	Instruction inst = {0};
+	char output[256];
+	int fc = armv7_disassemble (&inst, output, sizeof (output));
+	if (fc != DISASM_SUCCESS) {
+		return -1;
+	}
+	op->size = 2;
+	r_str_trim_tail (output);
+	r_str_replace_char (output, '\t', ' ');
+	r_str_replace_char (output, '#', ' ');
+	if (r_str_startswith (output, "UNDEF")) {
+		r_strbuf_set (&op->buf_asm, "undefined");
+		return 2 - (a->pc % 2);
+	}
+	r_strbuf_set (&op->buf_asm, output);
+	return op->size;
+}
+#endif
+
 static ut8 get_op_count(Instruction* insn) {
 	ut8 i = 0;
 	while (insn->operands[i].operandClass != NONE) i++;
@@ -234,13 +258,12 @@ static int decode_sign_ext64(ShiftType extender) {
 	}
 }
 
-
 static const char *decode_shift_64(ShiftType shift) {
-	static const char *E_OP_SR = ">>";
-	static const char *E_OP_SL = "<<";
-	static const char *E_OP_RR = ">>>";
-	static const char *E_OP_AR = ">>>>";
-	static const char *E_OP_VOID = "";
+	const char * const E_OP_SR = ">>";
+	const char * const E_OP_SL = "<<";
+	const char * const E_OP_RR = ">>>";
+	const char * const E_OP_AR = ">>>>";
+	const char * const E_OP_VOID = "";
 
 	switch (shift) {
 	case ShiftType_ASR:
@@ -912,6 +935,10 @@ static void anop64(RAnal *a, RAnalOp *op, Instruction *insn) {
 	case ARM64_CINC:
 		op->type = R_ANAL_OP_TYPE_CMOV;
 		break;
+	case ARM64_BTI:
+		op->type = R_ANAL_OP_TYPE_NOP;
+		op->family = R_ANAL_OP_FAMILY_SECURITY;
+		break;
 	case ARM64_MOV:
 		if (REGID64(0) == REG_SP) {
 			op->stackop = R_ANAL_STACK_RESET;
@@ -1209,13 +1236,12 @@ static void anop64(RAnal *a, RAnalOp *op, Instruction *insn) {
 		op->fail = addr + op->size;
 		break;
 	default:
-		R_LOG_DEBUG ("ARM64 analysis: Op type %d at 0x%" PFMT64x " not handled\n", insn->operation, op->addr);
+		R_LOG_DEBUG ("ARM64 analysis: Op type %d at 0x%" PFMT64x " not handled", insn->operation, op->addr);
 		break;
 	}
 }
 
 static int analop_esil(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, Instruction *insn) {
-
 	const char *postfix = "";
 
 	r_strbuf_init (&op->esil);
@@ -1281,6 +1307,8 @@ static int analop_esil(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len
 			"8,0xff00ff00ff00ff00,%s,&,>>,tmp,=,"
 			"8,0x00ff00ff00ff00ff,%s,&,<<,tmp,|=,tmp,%s,=",
 			REG64 (1), REG64 (1), REG64 (0));
+		break;
+	case ARM64_BTI:
 		break;
 	case ARM64_ADR:
 		// TODO: must be 21bit signed
@@ -1478,7 +1506,7 @@ static int analop_esil(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len
 	case ARM64_SCVTF:
 		r_strbuf_setf (&op->esil, "%d,", REGBITS64 (0));
 		ARG64_SIGN_APPEND(&op->esil, 1, REGBITS64 (1));
-		r_strbuf_appendf (&op->esil, ",S2D,D2F,");
+		r_strbuf_appendf (&op->esil, ",I2D,D2F,");
 		VEC64_DST_APPEND(&op->esil, 0, -1);
 		r_strbuf_appendf (&op->esil, ",=");
 		break;
@@ -2497,13 +2525,15 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		r_str_replace_char (output, '\t', ' ');
 		r_str_replace_char (output, '#', ' ');
 		if (r_str_startswith (output, "UNDEF")) {
-			//r_strbuf_set (&op->buf_asm, "undefined");
+			if (mask & R_ANAL_OP_MASK_DISASM) {
+				op->mnemonic = strdup ("undefined");
+			}
 			return 4;
 		}
 		//r_strbuf_set (&op->buf_asm, output);
 		op->type = R_ANAL_OP_TYPE_ILL;
 		if (mask & R_ANAL_OP_MASK_DISASM) {
-			op->mnemonic = strdup ("invalid");
+			op->mnemonic = strdup (output);
 		}
 		anop64 (a, op, &insn);
 		if (mask & R_ANAL_OP_MASK_OPEX) {
@@ -2530,7 +2560,7 @@ static int archinfo(RAnal *anal, int q) {
 		return 4;
 	}
 	if (q == R_ANAL_ARCHINFO_ALIGN) {
-		if (anal && anal->bits == 16) {
+		if (anal && anal->config->bits == 16) {
 			return 2;
 		}
 		return 4;
@@ -2539,7 +2569,7 @@ static int archinfo(RAnal *anal, int q) {
 		return 4;
 	}
 	if (q == R_ANAL_ARCHINFO_MIN_OP_SIZE) {
-		if (anal && anal->bits == 16) {
+		if (anal && anal->config->bits == 16) {
 			return 2;
 		}
 		return 4;
@@ -2556,6 +2586,50 @@ static RList *anal_preludes(RAnal *anal) {
 	return l;
 }
 
+static const char* v35_insn_name(int id) {
+	Instruction insn = { .operation = id };
+	const char *op = get_operation (&insn);
+	if (op && !strcmp (op, "error")) {
+		return NULL;
+	}
+	return op;
+}
+
+static char *mnemonics(RAnal *a, int id, bool json) {
+	int i;
+	if (id != -1) {
+		const char *name = v35_insn_name (id);
+		if (json) {
+			return name? r_str_newf ("[\"%s\"]\n", name): NULL;
+		}
+		return name? strdup (name): NULL;
+	}
+	RStrBuf *buf = r_strbuf_new ("");
+	if (json) {
+		r_strbuf_append (buf, "[");
+	}
+	for (i = 1; ; i++) {
+		const char *op = v35_insn_name (i);
+		if (!op) {
+			break;
+		}
+		if (json) {
+			r_strbuf_append (buf, "\"");
+		}
+		r_strbuf_append (buf, op);
+		if (json) {
+			if (v35_insn_name (i + 1)) {
+				r_strbuf_append (buf, "\",");
+			} else {
+				r_strbuf_append (buf, "\"]\n");
+			}
+		} else {
+			r_strbuf_append (buf, "\n");
+		}
+	}
+	return r_strbuf_drain (buf);
+}
+
 RAnalPlugin r_anal_plugin_arm_v35 = {
 	.name = "arm.v35",
 	.desc = "Vector35 ARM analyzer",
@@ -2563,10 +2637,12 @@ RAnalPlugin r_anal_plugin_arm_v35 = {
 	.esil = true,
 	.arch = "arm",
 	.archinfo = archinfo,
+	.endian = R_SYS_ENDIAN_LITTLE,
 	.get_reg_profile = get_reg_profile,
 	.preludes = anal_preludes,
 	.bits = 64,
 	.op = &analop,
+	.mnemonics = &mnemonics,
 };
 
 #ifndef R2_PLUGIN_INCORE

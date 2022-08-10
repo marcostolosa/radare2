@@ -137,21 +137,18 @@ ST_FUNC void cstr_new(CString *cstr) {
 }
 
 /* free string and reset it to NULL */
-ST_FUNC void cstr_free(CString *cstr)
-{
+ST_FUNC void cstr_free(CString *cstr) {
 	free (cstr->data_allocated);
 	cstr_new (cstr);
 }
 
 /* reset string to empty */
-ST_FUNC void cstr_reset(CString *cstr)
-{
+ST_FUNC void cstr_reset(CString *cstr) {
 	cstr->size = 0;
 }
 
 /* XXX: unicode ? */
-static void add_char(CString *cstr, int c)
-{
+static void add_char(CString *cstr, int c) {
 	if (c == '\'' || c == '\"' || c == '\\') {
 		/* XXX: could be more precise if char or string */
 		cstr_ccat (cstr, '\\');
@@ -232,17 +229,15 @@ ST_FUNC TokenSym *tok_alloc(TCCState *s1, const char *str, int len) {
 /* XXX: buffer overflow */
 /* XXX: float tokens */
 ST_FUNC char *get_tok_str(TCCState *s1, int v, CValue *cv) {
-	static char buf[STRING_MAX_SIZE + 1];
-	static CString cstr_buf;
 	CString *cstr;
 	char *p;
 	int i, len;
 
 	/* NOTE: to go faster, we give a fixed buffer for small strings */
-	cstr_reset (&cstr_buf);
-	cstr_buf.data = buf;
-	cstr_buf.size_allocated = sizeof (buf);
-	p = buf;
+	cstr_reset (&s1->tok_cstr_buf);
+	s1->tok_cstr_buf.data = s1->tok_buf;
+	s1->tok_cstr_buf.size_allocated = sizeof (s1->tok_buf);
+	p = s1->tok_buf;
 
 	switch (v) {
 	case TOK_CINT:
@@ -260,14 +255,14 @@ ST_FUNC char *get_tok_str(TCCState *s1, int v, CValue *cv) {
 		}
 		break;
 	case TOK_LCHAR:
-		cstr_ccat (&cstr_buf, 'L');
+		cstr_ccat (&s1->tok_cstr_buf, 'L');
 	case TOK_CCHAR:
-		cstr_ccat (&cstr_buf, '\'');
+		cstr_ccat (&s1->tok_cstr_buf, '\'');
 		if (cv) {
-			add_char (&cstr_buf, cv->i);
+			add_char (&s1->tok_cstr_buf, cv->i);
 		}
-		cstr_ccat (&cstr_buf, '\'');
-		cstr_ccat (&cstr_buf, '\0');
+		cstr_ccat (&s1->tok_cstr_buf, '\'');
+		cstr_ccat (&s1->tok_cstr_buf, '\0');
 		break;
 	case TOK_PPNUM:
 		// last crash this is handled in "td enum { FOO=1, BAR };"
@@ -278,29 +273,29 @@ ST_FUNC char *get_tok_str(TCCState *s1, int v, CValue *cv) {
 			len = 0;
 		}
 		for (i = 0; i < len; i++) {
-			add_char (&cstr_buf, ((ut8 *) cstr->data)[i]);
+			add_char (&s1->tok_cstr_buf, ((ut8 *) cstr->data)[i]);
 		}
-		cstr_ccat (&cstr_buf, '\0');
+		cstr_ccat (&s1->tok_cstr_buf, '\0');
 		break;
 	case TOK_LSTR:
-		cstr_ccat (&cstr_buf, 'L');
+		cstr_ccat (&s1->tok_cstr_buf, 'L');
 	case TOK_STR:
 		if (cv) {
 			cstr = cv->cstr;
-			cstr_ccat (&cstr_buf, '\"');
+			cstr_ccat (&s1->tok_cstr_buf, '\"');
 			if (v == TOK_STR) {
 				len = cstr->size - 1;
 				for (i = 0; i < len; i++) {
-					add_char (&cstr_buf, ((ut8 *) cstr->data)[i]);
+					add_char (&s1->tok_cstr_buf, ((ut8 *) cstr->data)[i]);
 				}
 			} else {
 				len = (cstr->size / sizeof (nwchar_t)) - 1;
 				for (i = 0; i < len; i++) {
-					add_char (&cstr_buf, ((nwchar_t *) cstr->data)[i]);
+					add_char (&s1->tok_cstr_buf, ((nwchar_t *) cstr->data)[i]);
 				}
 			}
-			cstr_ccat (&cstr_buf, '\"');
-			cstr_ccat (&cstr_buf, '\0');
+			cstr_ccat (&s1->tok_cstr_buf, '\"');
+			cstr_ccat (&s1->tok_cstr_buf, '\0');
 		} else {
 			eprintf ("cv = nil\n");
 		}
@@ -326,7 +321,7 @@ ST_FUNC char *get_tok_str(TCCState *s1, int v, CValue *cv) {
 					*p++ = q[0];
 					*p++ = q[1];
 					*p = '\0';
-					return buf;
+					return s1->tok_buf;
 				}
 				q += 3;
 			}
@@ -344,7 +339,7 @@ addv:
 		}
 		break;
 	}
-	return cstr_buf.data;
+	return s1->tok_cstr_buf.data;
 }
 
 /* fill input buffer and peek next char */
@@ -785,8 +780,7 @@ ST_FUNC void save_parse_state(TCCState *s1, ParseState *s) {
 }
 
 /* restore parse state from 's'
-ST_FUNC void restore_parse_state(ParseState *s)
-{
+ST_FUNC void restore_parse_state(ParseState *s) {
 	file->line_num = s->line_num;
 	macro_ptr = s->macro_ptr;
 	tok = s->tok;
@@ -824,21 +818,18 @@ static inline int tok_ext_size(TCCState *s1, int t) {
 
 /* token string handling */
 
-ST_INLN void tok_str_new(TokenString *s)
-{
+ST_INLN void tok_str_new(TokenString *s) {
 	s->str = NULL;
 	s->len = 0;
 	s->allocated_len = 0;
 	s->last_line_num = -1;
 }
 
-ST_FUNC void tok_str_free(int *str)
-{
+ST_FUNC void tok_str_free(int *str) {
 	free (str);
 }
 
-static int *tok_str_realloc(TokenString *s)
-{
+static int *tok_str_realloc(TokenString *s) {
 	int *str, len;
 
 	if (s->allocated_len == 0) {
@@ -1073,8 +1064,7 @@ ST_FUNC void free_defines(TCCState *s1, Sym *b) {
 
 
 /* eval an expression for #if/#elif */
-static int expr_preprocess(TCCState *s1)
-{
+static int expr_preprocess(TCCState *s1) {
 	int c, t;
 	TokenString str;
 
@@ -1235,8 +1225,7 @@ static CachedInclude *search_cached_include(TCCState *s1, const char *filename) 
 	return NULL;
 }
 
-static inline void add_cached_include(TCCState *s1, const char *filename, int ifndef_macro)
-{
+static inline void add_cached_include(TCCState *s1, const char *filename, int ifndef_macro) {
 	CachedInclude *e;
 	int h;
 
@@ -1781,8 +1770,7 @@ add_char_nonext:
 #define BN_SIZE 2
 
 /* bn = (bn << shift) | or_val */
-static void bn_lshift(unsigned int *bn, int shift, int or_val)
-{
+static void bn_lshift(unsigned int *bn, int shift, int or_val) {
 	int i;
 	unsigned int v;
 	for (i = 0; i < BN_SIZE; i++) {
@@ -1792,8 +1780,7 @@ static void bn_lshift(unsigned int *bn, int shift, int or_val)
 	}
 }
 
-static void bn_zero(unsigned int *bn)
-{
+static void bn_zero(unsigned int *bn) {
 	int i;
 	for (i = 0; i < BN_SIZE; i++) {
 		bn[i] = 0;
@@ -1937,7 +1924,7 @@ num_too_long:
 				s1->tokc.f = (float) d;
 			} else if (t == 'L') {
 				ch = *p++;
-#ifdef TCC_TARGET_PE
+#if 0 // TARGET_PE
 				s1->tok = TOK_CDOUBLE;
 				s1->tokc.d = d;
 #else
@@ -2368,7 +2355,7 @@ str_const:
 
 			/* eval the escape (should be done as TOK_PPNUM) */
 			cstr_reset (&s1->tokcstr);
-			parse_escape_string (s1, &s1->tokcstr, str.data, is_long);
+			parse_escape_string (s1, &s1->tokcstr, (const ut8 *)str.data, is_long);
 			cstr_free (&str);
 
 			if (sep == '\'') {
@@ -2679,8 +2666,7 @@ add_var:
 	return str.str;
 }
 
-static char const ab_month_name[12][4] =
-{
+static char const ab_month_name[12][4] = {
 	"Jan", "Feb", "Mar", "Apr", "May", "Jun",
 	"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 };
@@ -2689,9 +2675,7 @@ static char const ab_month_name[12][4] =
    result to (s1->tok_str,tok_len). 'nested_list' is the list of all
    macros we got inside to avoid recursing. Return non zero if no
    substitution needs to be done */
-static int macro_subst_tok(TCCState *s1, TokenString *tok_str,
-			   Sym **nested_list, Sym *s, struct macro_level **can_read_stream)
-{
+static int macro_subst_tok(TCCState *s1, TokenString *tok_str, Sym **nested_list, Sym *s, struct macro_level **can_read_stream) {
 	Sym *args, *sa, *sa1;
 	int mstr_allocated, parlevel, *mstr, t, t1, spc;
 	const int *p;
@@ -2765,14 +2749,14 @@ redo:
 				while (is_space (s1->ch) || s1->ch == '\n' || s1->ch == '/') {
 					if (s1->ch == '/') {
 						int c;
-						uint8_t *p = s1->file->buf_ptr;
-						PEEKC (s1, c, p);
+						uint8_t *sp = s1->file->buf_ptr;
+						PEEKC (s1, c, sp);
 						if (c == '*') {
-							p = parse_comment (s1, p);
-							s1->file->buf_ptr = p - 1;
+							sp = parse_comment (s1, sp);
+							s1->file->buf_ptr = sp - 1;
 						} else if (c == '/') {
-							p = parse_line_comment (s1, p);
-							s1->file->buf_ptr = p - 1;
+							p = (int*)parse_line_comment (s1, sp);
+							s1->file->buf_ptr = sp - 1;
 						} else {
 							break;
 						}
@@ -2957,9 +2941,7 @@ static inline int *macro_twosharps(TCCState *s1, const int *macro_str) {
 /* do macro substitution of macro_str and add result to
    (tok_str,tok_len). 'nested_list' is the list of all macros we got
    inside to avoid recursing. */
-static void macro_subst(TCCState *s1, TokenString *tok_str, Sym **nested_list,
-			const int *macro_str, struct macro_level **can_read_stream)
-{
+static void macro_subst(TCCState *s1, TokenString *tok_str, Sym **nested_list, const int *macro_str, struct macro_level **can_read_stream) {
 	Sym *s;
 	int *macro_str1;
 	const int *ptr;
@@ -2995,7 +2977,7 @@ static void macro_subst(TCCState *s1, TokenString *tok_str, Sym **nested_list,
 			goto no_subst;
 		}
 		s = define_find (s1, t);
-		if (s != NULL) {
+		if (s) {
 			/* if nested substitution, do nothing */
 			if (sym_find2 (*nested_list, t)) {
 				/* and mark it as TOK_NOSUBST, so it doesn't get subst'd again */

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2019 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <r_userconf.h>
 #if DEBUGGER
@@ -60,7 +60,7 @@ static bool xnu_thread_get_drx(RDebug *dbg, xnu_thread_t *thread) {
 	rc = KERN_FAILURE;
 #endif
 	if (rc != KERN_SUCCESS) {
-		perror (__FUNCTION__);
+		r_sys_perror (__FUNCTION__);
 		thread->count = 0;
 		return false;
 	}
@@ -120,7 +120,7 @@ static bool xnu_thread_set_drx(RDebug *dbg, xnu_thread_t *thread) {
 	thread->count = 0;
 #endif
 	if (rc != KERN_SUCCESS) {
-		perror (__FUNCTION__);
+		r_sys_perror (__FUNCTION__);
 		thread->count = 0;
 		return false;
 	}
@@ -174,7 +174,7 @@ static bool xnu_thread_set_gpr(RDebug *dbg, xnu_thread_t *thread) {
 	rc = thread_set_state (thread->port, thread->flavor,
 			       (thread_state_t)regs, thread->count);
 	if (rc != KERN_SUCCESS) {
-		perror (__FUNCTION__);
+		r_sys_perror (__FUNCTION__);
 		thread->count = 0;
 		return false;
 	}
@@ -218,7 +218,7 @@ static bool xnu_thread_get_gpr(RDebug *dbg, xnu_thread_t *thread) {
 	rc = thread_get_state (thread->port, thread->flavor,
 			       (thread_state_t)regs, &thread->count);
 	if (rc != KERN_SUCCESS) {
-		perror (__FUNCTION__);
+		r_sys_perror (__FUNCTION__);
 		thread->count = 0;
 		return false;
 	}
@@ -313,7 +313,7 @@ static int xnu_update_thread_list(RDebug *dbg) {
 	if (kr != KERN_SUCCESS) {
 		// we can get into this when the process has terminated but we
 		// still hold the old task because we are caching it
-		eprintf ("Failed to get list of task's threads\n");
+		R_LOG_ERROR ("Failed to get list of task's threads");
 		return false;
 	}
 	if (r_list_empty (dbg->threads)) {
@@ -321,11 +321,11 @@ static int xnu_update_thread_list(RDebug *dbg) {
 		for (i = 0; i < thread_count; i++) {
 			thread = xnu_get_thread_with_info (dbg, thread_list[i]);
 			if (!thread) {
-				eprintf ("Failed to fill_thread\n");
+				R_LOG_ERROR ("Failed to fill_thread");
 				continue;
 			}
 			if (!r_list_append (dbg->threads, thread)) {
-				eprintf ("Failed to add thread to list\n");
+				R_LOG_ERROR ("Failed to add thread to list");
 				xnu_thread_free (thread);
 			}
 		}
@@ -362,7 +362,7 @@ static int xnu_update_thread_list(RDebug *dbg) {
 				kr = mach_port_deallocate (mach_task_self (),
 							   thread_list[i]);
 				if (kr != KERN_SUCCESS) {
-					eprintf ("Failed to deallocate port\n");
+					R_LOG_ERROR ("Failed to deallocate port");
 				}
 				continue;
 			}

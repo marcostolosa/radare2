@@ -3,7 +3,7 @@ BSD 2-Clause License
 
 Copyright (c) 2018, lynnl
 
-Cleaned up and refactored for r2 in 2021: condret
+Cleaned up and refactored for r2 in 2021 - 2022: condret
 
 All rights reserved.
 
@@ -111,7 +111,7 @@ static RRBNode *_node_new(void *data, RRBNode *parent) {
 	return node;
 }
 
-#define IS_RED(n) ((n) != NULL && (n)->red == 1)
+#define IS_RED(n) ((n) && (n)->red == 1)
 
 static RRBNode *_rot_once(RRBNode *root, int dir) {
 	r_return_val_if_fail (root, NULL);
@@ -250,7 +250,7 @@ static void _exchange_nodes(RRBNode *node_a, RRBNode *node_b) {
 			node_b->link[0]->parent = node_b;
 		}
 		if (node_b->link[1]) {
-			node_b->link[0]->parent = node_b;
+			node_b->link[1]->parent = node_b;
 		}
 		return;
 	}
@@ -307,7 +307,7 @@ R_API void *r_crbtree_take(RRBTree *tree, void *data, RRBComparator cmp, void *u
 		q = q->link[dir];
 
 		dir = cmp (data, q->data, user);
-		if (dir == 0) {
+		if (dir == 0 && !found) {
 			found = q;
 		}
 

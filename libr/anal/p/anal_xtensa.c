@@ -1,18 +1,76 @@
 /* radare2 - LGPL - Copyright 2016-2018 - pancake */
 
-#include <string.h>
-#include <r_types.h>
-#include <r_lib.h>
 #include <r_asm.h>
 #include <r_anal.h>
-
 #include <xtensa-isa.h>
+
+// GNU DISASM BEGIN
+
+#include "disas-asm.h"
+
+#define INSN_BUFFER_SIZE 4
+
+static R_TH_LOCAL ut64 offset = 0;
+static R_TH_LOCAL RStrBuf *buf_global = NULL;
+static R_TH_LOCAL ut8 bytes[INSN_BUFFER_SIZE];
+
+static int xtensa_buffer_read_memory(bfd_vma memaddr, bfd_byte *myaddr, ut32 length, struct disassemble_info *info) {
+	if (length > INSN_BUFFER_SIZE) {
+		length = INSN_BUFFER_SIZE;
+	}
+	memcpy (myaddr, bytes, length);
+	return 0;
+}
+
+static int symbol_at_address(bfd_vma addr, struct disassemble_info *info) {
+	return 0;
+}
+
+static void memory_error_func(int status, bfd_vma memaddr, struct disassemble_info *info) {
+	//--
+}
+
+DECLARE_GENERIC_PRINT_ADDRESS_FUNC()
+DECLARE_GENERIC_FPRINTF_FUNC()
+
+static int disassemble(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len) {
+	struct disassemble_info disasm_obj;
+	buf_global = r_strbuf_new ("");
+	offset = addr;
+	if (len > INSN_BUFFER_SIZE) {
+		len = INSN_BUFFER_SIZE;
+	}
+	memcpy (bytes, buf, len); // TODO handle thumb
+
+	/* prepare disassembler */
+	memset (&disasm_obj, '\0', sizeof (struct disassemble_info));
+	disasm_obj.disassembler_options = (a->config->bits == 64)?"64":"";
+	disasm_obj.buffer = bytes;
+	disasm_obj.buffer_length = len;
+	disasm_obj.read_memory_func = &xtensa_buffer_read_memory;
+	disasm_obj.symbol_at_address_func = &symbol_at_address;
+	disasm_obj.memory_error_func = &memory_error_func;
+	disasm_obj.print_address_func = &generic_print_address_func;
+	disasm_obj.endian = !a->config->big_endian;
+	disasm_obj.fprintf_func = &generic_fprintf_func;
+	disasm_obj.stream = stdout;
+
+	op->size = print_insn_xtensa ((bfd_vma)offset, &disasm_obj);
+	if (op->size == -1) {
+		op->mnemonic = strdup ("(data)");
+	} else {
+		op->mnemonic = r_strbuf_drain (buf_global);
+		buf_global = NULL;
+	}
+	return op->size;
+}
+// GNU DISASM END
 
 #define CM ","
 #define XTENSA_MAX_LENGTH 8
 
+static const int length_table[16] = { 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 8, 8 };
 static int xtensa_length(const ut8 *insn) {
-	static int length_table[16] = { 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 8, 8 };
 	return length_table[*insn & 0xf];
 }
 
@@ -349,6 +407,7 @@ static XtensaOpFn xtensa_rst2_fns[] = {
 static void xtensa_rst0_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
 	xtensa_rst0_fns[(buf[2] >> 4) & 0xf] (anal, op, addr, buf);
 }
+
 static void xtensa_rst1_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
 	xtensa_rst1_fns[(buf[2] >> 4) & 0xf] (anal, op, addr, buf);
 }
@@ -1398,8 +1457,11 @@ static void esil_branch_check_bit_imm(xtensa_isa isa, xtensa_opcode opcode, xten
 
 	bit_clear = opcode == 56;
 	cmp_op = bit_clear ? "==,$z" : "==,$z,!";
-	mask = 1 << imm_bit;
-
+	if (imm_bit > 31) {
+		mask = 0;
+	} else {
+		mask = (ut32)1 << imm_bit;
+	}
 	sign_extend (&imm_offset, 7);
 	imm_offset += 4 - 3;
 
@@ -1584,7 +1646,9 @@ static void esil_call(xtensa_isa isa, xtensa_opcode opcode,
 	sign_extend (&imm_offset, 17);
 
 	if (call) {
-		imm_offset <<= 2;
+		ut32 uimm_offset = (imm_offset & (UT32_MAX >> 2));
+		uimm_offset <<= 2;
+		imm_offset = uimm_offset;
 	}
 
 	imm_offset += 4 - 3;
@@ -1913,6 +1977,9 @@ static int xtensa_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf_origina
 	if (!op) {
 		return 1;
 	}
+	if (mask & R_ANAL_OP_MASK_DISASM) {
+		disassemble (anal, op, addr, buf_original, len_original);
+	}
 
 	op->size = xtensa_length (buf_original);
 	if (op->size > len_original) {
@@ -1921,7 +1988,7 @@ static int xtensa_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf_origina
 
 	xtensa_op0_fns[(buf_original[0] & 0xf)] (anal, op, addr, buf_original);
 
-	ut8 buffer[XTENSA_MAX_LENGTH] = { 0 };
+	ut8 buffer[XTENSA_MAX_LENGTH] = {0};
 	int len = R_MIN(op->size, XTENSA_MAX_LENGTH);
 	memcpy (buffer, buf_original, len);
 
@@ -1935,8 +2002,8 @@ static int xtensa_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf_origina
 	xtensa_format format;
 	int nslots;
 
-	static xtensa_insnbuf insn_buffer = NULL;
-	static xtensa_insnbuf slot_buffer = NULL;
+	static R_TH_LOCAL xtensa_insnbuf insn_buffer = NULL;
+	static R_TH_LOCAL xtensa_insnbuf slot_buffer = NULL;
 
 	if (!insn_buffer) {
 		insn_buffer = xtensa_insnbuf_alloc (isa);
@@ -2019,8 +2086,9 @@ RAnalPlugin r_anal_plugin_xtensa = {
 	.name = "xtensa",
 	.desc = "Xtensa disassembler",
 	.license = "LGPL3",
+	.endian = R_SYS_ENDIAN_LITTLE | R_SYS_ENDIAN_BIG,
 	.arch = "xtensa",
-	.bits = 8,
+	.bits = 32,
 	.esil = true,
 	.op = &xtensa_op,
 	.get_reg_profile = get_reg_profile,

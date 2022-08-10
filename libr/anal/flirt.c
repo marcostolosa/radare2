@@ -316,7 +316,7 @@ typedef struct RFlirtNode {
 	ut8 *variant_bool_array; // bool array, if true, byte in pattern_bytes is a variant byte
 } RFlirtNode;
 
-static ut8 version; // version of the sig file being parsed
+static R_TH_LOCAL ut8 version; // version of the sig file being parsed
 // used in some cases to parse the right way
 
 // This is from flair tools flair/crc16.cpp
@@ -348,8 +348,8 @@ ut16 crc16(const unsigned char *data_p, size_t length) {
 }
 
 // this is ugly, but we can't afford to change the return size of read_byte
-static bool buf_eof;
-static bool buf_err;
+static R_TH_LOCAL bool buf_eof = false;
+static R_TH_LOCAL bool buf_err = false;
 
 static ut8 read_byte(RBuffer *b) {
 	ut8 r = 0;
@@ -601,7 +601,7 @@ static int module_match_buffer(RAnal *anal, const RFlirtModule *module, ut8 *b, 
 			if (!flirt_func->name[name_offs]) {
 				continue;
 			}
-			name = r_name_filter2 (flirt_func->name + name_offs);
+			name = r_name_filter_dup (flirt_func->name + name_offs);
 			free (next_module_function->name);
 			next_module_function->name = r_str_newf ("flirt.%s", name);
 			anal->flb.set (anal->flb.f, next_module_function->name,
@@ -674,7 +674,7 @@ static int node_match_functions(RAnal *anal, const RFlirtNode *root_node) {
 			continue;
 		}
 		if (!anal->iob.read_at (anal->iob.io, func->addr, func_buf, (int)func_size)) {
-			eprintf ("Couldn't read function %s at 0x%"PFMT64x"\n", func->name, func->addr);
+			R_LOG_WARN ("Couldn't read function %s at 0x%"PFMT64x, func->name, func->addr);
 			free (func_buf);
 			continue;
 		}
@@ -732,9 +732,7 @@ static ut8 read_module_tail_bytes(RFlirtModule *module, RBuffer *b) {
 			goto err_exit;
 		}
 		r_list_append (module->tail_bytes, tail_byte);
-#if DEBUG
-		eprintf ("READ TAIL BYTE: %04X: %02X\n", tail_byte->offset, tail_byte->value);
-#endif
+		R_LOG_DEBUG ("READ TAIL BYTE: %04X: %02X", tail_byte->offset, tail_byte->value);
 	}
 
 	return true;
@@ -919,7 +917,7 @@ static ut8 parse_leaf(const RAnal *anal, RBuffer *b, RFlirtNode *node) {
 		}
 #if DEBUG
 		if (crc_length == 0x00 && crc16 != 0x0000) {
-			eprintf ("Warning: non zero crc of zero length @ %04X\n",
+			R_LOG_WARN ("non zero crc of zero length @ %04X",
 				r_buf_tell (b) + header_size);
 		}
 		eprintf ("crc_len: %02X crc16: %04X\n", crc_length, crc16);
@@ -1450,7 +1448,7 @@ R_API void r_sign_flirt_dump(const RAnal *anal, const char *flirt_file) {
 		node_free (node);
 		return;
 	} else {
-		eprintf ("We encountered an error while parsing the file. Sorry.\n");
+		R_LOG_ERROR ("We encountered a problem while parsing the file");
 		return;
 	}
 }
@@ -1469,12 +1467,12 @@ R_API void r_sign_flirt_scan(RAnal *anal, const char *flirt_file) {
 	r_buf_free (flirt_buf);
 	if (node) {
 		if (!node_match_functions (anal, node)) {
-			eprintf ("Error while scanning the file %s\n", flirt_file);
+			R_LOG_ERROR ("scanning file %s", flirt_file);
 		}
 		node_free (node);
 		return;
 	} else {
-		eprintf ("We encountered an error while parsing the file %s. Sorry.\n", flirt_file);
+		R_LOG_ERROR ("We encountered an error while parsing the file %s", flirt_file);
 		return;
 	}
 }

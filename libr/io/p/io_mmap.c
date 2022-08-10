@@ -45,7 +45,7 @@ static bool r_io_mmap_refresh_buf(RIOMMapFileObj *mmo) {
 	if (mmo->buf) {
 		r_io_mmap_seek (io, mmo, cur, SEEK_SET);
 	}
-	return mmo->buf != NULL;
+	return mmo->buf;
 }
 
 static void r_io_mmap_free(RIOMMapFileObj *mmo) {
@@ -77,7 +77,7 @@ RIOMMapFileObj *r_io_mmap_create_new_file(RIO  *io, const char *filename, int mo
 }
 
 static int r_io_mmap_check(const char *filename) {
-	return (filename && !strncmp (filename, "mmap://", 7) && *(filename + 7));
+	return (filename && r_str_startswith (filename, "mmap://") && filename[7]);
 }
 
 static int r_io_mmap_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {

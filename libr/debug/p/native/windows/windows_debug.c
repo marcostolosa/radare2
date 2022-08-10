@@ -48,7 +48,6 @@ static PTHREAD_ITEM __r_debug_thread_add(RDebug *dbg, DWORD pid, DWORD tid, HAND
 	}
 	pthread = R_NEW0 (THREAD_ITEM);
 	if (!pthread) {
-		R_LOG_ERROR ("__r_debug_thread_add: Memory allocation failed.\n");
 		return NULL;
 	}
 	*pthread = th;
@@ -188,7 +187,7 @@ static int __get_avx(HANDLE th, ut128 xmm[16], ut128 ymm[16]) {
 		ymm[index].Low = 0;
 		xmm[index].Low = 0;
 	}
-	if (newxmm != NULL) {
+	if (newxmm) {
 		for (index = 0; index < nregs; index++) {
 			xmm[index].High = newxmm[index].High;
 			xmm[index].Low = newxmm[index].Low;
@@ -577,12 +576,12 @@ int w32_attach_new_process(RDebug* dbg, int pid) {
 	int tid = -1;
 
 	if (!w32_detach (dbg, dbg->pid)) {
-		eprintf ("Failed to detach from (%d)\n", dbg->pid);
+		R_LOG_ERROR ("Failed to detach from (%d)", dbg->pid);
 		return -1;
 	}
 
 	if ((tid = w32_attach (dbg, pid)) < 0) {
-		eprintf ("Failed to attach to (%d)\n", pid);
+		R_LOG_ERROR ("Failed to attach to (%d)", pid);
 		return -1;
 	}
 
@@ -641,7 +640,7 @@ bool w32_select(RDebug *dbg, int pid, int tid) {
 		}	
 	}
 
-	if (dbg->corebind.cfggeti (dbg->corebind.core, "dbg.threads")) {
+	if (dbg->coreb.cfggeti (dbg->coreb.core, "dbg.threads")) {
 		// Suspend all other threads
 		r_list_foreach (dbg->threads, it, th) {
 			if (!th->bFinished && !th->bSuspended && th->tid != selected) {
@@ -685,7 +684,7 @@ int w32_kill(RDebug *dbg, int pid, int tid, int sig) {
 void w32_break_process(void *user) {
 	RDebug *dbg = (RDebug *)user;
 	RW32Dw *wrap = dbg->user;
-	if (dbg->corebind.cfggeti (dbg->corebind.core, "dbg.threads")) {
+	if (dbg->coreb.cfggeti (dbg->coreb.core, "dbg.threads")) {
 		w32_select (dbg, wrap->pi.dwProcessId, -1); // Suspend all threads
 	} else {
 		if (!r_w32_DebugBreakProcess (wrap->pi.hProcess)) {
@@ -859,7 +858,7 @@ RDebugReasonType w32_dbg_wait(RDebug *dbg, int pid) {
 			if (ret != R_DEBUG_REASON_USERSUSP) {
 				ret = R_DEBUG_REASON_NEW_TID;
 			}
-			dbg->corebind.cmdf (dbg->corebind.core, "f teb.%d @ 0x%p", tid, de.u.CreateThread.lpThreadLocalBase);
+			dbg->coreb.cmdf (dbg->coreb.core, "f teb.%d @ 0x%p", tid, de.u.CreateThread.lpThreadLocalBase);
 			next_event = 0;
 			break;
 		case EXIT_PROCESS_DEBUG_EVENT:
@@ -873,7 +872,7 @@ RDebugReasonType w32_dbg_wait(RDebug *dbg, int pid) {
 			} else {
 				__r_debug_thread_add (dbg, pid, tid, INVALID_HANDLE_VALUE, de.u.CreateThread.lpThreadLocalBase, de.u.CreateThread.lpStartAddress, TRUE);
 			}
-			dbg->corebind.cmdf (dbg->corebind.core, "f- teb.%d", tid);
+			dbg->coreb.cmdf (dbg->coreb.core, "f- teb.%d", tid);
 			if (de.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT) {
 				exited_already = pid;
 				w32_continue (dbg, pid, tid, DBG_CONTINUE);
@@ -1185,7 +1184,7 @@ static void __w32_info_user(RDebug *dbg, RDebugInfo *rdi) {
 	}
 	tok_usr = (PTOKEN_USER)malloc (tok_len);
 	if (!tok_usr) {
-		perror ("__w32_info_user/malloc tok_usr");
+		r_sys_perror ("__w32_info_user/malloc tok_usr");
 		goto err___w32_info_user;
 	}
 	if (!GetTokenInformation (h_tok, TokenUser, (LPVOID)tok_usr, tok_len, &tok_len)) {
@@ -1194,13 +1193,13 @@ static void __w32_info_user(RDebug *dbg, RDebugInfo *rdi) {
 	}
 	usr = (LPTSTR)calloc (usr_len, sizeof (TCHAR));
 	if (!usr) {
-		perror ("__w32_info_user/malloc usr");
+		r_sys_perror ("__w32_info_user/malloc usr");
 		goto err___w32_info_user;
 	}
 	*usr = '\0';
 	usr_dom = (LPTSTR)calloc (usr_dom_len, sizeof (TCHAR));
 	if (!usr_dom) {
-		perror ("__w32_info_user/malloc usr_dom");
+		r_sys_perror ("__w32_info_user/malloc usr_dom");
 		goto err___w32_info_user;
 	}
 	*usr_dom = '\0';

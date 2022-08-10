@@ -72,15 +72,15 @@ static const char *help_msg_f[] = {
 
 static const char *help_msg_fc[] = {
 	"Usage: fc", "<flagname> [color]", " # List colors with 'ecs'",
-	"fc", "", "Same as fc.",
-	"fc", " color", "Set color to all flags in current offset",
-	"fc", " flag=color", "Set color to given flag. Same as 'fc color@flag'",
-	"fc.", "", "Get color of all flags in current offset",
-	"fc-", "", "Remove color from current offset",
-	"fc-", "flagname", "Remove color from given flag",
-	"fc-*", "", "Reset all color flags",
-	"fc*", "", "List all flags colors in r2 commands",
-	"fc.*", "", "Set color to all flags in current offset",
+	"fc", "", "same as fc.",
+	"fc", " color", "set color to all flags in current offset",
+	"fc", " flag=color", "set color to given flag. Same as 'fc color@flag'",
+	"fc.", "", "get color of all flags in current offset",
+	"fc-", "", "remove color from current offset",
+	"fc-", "flagname", "remove color from given flag",
+	"fc-*", "", "reset all color flags",
+	"fc*", "", "list all flags colors in r2 commands",
+	"fc.*", "", "set color to all flags in current offset",
 	NULL
 };
 
@@ -185,18 +185,21 @@ static RList *__childrenFlagsOf(RCore *core, RList *flags, const char *prefix) {
 
 	const size_t prefix_len = strlen (prefix);
 	r_list_foreach (flags, iter, f) {
+		if (r_cons_is_breaked ()) {
+			break;
+		}
 		if (prefix_len > 0 && strncmp (f->name, prefix, prefix_len)) {
 			continue;
 		}
 		if (prefix_len > strlen (f->name)) {
 			continue;
 		}
-		if (r_cons_is_breaked ()) {
-			break;
-		}
 		const char *name = f->name;
 		int name_len = strlen (name);
 		r_list_foreach (flags, iter2, f2) {
+			if (r_cons_is_breaked ()) {
+				break;
+			}
 			if (prefix_len > strlen (f2->name)) {
 				continue;
 			}
@@ -224,6 +227,9 @@ static RList *__childrenFlagsOf(RCore *core, RList *flags, const char *prefix) {
 			const char *fname = NULL;
 			size_t fname_len = 0;
 			r_list_foreach (flags, iter2, f2) {
+				if (r_cons_is_breaked ()) {
+					break;
+				}
 				if (strncmp (f2->name, kw, kw_len)) {
 					continue;
 				}
@@ -248,6 +254,9 @@ static RList *__childrenFlagsOf(RCore *core, RList *flags, const char *prefix) {
 		
 		bool found = false;
 		r_list_foreach (list, iter2, fn) {
+			if (r_cons_is_breaked ()) {
+				break;
+			}
 			if (!strcmp (fn, kw)) {
 				found = true;
 				break;
@@ -281,6 +290,9 @@ static void __printRecursive(RCore *core, RList *flags, const char *prefix, int 
 	}
 	RList *children = __childrenFlagsOf (core, flags, prefix);
 	r_list_foreach (children, iter, fn) {
+		if (r_cons_is_breaked ()) {
+			break;
+		}
 		if (!strcmp (fn, prefix)) {
 			continue;
 		}
@@ -291,7 +303,7 @@ static void __printRecursive(RCore *core, RList *flags, const char *prefix, int 
 			r_cons_printf ("%s %s\n", r_str_pad (' ', prefix_len), fn + prefix_len);
 		}
 		//r_cons_printf (".fg %s\n", fn);
-		__printRecursive (core, flags, fn, mode, depth+1);
+		__printRecursive (core, flags, fn, mode, depth + 1);
 	}
 	r_list_free (children);
 }
@@ -299,7 +311,9 @@ static void __printRecursive(RCore *core, RList *flags, const char *prefix, int 
 static void __flag_graph(RCore *core, const char *input, int mode) {
 	RList *flags = r_list_newf (NULL);
 	r_flag_foreach_space (core->flags, r_flag_space_cur (core->flags), listFlag, flags);
+	r_cons_break_push (NULL, NULL);
 	__printRecursive (core, flags, input, mode, 0);
+	r_cons_break_pop ();
 	r_list_free (flags);
 }
 
@@ -785,7 +799,7 @@ static void print_function_labels(RAnal *anal, RAnalFunction *fcn, int rad) {
 }
 
 static int cmd_flag(void *data, const char *input) {
-	static int flagenum = 0;
+	static R_TH_LOCAL int flagenum = 0;
 	RCore *core = (RCore *)data;
 	ut64 off = core->offset;
 	char *ptr, *str = NULL;
@@ -1278,7 +1292,8 @@ rep:
 		break;
 	case 'c': // "fc"
 		if (input[1] == 0 || input[1] == '.') {
-			const RList *list = input[1]? r_flag_get_list (core->flags, core->offset): r_flag_all_list (core->flags, false);
+			RList *list_to_free = input[1]? NULL: r_flag_all_list (core->flags, false);
+			const RList *list = input[1]? r_flag_get_list (core->flags, core->offset): list_to_free;
 			RListIter *iter;
 			RFlagItem *fi;
 			r_list_foreach (list, iter, fi) {
@@ -1291,27 +1306,31 @@ rep:
 					}
 				}
 			}
+			r_list_free (list_to_free);
 		} else if (input[1] == '-') {
 			RListIter *iter;
 			RFlagItem *fi;
 			ut64 addr = (input[1] && input[2] != '*' && input[2]) ? r_num_math (core->num, input + 2): core->offset;
+			RList *list_to_free = (input[1] && input[2]=='*')? r_flag_all_list (core->flags, false): NULL;
 			const RList *list = (input[1] && input[2]=='*')?
-				r_flag_all_list (core->flags, false)
+				list_to_free
 				: r_flag_get_list (core->flags, addr);
 			r_list_foreach (list, iter, fi) {
 				if (fi->color) {
 					R_FREE (fi->color);
 				}
 			}
+			r_list_free (list_to_free);
 		} else if (input[1] == '*') {
 			RListIter *iter;
 			RFlagItem *fi;
-			const RList *list = r_flag_all_list (core->flags, false);
+			RList *list = r_flag_all_list (core->flags, false);
 			r_list_foreach (list, iter, fi) {
 				if (fi->color) {
 					r_cons_printf ("fc %s=%s\n", fi->name, fi->color);
 				}
 			}
+			r_list_free (list);
 		} else if (input[1] == ' ') {
 			const char *ret;
 			char *arg = r_str_trim_dup (input + 2);
@@ -1620,7 +1639,7 @@ rep:
 				RListIter *iter;
 				r_list_sort (temp, &cmpflag);
 				r_list_foreach (temp, iter, flag) {
-					if (strstr (flag->name , arg) != NULL) {
+					if (strstr (flag->name , arg)) {
 						if (flag->offset < core->offset) {
 							loff = flag->offset;
 							lmatch = flag->name;
@@ -1704,7 +1723,7 @@ rep:
 		if (input[1]) {
 			const char *arg = r_str_trim_head_ro (input + 1);
 			RFlagItem *fi = r_flag_get (core->flags, arg);
-			core->num->value = fi? 1: 0;
+			r_core_return_value (core, fi? 1:0);
 		} else {
 			r_core_cmd_help (core, help_msg_f);
 			break;

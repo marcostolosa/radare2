@@ -10,12 +10,17 @@ static int mcore_anal(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int l
 	mcore_t* instr = NULL;
 
 	if (mcore_init (&handle, buf, len)) {
-		eprintf ("[!] mcore: bad or invalid data.\n");
+		R_LOG_ERROR ("mcore: bad or invalid data");
 		return -1;
 	}
 
 	op->size = 2;
 	if ((instr = mcore_next (&handle))) {
+		if (mask & R_ANAL_OP_MASK_DISASM) {
+			char tmp[256];
+			mcore_snprint (tmp, sizeof (tmp), addr, instr);
+			op->mnemonic = strdup (tmp);
+		}
 		op->type = instr->type;
 		switch (instr->type) {
 		case R_ANAL_OP_TYPE_CALL:
@@ -119,6 +124,8 @@ RAnalPlugin r_anal_plugin_mcore = {
 	.arch = "mcore",
 	.license = "LGPL3",
 	.bits = 32,
+	.cpus = "mcore,c-sky",
+	.endian = R_SYS_ENDIAN_BIG,
 	.op = &mcore_anal,
 	.archinfo = archinfo,
 	.set_reg_profile = &set_reg_profile,

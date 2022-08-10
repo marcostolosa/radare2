@@ -1,26 +1,26 @@
-/* radare - LGPL - Copyright 2009-2021 // pancake */
+/* radare - LGPL - Copyright 2009-2022 // pancake */
 
 static const char *help_msg_m[] = {
 	"Usage:", "m[-?*dgy] [...] ", "Mountpoints management",
-	"m", " /mnt ext2 0", "Mount ext2 fs at /mnt with delta 0 on IO",
-	"m", " /mnt", "Mount fs at /mnt with autodetect fs and current offset",
-	"m", "", "List all mountpoints in human readable format",
-	"m*", "", "Same as above, but in r2 commands",
-	"m-/", "", "Umount given path (/)",
-	"mL", "", "List filesystem plugins (Same as Lm)",
-	"mc", " [file]", "Cat: Show the contents of the given file",
-	"md", " /", "List directory contents for path",
-	"mf", "[?] [o|n]", "Search files for given filename or for offset",
-	"mg", " /foo [offset size]", "Get fs file/dir and dump to disk (support base64:)",
-	"mi", " /foo/bar", "Get offset and size of given file",
-	"mj", "", "List mounted filesystems in JSON",
-	"mo", " /foo/bar", "Open given file into a malloc://",
-	"mp", " msdos 0", "Show partitions in msdos format at offset 0",
-	"mp", "", "List all supported partition types",
-	"ms", " /mnt", "Open filesystem prompt at /mnt",
-	"mw", " [file] [data]", "Write data into file", // TODO: add mwf
-	"mwf", " [diskfile] [r2filepath]", "Write contents of local diskfile into r2fs mounted path",
-	"my", "", "Yank contents of file into clipboard",
+	"m", " /mnt ext2 0", "mount ext2 fs at /mnt with delta 0 on IO",
+	"m", " /mnt", "mount fs at /mnt with autodetect fs and current offset",
+	"m", "", "list all mountpoints in human readable format",
+	"m*", "", "same as above, but in r2 commands",
+	"m-/", "", "umount given path (/)",
+	"mL", "[Lj]", "list filesystem plugins (Same as Lm), mLL shows only fs plugin names",
+	"mc", " [file]", "cat: Show the contents of the given file",
+	"md", " /", "list files and directory on the virtual r2's fs",
+	"mf", "[?] [o|n]", "search files for given filename or for offset",
+	"mg", " /foo [offset size]", "get fs file/dir and dump to disk (support base64:)",
+	"mi", " /foo/bar", "get offset and size of given file",
+	"mj", "", "list mounted filesystems in JSON",
+	"mo", " /foo/bar", "open given file into a malloc://",
+	"mp", " msdos 0", "show partitions in msdos format at offset 0",
+	"mp", "", "list all supported partition types",
+	"ms", " /mnt", "open filesystem shell at /mnt (or fs.cwd if not defined)",
+	"mw", " [file] [data]", "write data into file", // TODO: add mwf
+	"mwf", " [diskfile] [r2filepath]", "write contents of local diskfile into r2fs mounted path",
+	"my", "", "yank contents of file into clipboard",
 	//"TODO: support multiple mountpoints and RFile IO's (need io+core refactorn",
 	NULL
 };
@@ -32,12 +32,21 @@ static const char *help_msg_mf[] = {
 	NULL
 };
 
-static int cmd_mkdir(void *data, const char *input) {
-	char *res = r_syscmd_mkdir (input);
+static int cmd_mktemp(RCore *core, const char *input) {
+	char *res = r_syscmd_mktemp (input);
 	if (res) {
-		r_cons_print (res);
+		r_core_return_value (core, 1);
+		r_cons_printf ("%s", res);
 		free (res);
+	} else {
+		r_core_return_value (core, 0);
 	}
+	return 0;
+}
+
+static int cmd_mkdir(RCore *core, const char *input) {
+	int rc = r_syscmd_mkdir (input)? 0: 1;
+	r_core_return_value (core, rc);
 	return 0;
 }
 
@@ -45,7 +54,6 @@ static int cmd_mv(void *data, const char *input) {
 	return r_syscmd_mv (input)? 1: 0;
 }
 
-static char *cwd = NULL;
 #define av_max 1024
 
 static const char *t2s(const char ch) {
@@ -131,6 +139,9 @@ static int cmd_mount(void *data, const char *_input) {
 	RFSPartition *part;
 	RCore *core = (RCore *)data;
 
+	if (!strncmp ("ktemp", _input, 5)) {
+		return cmd_mktemp (data, _input);
+	}
 	if (!strncmp ("kdir", _input, 4)) {
 		return cmd_mkdir (data, _input);
 	}
@@ -140,7 +151,7 @@ static int cmd_mount(void *data, const char *_input) {
 	input = oinput = strdup (_input);
 
 	switch (*input) {
-	case ' ':
+	case ' ': // "m "
 		input = (char *)r_str_trim_head_ro (input + 1);
 		ptr = strchr (input, ' ');
 		if (ptr) {
@@ -164,26 +175,31 @@ static int cmd_mount(void *data, const char *_input) {
 				mountp = ptr;
 				fstype = input;
 			}
-
-			if (!r_fs_mount (core->fs, fstype, mountp, off)) {
+			if (fstype && !r_fs_mount (core->fs, fstype, mountp, off)) {
 				eprintf ("Cannot mount %s\n", input);
 			}
 		} else {
 			if (!(ptr = r_fs_name (core->fs, core->offset))) {
 				eprintf ("Unknown filesystem type\n");
 			}
-			if (!r_fs_mount (core->fs, ptr, input, core->offset)) {
+			if (ptr && !r_fs_mount (core->fs, ptr, input, core->offset)) {
 				eprintf ("Cannot mount %s\n", input);
 			}
 			free (ptr);
 		}
 		break;
 	case '-':
-		r_fs_umount (core->fs, input + 1);
+		if (input[1] == '?') { // "mL?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "m-", 0, true);
+		} else {
+			r_fs_umount (core->fs, input + 1);
+		}
 		break;
 	case 'j':
-		{
-			PJ *pj = pj_new ();
+		if (input[1] == '?') { // "mL?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "mj", 0, true);
+		} else {
+			PJ *pj = r_core_pj_new (core);
 			pj_o (pj);
 			pj_k (pj, "mountpoints");
 			pj_a (pj);
@@ -210,29 +226,58 @@ static int cmd_mount(void *data, const char *_input) {
 			pj_free (pj);
 		}
 		break;
-	case '*':
+	case '*': // "m*"
 		r_list_foreach (core->fs->roots, iter, root) {
 			r_cons_printf ("m %s %s 0x%"PFMT64x"\n",
-				root-> path, root->p->name, root->delta);
+				root->path, root->p->name, root->delta);
 		}
 		break;
-	case '\0':
+	case '\0': // "m"
 		r_list_foreach (core->fs->roots, iter, root) {
 			r_cons_printf ("%s\t0x%"PFMT64x"\t%s\n",
 				root->p->name, root->delta, root->path);
 		}
 		break;
 	case 'L': // "mL" list of plugins
-		r_list_foreach (core->fs->plugins, iter, plug) {
-			r_cons_printf ("%10s  %s\n", plug->name, plug->desc);
+		if (input[1] == '?') { // "mL?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "mL", 0, true);
+		} else if (input[1] == 'L') {
+			r_list_foreach (core->fs->plugins, iter, plug) {
+				r_cons_printf ("%s\n", plug->name);
+			}
+		} else if (input[1] == 'j') {
+			PJ *pj = r_core_pj_new (core);
+			pj_a (pj);
+			r_list_foreach (core->fs->plugins, iter, plug) {
+				pj_o (pj);
+				pj_ks (pj, "name", plug->name);
+				pj_ks (pj, "description", plug->desc);
+				pj_end (pj);
+			}
+			pj_end (pj);
+			char *s = pj_drain (pj);
+			r_cons_printf ("%s\n", s);
+			free (s);
+		} else {
+			r_list_foreach (core->fs->plugins, iter, plug) {
+				r_cons_printf ("%10s  %s\n", plug->name, plug->desc);
+			}
 		}
 		break;
 	case 'l': // "ml"
 	case 'd': // "md"
-		cmd_mount_ls (core, input + 1);
+		if (input[1] == '?') { // "md?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "md", 0, true);
+		} else {
+			cmd_mount_ls (core, input + 1);
+		}
 		break;
-	case 'p':
+	case 'p': // "mp"
 		input = (char *)r_str_trim_head_ro (input + 1);
+		if (input[0] == '?') { // "mp?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "mp", 0, true);
+			break;
+		}
 		ptr = strchr (input, ' ');
 		if (ptr) {
 			*ptr = 0;
@@ -252,49 +297,65 @@ static int cmd_mount(void *data, const char *_input) {
 		break;
 	case 'o': // "mo"
 		input = (char *)r_str_trim_head_ro (input + 1);
-		file = r_fs_open (core->fs, input, false);
-		if (file) {
-			r_fs_read (core->fs, file, 0, file->size);
-			char *uri = r_str_newf ("malloc://%d", file->size);
-			RIODesc *fd = r_io_open (core->io, uri, R_PERM_RW, 0);
-			if (fd) {
-				r_io_desc_write (fd, file->data, file->size);
-			}
+		if (*input == '?') { // "mo?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "mo", 0, true);
 		} else {
-			eprintf ("Cannot open file\n");
+			file = r_fs_open (core->fs, input, false);
+			if (file) {
+				r_fs_read (core->fs, file, 0, file->size);
+				char *uri = r_str_newf ("malloc://%d", file->size);
+				RIODesc *fd = r_io_open (core->io, uri, R_PERM_RW, 0);
+				if (fd) {
+					r_io_desc_write (fd, file->data, file->size);
+				}
+			} else {
+				eprintf ("Cannot open file\n");
+			}
 		}
 		break;
 	case 'i':
-		input = (char *)r_str_trim_head_ro (input + 1);
-		file = r_fs_open (core->fs, input, false);
-		if (file) {
-			// XXX: dump to file or just pipe?
-			r_fs_read (core->fs, file, 0, file->size);
-			r_cons_printf ("f file %d 0x%08"PFMT64x"\n", file->size, file->off);
-			r_fs_close (core->fs, file);
+		if (input[1] == '?') { // "mi?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "mi", 0, true);
 		} else {
-			eprintf ("Cannot open file\n");
+			input = (char *)r_str_trim_head_ro (input + 1);
+			file = r_fs_open (core->fs, input, false);
+			if (file) {
+				// XXX: dump to file or just pipe?
+				r_fs_read (core->fs, file, 0, file->size);
+				r_cons_printf ("f file %d 0x%08"PFMT64x"\n", file->size, file->off);
+				r_fs_close (core->fs, file);
+			} else {
+				eprintf ("Cannot open file\n");
+			}
 		}
 		break;
 	case 'c': // "mc"
-		input = (char *)r_str_trim_head_ro (input + 1);
-		ptr = strchr (input, ' ');
-		if (ptr) {
-			*ptr++ = 0;
+		if (input[1] == '?') { // "mi?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "mc", 0, true);
 		} else {
-			ptr = "./";
-		}
-		file = r_fs_open (core->fs, input, false);
-		if (file) {
-			r_fs_read (core->fs, file, 0, file->size);
-			r_cons_write ((const char *)file->data, file->size);
-			r_fs_close (core->fs, file);
-			r_cons_write ("\n", 1);
-		} else if (!r_fs_dir_dump (core->fs, input, ptr)) {
-			eprintf ("Cannot open file\n");
+			input = (char *)r_str_trim_head_ro (input + 1);
+			ptr = strchr (input, ' ');
+			if (ptr) {
+				*ptr++ = 0;
+			} else {
+				ptr = "./";
+			}
+			file = r_fs_open (core->fs, input, false);
+			if (file) {
+				r_fs_read (core->fs, file, 0, file->size);
+				r_cons_write ((const char *)file->data, file->size);
+				r_fs_close (core->fs, file);
+				r_cons_write ("\n", 1);
+			} else if (!r_fs_dir_dump (core->fs, input, ptr)) {
+				eprintf ("Cannot open file\n");
+			}
 		}
 		break;
 	case 'g': // "mg"
+		if (input[1] == '?') { // "mg?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "mg", 0, true);
+			break;
+		}
 		input = (char *)r_str_trim_head_ro (input + 1);
 		int offset = 0;
 		int size = 0;
@@ -368,7 +429,7 @@ static int cmd_mount(void *data, const char *_input) {
 	case 'f':
 		input++;
 		switch (*input) {
-		case '?':
+		case '?': // "mf?"
 			r_core_cmd_help (core, help_msg_mf);
 			break;
 		case 'n':
@@ -405,6 +466,10 @@ static int cmd_mount(void *data, const char *_input) {
 		}
 		break;
 	case 's': // "ms"
+		if (input[1] == '?') { // "ms?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "ms", 0, true);
+			break;
+		};
 		if (core->http_up) {
 			free (oinput);
 			return false;
@@ -412,6 +477,7 @@ static int cmd_mount(void *data, const char *_input) {
 		input = (char *)r_str_trim_head_ro (input + 1);
 		r_cons_set_raw (false);
 		{
+			char *cwd = strdup (r_config_get (core->config, "fs.cwd"));
 			RFSShell shell = {
 				.cwd = &cwd,
 				.set_prompt = r_line_set_prompt,
@@ -424,10 +490,15 @@ static int cmd_mount(void *data, const char *_input) {
 			r_fs_shell_prompt (&shell, core->fs, input);
 			core->autocomplete_type = AUTOCOMPLETE_DEFAULT;
 			r_core_autocomplete_reload (core);
+			r_config_set (core->config, "fs.cwd", cwd);
 			R_FREE (cwd);
 		}
 		break;
 	case 'w': // "mw"
+		if (input[1] == '?') { // "ms?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "mw", 0, true);
+			break;
+		}
 		if (input[1] == 'f') { // "mwf"
 			char *arg0 = r_str_trim_dup (input + 1);
 			char *arg1 = strchr (arg0, ' ');
@@ -470,7 +541,25 @@ static int cmd_mount(void *data, const char *_input) {
 		}
 		break;
 	case 'y':
-		eprintf ("TODO: my command not implemented.\n");
+		if (input[1] == '?') { // "ms?"
+			r_core_cmd_help_match_spec (core, help_msg_m, "my", 0, true);
+			break;
+		}
+		input = (char *)r_str_trim_head_ro (input + 1);
+		ptr = strchr (input, ' ');
+		if (ptr) {
+			*ptr++ = 0;
+		} else {
+			ptr = "./";
+		}
+		file = r_fs_open (core->fs, input, false);
+		if (file) {
+			r_fs_read (core->fs, file, 0, file->size);
+			r_core_yank_set (core, 0, file->data, file->size);
+			r_fs_close (core->fs, file);
+		} else {
+			eprintf ("Cannot open file\n");
+		}
 		break;
 	case '?':
 		r_core_cmd_help (core, help_msg_m);

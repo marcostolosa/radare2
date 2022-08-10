@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2016-2018 - pancake */
+/* radare - LGPL - Copyright 2016-2022 - pancake */
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -9,9 +9,9 @@
 #include <r_asm.h>
 #include "disas-asm.h"
 
-static unsigned long Offset = 0;
-static RStrBuf *buf_global = NULL;
-static unsigned char bytes[4];
+static R_TH_LOCAL unsigned long Offset = 0;
+static R_TH_LOCAL RStrBuf *buf_global = NULL;
+static R_TH_LOCAL unsigned char bytes[4];
 
 static int lanai_buffer_read_memory(bfd_vma memaddr, bfd_byte *myaddr, ut32 length, struct disassemble_info *info) {
 	int delta = (memaddr - Offset);
@@ -47,7 +47,7 @@ static int disassemble(RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 
 	/* prepare disassembler */
 	memset (&disasm_obj, '\0', sizeof (struct disassemble_info));
-	disasm_obj.disassembler_options = (a->bits==64)? "64": "";
+	disasm_obj.disassembler_options = (a->config->bits == 64)? "64": "";
 	disasm_obj.buffer = bytes;
 	disasm_obj.read_memory_func = &lanai_buffer_read_memory;
 	disasm_obj.symbol_at_address_func = &symbol_at_address;
@@ -68,7 +68,7 @@ RAsmPlugin r_asm_plugin_lanai_gnu = {
 	.name = "lanai", // .gnu",
 	.arch = "lanai",
 	.license = "GPL3",
-	.bits = 32,
+	.bits = 32 | 64,
 	.endian = R_SYS_ENDIAN_BIG,
 	.desc = "LANAI",
 	.disassemble = &disassemble

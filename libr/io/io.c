@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2008-2021 - condret, pancake, alvaro_fe */
+/* radare2 - LGPL - Copyright 2008-2022 - condret, pancake, alvaro_fe */
 
 #include <r_io.h>
 #include <sdb.h>
@@ -10,6 +10,7 @@ R_API RIO* r_io_new(void) {
 	return r_io_init (R_NEW0 (RIO));
 }
 
+// R2_580 - just return bool
 R_API RIO* r_io_init(RIO* io) {
 	r_return_val_if_fail (io, NULL);
 	io->addrbytes = 1;
@@ -38,6 +39,7 @@ R_API void r_io_free(RIO *io) {
 }
 
 R_API RIODesc *r_io_open_buffer(RIO *io, RBuffer *b, int perm, int mode) {
+#if 0
 	ut64 bufSize = r_buf_size (b);
 	char *uri = r_str_newf ("malloc://%" PFMT64d, bufSize);
 	RIODesc *desc = r_io_open_nomap (io, uri, perm, mode);
@@ -47,6 +49,12 @@ R_API RIODesc *r_io_open_buffer(RIO *io, RBuffer *b, int perm, int mode) {
 	}
 	free (uri);
 	return desc;
+#else
+	char *uri = r_str_newf ("rbuf://%p", b);
+	RIODesc *desc = r_io_open_nomap (io, uri, perm, mode);
+	free (uri);
+	return desc;
+#endif
 }
 
 R_API RIODesc *r_io_open_nomap(RIO *io, const char *uri, int perm, int mode) {
@@ -155,11 +163,11 @@ R_API bool r_io_reopen(RIO* io, int fd, int perm, int mode) {
 		r_io_desc_exchange (io, od->fd, nd->fd);
 		r_io_desc_close (od);
 		if (nd->perm & R_PERM_W) {
-			io->corebind.cmdf (io->corebind.core, "omfg");
+			io->coreb.cmdf (io->coreb.core, "omfg");
 		}
 		return true;
 	}
-	eprintf ("Cannot reopen\n");
+	R_LOG_ERROR ("Cannot reopen");
 	return false;
 }
 #endif
@@ -231,7 +239,6 @@ static bool internal_r_io_read_at(RIO *io, ut64 addr, ut8 *buf, int len) {
 	return ret;
 }
 
-// Deprecated, use either r_io_read_at_mapped or r_io_nread_at instead.
 // For virtual mode, returns true if all reads on mapped regions are successful
 // and complete.
 // For physical mode, the interface is broken because the actual read bytes are
@@ -243,7 +250,6 @@ R_API bool r_io_read_at(RIO *io, ut64 addr, ut8 *buf, int len) {
 	}
 	if (io->mask) {
 		ut64 p = addr;
-		ut8 *b = buf;
 		size_t q = 0;
 		while (q < len) {
 			p &= io->mask;
@@ -256,7 +262,6 @@ R_API bool r_io_read_at(RIO *io, ut64 addr, ut8 *buf, int len) {
 				return false;
 			}
 			q += sz;
-			b += sz;
 			p = 0;
 		}
 		return true;
@@ -298,6 +303,7 @@ R_API int r_io_nread_at(RIO *io, ut64 addr, ut8 *buf, int len) {
 		if (io->ff) {
 			memset (buf, io->Oxff, len);
 		}
+		r_io_bank_drain (io, io->bank);
 		ret = r_io_bank_read_from_submap_at (io, io->bank, addr, buf, len);
 	} else {
 		ret = r_io_pread_at (io, addr, buf, len);
@@ -632,11 +638,8 @@ R_API void *r_io_ptrace_func(RIO *io, void *(*func)(void *), void *user) {
 }
 #endif
 
-//remove all banks, maps and descs
 R_API void r_io_fini(RIO* io) {
-	if (!io) {
-		return;
-	}
+	r_return_if_fail (io);
 	r_io_bank_fini (io);
 	r_io_map_fini (io);
 	r_io_desc_cache_fini_all (io);

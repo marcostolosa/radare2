@@ -19,17 +19,12 @@
    MA 02110-1301, USA.  */
 
 
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
+#include <r_types.h>
+#include <r_util.h>
 #include "../../include/disas-asm.h"
-#include "../../include/sysdep.h"
-//#include "bfd.h"
-//#include "libbfd.h"
 #include "../../include/xtensa-isa.h"
 #include "../../include/xtensa-isa-internal.h"
-#include "r_types.h"
-#include "r_util.h"
+
 extern int filename_cmp (const char *s1, const char *s2);
 xtensa_isa_status xtisa_errno;
 char xtisa_error_msg[1024];
@@ -228,12 +223,12 @@ xtensa_insnbuf_from_chars (xtensa_isa isa,
   fence_post = start + (num_chars * increment);
   memset (insn, 0, xtensa_insnbuf_size (isa) * sizeof (xtensa_insnbuf_word));
 
-  for (i = start; i != fence_post; i += increment, ++cp)
-    {
+  for (i = start; i != fence_post; i += increment, ++cp) {
       int word_inx = byte_to_word_index (i);
       int bit_inx = byte_to_bit_index (i);
-
-      insn[word_inx] |= (*cp & 0xff) << bit_inx;
+      if (bit_inx < 24) {
+	      insn[word_inx] |= (*cp & 0xff) << bit_inx;
+      }
     }
 }
 

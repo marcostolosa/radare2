@@ -55,13 +55,12 @@ static int is_invalid(const ut8 *buf, int size) {
 
 #define USE_IS_VALID_OFFSET 1
 static ut64 is_pointer(RAnal *anal, const ut8 *buf, int size) {
-	ut64 n;
 	ut8 buf2[32];
 	RIOBind *iob = &anal->iob;
 	if (size > sizeof (buf2)) {
 		size = sizeof (buf2);
 	}
-	n = r_mem_get_num (buf, size);
+	ut64 n = r_mem_get_num (buf, size);
 	if (!n) {
 		return 1; // null pointer
 	}
@@ -73,10 +72,15 @@ static ut64 is_pointer(RAnal *anal, const ut8 *buf, int size) {
 	// this makes disasm 5x faster, but can result in some false positives
 	// we should compare with current offset, to avoid
 	// short/long references. and discard invalid ones
-	if (n < 0x1000) return 0;	// probably wrong
-	if (n > 0xffffffffffffLL) return 0; // probably wrong
-
-	if (iob->read_at (iob->io, n, buf2, size) != size) return 0;
+	if (n < 0x1000) {
+		return 0;	// probably wrong
+	}
+	if (n > 0xffffffffffffLL) {
+		return 0; // probably wrong
+	}
+	if (iob->read_at (iob->io, n, buf2, size) != size) {
+		return 0;
+	}
 	return is_invalid (buf2, size)? 0: n;
 #endif
 }
@@ -96,7 +100,6 @@ static bool is_bin(const ut8 *buf, int size) {
 }
 
 // TODO: add is_flag, is comment?
-
 R_API char *r_anal_data_to_string(RAnalData *d, RConsPrintablePalette *pal) {
 	int i, len, mallocsz = 1024;
 	ut32 n32;
@@ -107,7 +110,6 @@ R_API char *r_anal_data_to_string(RAnalData *d, RConsPrintablePalette *pal) {
 
 	RStrBuf *sb = r_strbuf_new (NULL);
 	if (!sb || !r_strbuf_reserve (sb, mallocsz)) {
-		eprintf ("Cannot allocate %d byte(s)\n", mallocsz);
 		return NULL;
 	}
 	if (pal) {
@@ -222,7 +224,6 @@ R_API RAnalData *r_anal_data_new_string(ut64 addr, const char *p, int len, int t
 		ad->buf = malloc (len + 1);
 		if (!ad->buf) {
 			r_anal_data_free (ad);
-			eprintf ("Cannot allocate %d byte(s)\n", len + 1);
 			return NULL;
 		}
 		memcpy (ad->buf, ad->str, len + 1);
@@ -275,7 +276,7 @@ R_API void r_anal_data_free(RAnalData *d) {
 R_API RAnalData *r_anal_data(RAnal *anal, ut64 addr, const ut8 *buf, int size, int wordsize) {
 	ut64 dst = 0;
 	int n, nsize = 0;
-	int bits = anal->bits;
+	int bits = anal->config->bits;
 	int word = wordsize? wordsize: R_MIN (8, bits / 8);
 
 	if (size < 4) {
@@ -342,7 +343,7 @@ R_API const char *r_anal_data_kind(RAnal *a, ut64 addr, const ut8 *buf, int len)
 	int num = 0;
 	int i, j;
 	RAnalData *data;
-	int word = a->bits / 8;
+	int word = a->config->bits / 8;
 	for (i = j = 0; i < len; j++) {
 		if (str && !buf[i]) {
 			str++;

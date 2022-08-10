@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2017 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include "r_crypto.h"
 #include "config.h"
@@ -24,6 +24,7 @@ static const struct {
 	{ "des-ecb", R_CRYPTO_DES_ECB },
 	{ "xor", R_CRYPTO_XOR },
 	{ "serpent-ecb", R_CRYPTO_SERPENT },
+	{ "sm4-ecb", R_CRYPTO_SM4_ECB },
 	{ NULL, 0 }
 };
 
@@ -128,7 +129,7 @@ R_API bool r_crypto_use(RCrypto *cry, const char *algo) {
 	r_list_foreach (cry->plugins, iter, h) {
 		if (h && h->use && h->use (algo)) {
 			cry->h = h;
-			return cry->h != NULL;
+			return cry->h;
 		}
 	}
 	return false;
@@ -193,16 +194,16 @@ R_API ut8 *r_crypto_get_output(RCrypto *cry, int *size) {
 		*size = cry->output_len;
 		memcpy (buf, cry->output, *size);
 	} else {
-		/* initialize */
-		const int size = 4096;
-		cry->output = realloc (buf, size);
-		if (!cry->output) {
+		size_t newlen = 4096;
+		ut8 *newbuf = realloc (buf, newlen);
+		if (!newbuf) {
 			free (buf);
 			return NULL;
 		}
+		buf = newbuf;
+		cry->output = newbuf;
 		cry->output_len = 0;
-		cry->output_size = size;
-
+		cry->output_size = newlen;
 		return NULL;
 	}
 	return buf;

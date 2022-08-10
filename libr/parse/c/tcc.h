@@ -34,9 +34,6 @@
 #include <stdarg.h>
 #include <string.h>
 #include <errno.h>
-#ifndef _MSC_VER
-#include <math.h>
-#endif
 #include <signal.h>
 #include <fcntl.h>
 #ifndef __wasi__
@@ -79,21 +76,8 @@ typedef UINT_PTR uintptr_t;
 # define O_BINARY 0
 #endif
 
-// #include "stab.h"
 #include "libtcc.h"
-
-#ifndef __WINDOWS__
 #include <inttypes.h>
-#else
-typedef unsigned char uint8_t;
-typedef unsigned short int uint16_t;
-typedef unsigned int uint32_t;
-typedef unsigned long long int uint64_t;
-#ifdef _MSC_VER
-typedef signed char int8_t;
-typedef long long int int64_t;
-#endif
-#endif
 
 // TODO: Make it dependable from the r2 asm/anal settings
 #define LDOUBLE_SIZE 12
@@ -101,78 +85,13 @@ typedef long long int int64_t;
 #define MAX_ALIGN 8
 #define PTR_SIZE 4
 
-
-#if !defined (__HAIKU__)
-typedef uint64_t addr_t;
-#endif
-
-/* parser debug */
-/* #define PARSE_DEBUG */
-/* preprocessor debug */
-/* #define PP_DEBUG */
-/* include file debug */
-/* memory leak debug */
-/* #define MEM_DEBUG */
-/* assembler debug */
-/* #define ASM_DEBUG */
-
-/* ------------ path configuration ------------ */
-
-#ifndef CONFIG_SYSROOT
-# define CONFIG_SYSROOT ""
-#endif
-#ifndef CONFIG_TCCDIR
-# define CONFIG_TCCDIR "."
-#endif
-#ifndef CONFIG_LDDIR
-# define CONFIG_LDDIR "lib"
-#endif
-
-/* path to find crt1.o, crti.o and crtn.o */
-#ifndef CONFIG_TCC_CRTPREFIX
-# define CONFIG_TCC_CRTPREFIX CONFIG_SYSROOT "/usr/" CONFIG_LDDIR
-#endif
-
-/* Below: {B} is substituted by CONFIG_TCCDIR (rsp. -B option) */
-
-/* system include paths */
-#ifndef CONFIG_TCC_SYSINCLUDEPATHS
-# ifdef TCC_TARGET_PE
-#  define CONFIG_TCC_SYSINCLUDEPATHS "{B}/include;{B}/include/winapi"
-# elif defined CONFIG_MULTIARCHDIR
-#  define CONFIG_TCC_SYSINCLUDEPATHS \
-	CONFIG_SYSROOT "/usr/local/include" \
-":" CONFIG_SYSROOT "/usr/local/include/" CONFIG_MULTIARCHDIR \
-":" CONFIG_SYSROOT "/usr/include" \
-":" CONFIG_SYSROOT "/usr/include/" CONFIG_MULTIARCHDIR \
-":" "{B}/include"
-# else
-#  define CONFIG_TCC_SYSINCLUDEPATHS \
-	CONFIG_SYSROOT "/usr/local/include" \
-":" CONFIG_SYSROOT "/usr/include" \
-":" "{B}/include"
-# endif
-#endif
-
-/* library search paths */
-#ifndef CONFIG_TCC_LIBPATHS
-# ifdef TCC_TARGET_PE
-#  define CONFIG_TCC_LIBPATHS "{B}/lib;{B}"
-# else
-#  define CONFIG_TCC_LIBPATHS \
-	CONFIG_SYSROOT "/usr/" CONFIG_LDDIR \
-":" CONFIG_SYSROOT "/" CONFIG_LDDIR \
-":" CONFIG_SYSROOT "/usr/local/" CONFIG_LDDIR
-# endif
-#endif
-
 /* -------------------------------------------- */
 
 // TODO: Read this from the configuration variables in r2
 
 #define STACK_NEW0(type, arg) \
 	type arg; \
-ZERO_FILL(arg)
+	ZERO_FILL(arg)
 
 #define INCLUDE_STACK_SIZE  32
 #define IFDEF_STACK_SIZE    64
@@ -196,17 +115,13 @@ typedef struct TokenSym {
 	char str[1];
 } TokenSym;
 
-#ifdef TCC_TARGET_PE
-typedef unsigned short nwchar_t;
-#else
 typedef int nwchar_t;
-#endif
 
 typedef struct CString {
 	int size; /* size in bytes */
-	void *data; /* either 'char *' or 'nwchar_t *' */
+	char *data; /* either 'char *' or 'nwchar_t *' */
 	int size_allocated;
-	void *data_allocated; /* if non NULL, data has been malloced */
+	char *data_allocated; /* if non NULL, data has been malloced */
 } CString;
 
 /* type definition */
@@ -477,6 +392,18 @@ anon_sym: anonymous symbol index
 	// 
 	const char *global_type;
 	const char *global_symname;
+
+	RPVector *typedefs;
+
+	// callback for appendf
+	void (*cb)(const char *, char **);
+	char **cb_user_data;
+
+	char decl_kind[1024];
+
+	// used to store current token information in the preprocessor
+	char tok_buf[STRING_MAX_SIZE + 1];
+	CString tok_cstr_buf;
 
 	Sym *global_stack;
 	Sym *local_stack;
@@ -805,7 +732,6 @@ static inline int toup(int c) {
 #define ST_INLN
 #define ST_FUNC
 #define ST_DATA extern
-extern char **tcc_cb_ptr;
 #endif
 
 /* ------------ libtcc.c ------------ */
@@ -919,9 +845,9 @@ ST_FUNC long long expr_const(TCCState *s1);
 #define ST_DATA
 #endif
 /********************************************************/
-PUB_FUNC void tcc_appendf(const char *fmt, ...);
-PUB_FUNC void tcc_typedef_appendf(const char *fmt, ...);
-PUB_FUNC void tcc_typedef_alias_fields(const char *alias);
+PUB_FUNC void tcc_appendf(TCCState *s, const char *fmt, ...);
+PUB_FUNC void tcc_typedef_appendf(TCCState *s, const char *fmt, ...);
+PUB_FUNC void tcc_typedef_alias_fields(TCCState *s, const char *alias);
 
 extern void (*tcc_cb)(const char *, char **);
 

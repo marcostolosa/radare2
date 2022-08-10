@@ -1,8 +1,8 @@
-/* radare2 - LGPL - Copyright 2015-2019 - pancake */
+/* radare2 - LGPL - Copyright 2015-2022 - pancake */
 
-#include <r_asm.h>
+#include <r_anal.h>
 #include <r_lib.h>
-#include <capstone.h>
+#include <capstone/capstone.h>
 
 #if CS_API_MAJOR >= 4 && CS_API_MINOR >= 0
 #define CAPSTONE_HAS_M680X 1
@@ -19,69 +19,59 @@
 #endif
 
 #if CAPSTONE_HAS_M680X
-#include <m680x.h>
+#include <capstone/m680x.h>
 
 static int m680xmode(const char *str) {
-	if (!str) {
+	if (R_STR_ISEMPTY (str)) {
 		return CS_MODE_M680X_6800;
 	}
 	// replace this with the asm.features?
-	if (str && strstr (str, "6800")) {
+	if (strstr (str, "6800")) {
 		return CS_MODE_M680X_6800;
 	}
-	if (str && strstr (str, "6801")) {
+	if (strstr (str, "6801")) {
 		return CS_MODE_M680X_6801;
-	} else if (str && strstr (str, "6805")) {
+	} else if (strstr (str, "6805")) {
 		return CS_MODE_M680X_6805;
-	} else if (str && strstr (str, "6808")) {
+	} else if (strstr (str, "6808")) {
 		return CS_MODE_M680X_6808;
-	} else if (str && strstr (str, "6809")) {
+	} else if (strstr (str, "6809")) {
 		return CS_MODE_M680X_6809;
-	} else if (str && strstr (str, "6811")) {
+	} else if (strstr (str, "6811")) {
 		return CS_MODE_M680X_6811;
 	}
-//
-	if (str && strstr (str, "cpu12")) {
+	if (strstr (str, "cpu12")) {
 		return CS_MODE_M680X_CPU12;
 	}
-	if (str && strstr (str, "6301")) {
+	if (strstr (str, "6301")) {
 		return CS_MODE_M680X_6301;
 	}
-	if (str && strstr (str, "6309")) {
+	if (strstr (str, "6309")) {
 		return CS_MODE_M680X_6309;
 	}
-	if (str && strstr (str, "hcs08")) {
+	if (strstr (str, "hcs08")) {
 		return CS_MODE_M680X_HCS08;
 	}
 	return CS_MODE_M680X_6800;
 }
 
+#define CSINC M680X
+#define CSINC_MODE m680xmode(a->config->cpu)
+#include "capstone.inc"
+
 #define IMM(x) insn->detail->m680x.operands[x].imm
 #define REL(x) insn->detail->m680x.operands[x].rel
 
 static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
-	int n, ret, opsize = -1;
-	static csh handle = 0;
-	static int omode = -1;
-	static int obits = 32;
+	csh handle = init_capstone (a);
+	if (handle == 0) {
+		return -1;
+	}
+	
+	int n, opsize = -1;
 	cs_insn* insn;
 
-	int mode = m680xmode (a->cpu);
-
-	if (mode != omode || a->bits != obits) {
-		cs_close (&handle);
-		handle = 0;
-		omode = mode;
-		obits = a->bits;
-	}
 	op->size = 4;
-	if (handle == 0) {
-		ret = cs_open (CS_ARCH_M680X, mode, &handle);
-		if (ret != CS_ERR_OK) {
-			goto fin;
-		}
-		cs_option (handle, CS_OPT_DETAIL, CS_OPT_ON);
-	}
 	n = cs_disasm (handle, (ut8*)buf, len, addr, 1, &insn);
 	if (n < 1 || insn->size < 1) {
 		op->type = R_ANAL_OP_TYPE_ILL;
@@ -97,6 +87,7 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 	}
 	op->id = insn->id;
 	opsize = op->size = insn->size;
+	op->type = R_ANAL_OP_TYPE_UNK;
 	switch (insn->id) {
 	case M680X_INS_INVLD:
 		op->type = R_ANAL_OP_TYPE_ILL;
@@ -508,9 +499,17 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		break;
 	}
 beach:
+	if (mask & R_ANAL_OP_MASK_DISASM) {
+		if (op->type == R_ANAL_OP_TYPE_ILL) {
+			op->mnemonic = strdup ("invalid");
+		} else {
+			op->mnemonic = r_str_newf ("%s%s%s", insn->mnemonic,
+					insn->op_str[0]?" ": "", insn->op_str);
+			r_str_replace_in (op->mnemonic, strlen (op->mnemonic),
+				"ptr ", "", true);
+		}
+	}
 	cs_free (insn, n);
-	//cs_close (&handle);
-fin:
 	return opsize;
 }
 
@@ -537,6 +536,7 @@ RAnalPlugin r_anal_plugin_m680x_cs = {
 	.set_reg_profile = &set_reg_profile,
 	.bits = 16 | 32,
 	.op = &analop,
+	.mnemonics = cs_mnemonics,
 };
 #else
 RAnalPlugin r_anal_plugin_m680x_cs = {

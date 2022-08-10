@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2020-2021 - pancake */
+/* radare - LGPL - Copyright 2020-2022 - pancake */
 
 #include <r_lib.h>
 #include <r_flag.h>
@@ -198,10 +198,33 @@ static int parse(RParse *p, const char *data, char *str) {
 	return true;
 }
 
+static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len) {
+	char *r0 = strstr (data, "[r0]");
+	if (r0) {
+		char *neg = strstr (data, " -");
+		if (neg && neg < r0) {
+			char *n = r_str_ndup (r_str_trim_head_ro (neg), (int)(size_t)(r0 - neg - 1));
+			int negdelta = strstr (n, "0x")? -((int)r_num_get (NULL, n + 1)): atoi (n);
+			free (n);
+			*neg = 0;
+			ut64 addr = UT32_MAX + negdelta + 1;
+			char *res = r_str_newf ("%s 0x%"PFMT64x"%s", data, addr, r0 + 4);
+			strcpy (str, res);
+			free (res);
+			return true;
+		}
+	}
+	if (str != data) {
+		r_str_cpy (str, data);
+	}
+	return false;
+}
+
 RParsePlugin r_parse_plugin_v850_pseudo = {
 	.name = "v850.pseudo",
 	.desc = "v850 pseudo syntax",
 	.parse = parse,
+	.subvar = &subvar,
 };
 
 #ifndef R2_PLUGIN_INCORE

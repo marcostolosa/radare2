@@ -7,13 +7,12 @@ r_bin_sources = [
   'demangle.c',
   'dwarf.c',
   'blang.c',
-  'filter.c',
+  'bfilter.c',
   'bfile.c',
   'bobj.c',
 
   join_paths('p','bin_any.c'),
   join_paths('p','bin_art.c'),
-  join_paths('p','bin_xalz.c'),
   join_paths('p','bin_avr.c'),
   join_paths('p','bin_bf.c'),
   join_paths('p','bin_bflt.c'),
@@ -59,6 +58,7 @@ r_bin_sources = [
   join_paths('p','bin_psxexe.c'),
   join_paths('p','bin_pyc.c'),
   join_paths('p','bin_qnx.c'),
+  join_paths('p','bin_s390.c'),
   join_paths('p','bin_sfc.c'),
   join_paths('p','bin_smd.c'),
   join_paths('p','bin_sms.c'),
@@ -79,6 +79,7 @@ r_bin_sources = [
   join_paths('p','bin_xtr_fatmach0.c'),
   join_paths('p','bin_xtr_pemixed.c'),
   join_paths('p','bin_xtr_sep64.c'),
+  join_paths('p','bin_xtr_xalz.c'),
   join_paths('p','bin_z64.c'),
   join_paths('p','bin_zimg.c'),
 
@@ -169,6 +170,7 @@ r_bin = library('r_bin', r_bin_sources,
 r_bin_dep = declare_dependency(link_with: r_bin,
                                include_directories: r_bin_inc)
 
+if get_option('blob')
 r_bin_static = static_library('r_bin_static', r_bin_sources,
   include_directories: r_bin_inc,
   c_args: ['-DR_API_BIN_ONLY=1'] + library_cflags,
@@ -180,7 +182,7 @@ r_bin_static = static_library('r_bin_static', r_bin_sources,
     r_magic_static_dep,
     r_socket_static_dep,
     r_syscall_static_dep,
-    java_dep,
+    java_static_dep,
     lz4_dep,
     yxml_dep
   ],
@@ -190,6 +192,7 @@ r_bin_static = static_library('r_bin_static', r_bin_sources,
 
 r_bin_static_dep = declare_dependency(link_with: r_bin_static,
   include_directories: r_bin_inc)
+endif
 
 pkgconfig_mod.generate(r_bin,
   subdirs: 'libr',

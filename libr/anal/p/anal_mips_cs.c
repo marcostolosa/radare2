@@ -1,11 +1,13 @@
-/* radare2 - LGPL - Copyright 2013-2019 - pancake */
+/* radare2 - LGPL - Copyright 2013-2022 - pancake */
 
 #include <r_asm.h>
 #include <r_lib.h>
-#include <capstone.h>
-#include <mips.h>
+#include <capstone/capstone.h>
+#include <capstone/mips.h>
 
-static ut64 t9_pre = UT64_MAX;
+R_IPI int mips_assemble(const char *str, ut64 pc, ut8 *out);
+
+static R_TH_LOCAL ut64 t9_pre = UT64_MAX;
 // http://www.mrc.uidaho.edu/mrc/people/jff/digital/MIPSir.html
 
 #define OPERAND(x) insn->detail->mips.operands[x]
@@ -93,17 +95,15 @@ static ut64 t9_pre = UT64_MAX;
 #define ES_ADD_CK32_OVERF(x, y, z) es_add_ck (op, x, y, z, 32)
 #define ES_ADD_CK64_OVERF(x, y, z) es_add_ck (op, x, y, z, 64)
 
-static inline void es_sign_n_64(RAnal *a, RAnalOp *op, const char *arg, int bit)
-{
-	if (a->bits == 64) {
+static inline void es_sign_n_64(RAnal *a, RAnalOp *op, const char *arg, int bit) {
+	if (a->config->bits == 64) {
 		r_strbuf_appendf (&op->esil, ",%d,%s,~,%s,=,", bit, arg, arg);
 	} else {
 		r_strbuf_append (&op->esil,",");
 	}
 }
 
-static inline void es_add_ck(RAnalOp *op, const char *a1, const char *a2, const char *re, int bit)
-{
+static inline void es_add_ck(RAnalOp *op, const char *a1, const char *a2, const char *re, int bit) {
 	ut64 mask = 1ULL << (bit-1);
 	r_strbuf_appendf (&op->esil,
 		"%d,0x%" PFMT64x ",%s,%s,^,&,>>,%d,0x%" PFMT64x ",%s,%s,+,&,>>,|,1,==,$z,?{,$$,1,TRAP,}{,%s,%s,+,%s,=,}",
@@ -628,7 +628,7 @@ static int parse_reg_name(RRegItem *reg, csh handle, cs_insn *insn, int reg_num)
 }
 
 static void op_fillval(RAnal *anal, RAnalOp *op, csh *handle, cs_insn *insn) {
-	static RRegItem reg;
+	static R_TH_LOCAL RRegItem reg = {0};
 	switch (op->type & R_ANAL_OP_TYPE_MASK) {
 	case R_ANAL_OP_TYPE_LOAD:
 		if (OPERAND(1).type == MIPS_OP_MEM) {
@@ -694,7 +694,7 @@ capstone bug
 		} else if (OPERAND(0).type == MIPS_OP_REG && OPERAND(1).type == MIPS_OP_REG) {
 			SET_SRC_DST_2_REGS (op);
 		} else {
-			eprintf ("Unknown div at 0x%08"PFMT64x"\n", op->addr);
+			R_LOG_ERROR ("Unknown div at 0x%08"PFMT64x, op->addr);
 		}
 		break;
 	}
@@ -725,51 +725,56 @@ static void set_opdir(RAnalOp *op) {
 	}
 }
 
-static int analop(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
-	int n, ret, opsize = -1;
-	static csh hndl = 0;
-	static int omode = -1;
-	static int obits = 32;
-	cs_insn* insn;
-	int mode = anal->big_endian? CS_MODE_BIG_ENDIAN: CS_MODE_LITTLE_ENDIAN;
-
-	if (anal->cpu && *anal->cpu) {
-		if (!strcmp (anal->cpu, "micro")) {
+static int get_capstone_mode (RAnal *anal) {
+	int mode = anal->config->big_endian? CS_MODE_BIG_ENDIAN: CS_MODE_LITTLE_ENDIAN;
+	const char *cpu = anal->config->cpu;
+	if (R_STR_ISNOTEMPTY (cpu)) {
+		if (!strcmp (cpu, "micro")) {
 			mode |= CS_MODE_MICRO;
-		} else if (!strcmp (anal->cpu, "r6")) {
+		} else if (!strcmp (cpu, "r6")) {
 			mode |= CS_MODE_MIPS32R6;
-		} else if (!strcmp (anal->cpu, "v3")) {
+		} else if (!strcmp (cpu, "v3")) {
 			mode |= CS_MODE_MIPS3;
-		} else if (!strcmp (anal->cpu, "v2")) {
+		} else if (!strcmp (cpu, "v2")) {
 #if CS_API_MAJOR > 3
 			mode |= CS_MODE_MIPS2;
 #endif
 		}
 	}
-	mode |= (anal->bits==64)? CS_MODE_MIPS64: CS_MODE_MIPS32;
-	if (mode != omode || anal->bits != obits) {
-		cs_close (&hndl);
-		hndl = 0;
-		omode = mode;
-		obits = anal->bits;
+	mode |= (anal->config->bits == 64)? CS_MODE_MIPS64: CS_MODE_MIPS32;
+	return mode;
+}
+
+#define CSINC MIPS
+#define CSINC_MODE get_capstone_mode(a)
+#include "capstone.inc"
+
+static int analop(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
+	csh hndl = init_capstone (anal);
+	if (hndl == 0) {
+		return -1;
 	}
+
+	if (anal->config->syntax == R_ASM_SYNTAX_REGNUM) {
+		cs_option (hndl, CS_OPT_SYNTAX, CS_OPT_SYNTAX_NOREGNAME);
+	} else {
+		cs_option (hndl, CS_OPT_SYNTAX, CS_OPT_SYNTAX_DEFAULT);
+	}
+
+	int n, opsize = -1;
+	cs_insn* insn;
+
 // XXX no arch->cpu ?!?! CS_MODE_MICRO, N64
 	op->addr = addr;
 	if (len < 4) {
 		return -1;
 	}
 	op->size = 4;
-	if (hndl == 0) {
-		ret = cs_open (CS_ARCH_MIPS, mode, &hndl);
-		if (ret != CS_ERR_OK) {
-			goto fin;
-		}
-		cs_option (hndl, CS_OPT_DETAIL, CS_OPT_ON);
-	}
-	n = cs_disasm (hndl, (ut8*)buf, len, addr, 1, &insn);
+	n = cs_disasm (hndl, buf, len, addr, 1, &insn);
 	if (n < 1 || insn->size < 1) {
 		if (mask & R_ANAL_OP_MASK_DISASM) {
 			op->mnemonic = strdup ("invalid");
+			opsize = 4;
 		}
 		goto beach;
 	}
@@ -778,6 +783,9 @@ static int analop(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len, 
 			insn->mnemonic,
 			insn->op_str[0]?" ":"",
 			insn->op_str);
+		if (op->mnemonic) {
+			r_str_replace_char (op->mnemonic, '$', 0);
+		}
 	}
 	op->id = insn->id;
 	opsize = op->size = insn->size;
@@ -1098,14 +1106,12 @@ beach:
 		op_fillval (anal, op, &hndl, insn);
 	}
 	cs_free (insn, n);
-	//cs_close (&handle);
-fin:
 	return opsize;
 }
 
 static char *get_reg_profile(RAnal *anal) {
 	const char *p = NULL;
-	switch (anal->bits) {
+	switch (anal->config->bits) {
 	default:
 	case 32: p =
 		"=PC    pc\n"
@@ -1218,17 +1224,34 @@ static RList *anal_preludes(RAnal *anal) {
 	return l;
 }
 
+static int mips_cs_opasm(RAnal *anal, ut64 addr, const char *s, ut8 *buf, int len) {
+	int ret = mips_assemble (s, addr, buf);
+	if (anal->config->big_endian) {
+		ut8 tmp = buf[0];
+		buf[0] = buf[3];
+		buf[3] = tmp;
+		tmp = buf[1];
+		buf[1] = buf[2];
+		buf[2] = tmp;
+	}
+	return ret;
+}
+
 RAnalPlugin r_anal_plugin_mips_cs = {
 	.name = "mips",
 	.desc = "Capstone MIPS analyzer",
 	.license = "BSD",
 	.esil = true,
 	.arch = "mips",
+	.cpus = "mips32/64,micro,r6,v3,v2",
 	.get_reg_profile = get_reg_profile,
 	.archinfo = archinfo,
 	.preludes = anal_preludes,
-	.bits = 16|32|64,
+	.bits = 16 | 32 | 64,
+	.endian = R_SYS_ENDIAN_LITTLE | R_SYS_ENDIAN_BIG,
 	.op = &analop,
+	.opasm = &mips_cs_opasm,
+	.mnemonics = cs_mnemonics,
 };
 
 #ifndef R2_PLUGIN_INCORE

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include "r_core.h"
 
@@ -23,16 +23,16 @@ static int cmd_Quit(void *data, const char *input) {
 				r_cons_flush ();
 				exit (0);
 			}
-			return -2;
+			return R_CMD_RC_QUIT;
 		}
 		r_config_set (core->config, "scr.hist.save", "false");
 	}
 	if (IS_DIGIT (input[0]) || input[0] == ' ') {
-		core->num->value = r_num_math (core->num, input);
+		r_core_return_code (core, r_num_math (core->num, input));
 	} else {
-		core->num->value = -1;
+		r_core_return_code (core, 0);
 	}
-	return -2;
+	return R_CMD_RC_QUIT;
 }
 
 static int cmd_quit(void *data, const char *input) {
@@ -42,19 +42,18 @@ static int cmd_quit(void *data, const char *input) {
 	case '?':
 		r_core_cmd_help (core, help_msg_q);
 		break;
-	case '!':
+	case '!': // "q!"
 		return cmd_Quit (core, input);
-	case '\0':
-		core->num->value = 0LL;
-		return -2;
+	case '\0': // "q"
+		r_core_return_code (core, 0);
+		return R_CMD_RC_QUIT;
 	default:
-		while (*input == ' ') {
-			input++;
-		}
+		input = r_str_trim_head_ro (input);
 		if (*input) {
-			r_num_math (core->num, input);
+			r_core_return_code (core, r_num_math (core->num, input));
 		} else {
 			core->num->value = 0LL;
+			r_core_return_code (core, 0);
 		}
 		if (*input == 'y') {
 			core->num->value = 5;
@@ -66,9 +65,7 @@ static int cmd_quit(void *data, const char *input) {
 		} else if (input[1] == 'n') {
 			core->num->value += 2;	
 		}
-		//exit (*input?r_num_math (core->num, input+1):0);
-		//if (core->http_up) return false; // cancel quit when http is running
-		return -2;
+		return R_CMD_RC_QUIT;
 	}
-	return false;
+	return R_CMD_RC_SUCCESS;
 }

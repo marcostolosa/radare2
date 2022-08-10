@@ -19,7 +19,7 @@ static bool lang_zig_file(RLang *lang, const char *file) {
 	if (a) {
 		*a = 0;
 		libpath = name;
-		libname = a+1;
+		libname = a + 1;
 	} else {
 		libpath = ".";
 		libname = name;
@@ -52,16 +52,18 @@ static bool lang_zig_file(RLang *lang, const char *file) {
 		if (fcn) {
 			fcn (lang->user);
 		} else {
-			eprintf ("Cannot find 'entry' symbol in library\n");
+			R_LOG_ERROR ("Cannot find 'entry' symbol in library");
 		}
 		r_lib_dl_close (lib);
 	} else {
-		eprintf ("Cannot open library\n");
+		R_LOG_ERROR ("Cannot open library");
+		free (name);
 		free (path);
 		free (cc);
 		return false;
 	}
 	r_file_rm (path); // remove lib
+	free (name);
 	free (path);
 	free (cc);
 	return true;
@@ -95,7 +97,7 @@ static bool lang_zig_run(RLang *lang, const char *code, int len) {
 		lang_zig_file (lang, file);
 		r_file_rm (file);
 	} else {
-		eprintf ("Cannot open %s\n", file);
+		R_LOG_ERROR ("Cannot open %s", file);
 	}
 	return true;
 }

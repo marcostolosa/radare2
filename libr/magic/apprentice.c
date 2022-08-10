@@ -170,7 +170,7 @@ static int get_type(const char *l, const char **t) {
 }
 
 static void init_file_tables(void) {
-	static bool done = false;
+	static R_TH_LOCAL bool done = false;
 	const struct type_tbl_s *p;
 	if (done) {
 		return;
@@ -296,7 +296,7 @@ struct mlist * file_apprentice(RMagic *ms, const char *fn, size_t fn_size, int a
 	mlist->next = mlist->prev = mlist;
 
 	while (fn) {
-		p = strchr (fn, PATHSEP);
+		p = strstr (fn, R_SYS_ENVSEP);
 		if (p) {
 			*p++ = '\0';
 		}
@@ -505,7 +505,7 @@ static void load_b(RMagic *ms, int action, const char *data, int *errs, struct r
 	char line[BUFSIZ];
 	size_t lineno = 0;
 	/* read and parse this file */
-	for (ms->line = 1; (data = bgets (line, sizeof (line), data)) != NULL; ms->line++) {
+	for (ms->line = 1; (data = bgets (line, sizeof (line), data)); ms->line++) {
 		size_t len = strlen (line);
 		if (len == 0) { /* null line, garbage, etc */
 			continue;
@@ -553,7 +553,7 @@ static void load_1(RMagic *ms, int action, const char *file, int *errs, struct r
 		return;
 	}
 	/* read and parse this file */
-	for (ms->line = 1; fgets (line, sizeof (line), f) != NULL; ms->line++) {
+	for (ms->line = 1; fgets (line, sizeof (line), f); ms->line++) {
 		size_t len = strlen (line);
 		if (len == 0) { /* null line, garbage, etc */
 			continue;
@@ -657,7 +657,7 @@ static int apprentice_load(RMagic *ms, struct r_magic **magicp, ut32 *nmagicp, c
 				if (stat (subfn, &st) == 0 && S_ISREG (st.st_mode)) {
 					load_1 (ms, action, subfn, &errs, &marray, &marraycount);
 				}
-				//else perror (subfn);
+				//else r_sys_perror (subfn);
 			}
 			closedir (dir);
 		} else {
@@ -887,18 +887,19 @@ static int get_op(char c) {
 	}
 }
 
+static const struct cond_tbl_s {
+	char name[8];
+	size_t len;
+	int cond;
+} cond_tbl[] = {
+	{ "if",		2,	COND_IF },
+	{ "elif",	4,	COND_ELIF },
+	{ "else",	4,	COND_ELSE },
+	{ "",		0,	COND_NONE },
+};
+
 static int get_cond(const char *l, const char **t) {
 	const struct cond_tbl_s *p;
-	static const struct cond_tbl_s {
-		char name[8];
-		size_t len;
-		int cond;
-	} cond_tbl[] = {
-		{ "if",		2,	COND_IF },
-		{ "elif",	4,	COND_ELIF },
-		{ "else",	4,	COND_ELSE },
-		{ "",		0,	COND_NONE },
-	};
 
 	for (p = cond_tbl; p->len; p++) {
 		if (strncmp (l, p->name, p->len) == 0 &&
@@ -957,7 +958,7 @@ static int check_cond(RMagic *ms, int cond, ut32 cont_level) {
  * parse one line from magic file, put into magic[index++] if valid
  */
 static int parse(RMagic *ms, struct r_magic_entry **mentryp, ut32 *nmentryp, const char *line, size_t lineno, int action) {
-	static ut32 last_cont_level = 0;
+	static R_TH_LOCAL ut32 last_cont_level = 0;
 	size_t i;
 	struct r_magic_entry *me;
 	struct r_magic *m;
@@ -1983,7 +1984,7 @@ static char *mkdbname(const char *fn, int strip) {
 	int fnlen, extlen;
 	if (strip) {
 		const char *p;
-		if ((p = strrchr (fn, '/')) != NULL) {
+		if ((p = strrchr (fn, '/'))) {
 			fn = ++p;
 		}
 	}
@@ -2044,6 +2045,7 @@ static ut32 swap4(ut32 sv) {
  * swap a quad
  */
 static ut64 swap8(ut64 sv) {
+	// we have r_read apis for that, dont dupe!
 	ut64 rv;
 	ut8 *s = (ut8 *)(void *)&sv;
 	ut8 *d = (ut8 *)(void *)&rv;

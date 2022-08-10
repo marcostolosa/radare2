@@ -1,20 +1,9 @@
-/* radare - LGPL - Copyright 2007-2021 - pancake */
+/* radare - LGPL - Copyright 2007-2022 - pancake */
 
-#include "r_types.h"
-#include "r_util.h"
-#include "r_cons.h"
-#include "r_bin.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include <stdarg.h>
-#include <r_util/r_base64.h>
+#include <r_bin.h>
 
 /* stable code */
-static const char *nullstr = "";
-static const char *nullstr_c = "(null)";
-static const char *rwxstr[] = {
+static const char * const rwxstr[] = {
 	[0] = "---",
 	[1] = "--x",
 	[2] = "-w-",
@@ -33,7 +22,6 @@ static const char *rwxstr[] = {
 	[14] = "rw-",
 	[15] = "rwx",
 };
-
 
 R_API int r_str_casecmp(const char *s1, const char *s2) {
 #ifdef _MSC_VER
@@ -108,7 +96,7 @@ R_API void r_str_reverse(char *str) {
 }
 
 // TODO: do not use toupper.. must support modes to also append lowercase chars like in r1
-// TODO: this functions needs some stabilization
+// 580 : this function doesnt specify the size of strout, so it can overflow by accident
 R_API int r_str_bits(char *strout, const ut8 *buf, int len, const char *bitz) {
 	int i, j, idx;
 	if (bitz) {
@@ -268,7 +256,7 @@ R_API void r_str_case(char *str, bool up) {
 	}
 }
 
-R_API char *r_str_home(const char *str) {
+R_API R_MUSTUSE char *r_str_home(const char *str) {
 	char *dst, *home = r_sys_getenv (R_SYS_HOME);
 	size_t length;
 	if (!home) {
@@ -296,7 +284,7 @@ fail:
 	return dst;
 }
 
-R_API char *r_str_r2_prefix(const char *str) {
+R_API R_MUSTUSE char *r_str_r2_prefix(const char *str) {
 	return r_str_newf ("%s%s%s", r_sys_prefix (NULL), R_SYS_DIR, str);
 }
 
@@ -350,7 +338,7 @@ R_API int r_str_split(char *str, char ch) {
 R_API int r_str_word_set0(char *str) {
 	int i, quote = 0;
 	char *p;
-	if (!str || !*str) {
+	if (R_STR_ISEMPTY (str)) {
 		return 0;
 	}
 	for (i = 0; str[i] && str[i + 1]; i++) {
@@ -526,7 +514,7 @@ R_API const char *r_str_word_get0(const char *str, int idx) {
 	int i;
 	const char *ptr = str;
 	if (!ptr || idx < 0 /* prevent crashes with negative index */) {
-		return (char *)nullstr;
+		return (char *)"";
 	}
 	for (i = 0; i != idx; i++) {
 		ptr += strlen (ptr) + 1;
@@ -834,7 +822,7 @@ R_API char *r_str_word_get_first(const char *text) {
 }
 
 R_API const char *r_str_get(const char *str) {
-	return str? str: nullstr;
+	return str? str: "";
 }
 
 R_API const char *r_str_get_fail(const char *str, const char *failstr) {
@@ -842,7 +830,7 @@ R_API const char *r_str_get_fail(const char *str, const char *failstr) {
 }
 
 R_API const char *r_str_getf(const char *str) {
-	return str? str: nullstr_c;
+	return str? str: "(null)";
 }
 
 R_API char *r_str_ndup(const char *ptr, int len) {
@@ -894,7 +882,7 @@ R_API char *r_str_append_owned(char *ptr, char *string) {
 	if (!ptr) {
 		return string;
 	}
-	char *r = r_str_append(ptr, string);
+	char *r = r_str_append (ptr, string);
 	free (string);
 	return r;
 }
@@ -948,7 +936,7 @@ R_API char *r_str_appendch(char *x, char y) {
 	return r_str_append (x, b);
 }
 
-R_API char* r_str_replace(char *str, const char *key, const char *val, int g) {
+R_API R_MUSTUSE char* r_str_replace(char *str, const char *key, const char *val, int g) {
 	if (g == 'i') {
 		return r_str_replace_icase (str, key, val, g, true);
 	}
@@ -982,7 +970,6 @@ R_API char* r_str_replace(char *str, const char *key, const char *val, int g) {
 			if (vlen > klen) {
 				newstr = realloc (str, slen + 1);
 				if (!newstr) {
-					eprintf ("realloc fail\n");
 					R_FREE (str);
 					break;
 				}
@@ -1001,7 +988,7 @@ R_API char* r_str_replace(char *str, const char *key, const char *val, int g) {
 	return str;
 }
 
-R_API char *r_str_replace_icase(char *str, const char *key, const char *val, int g, int keep_case) {
+R_API R_MUSTUSE char *r_str_replace_icase(char *str, const char *key, const char *val, int g, int keep_case) {
 	r_return_val_if_fail (str && key && val, NULL);
 
 	int off, i, klen, vlen, slen;
@@ -1055,9 +1042,7 @@ R_API char *r_str_replace_icase(char *str, const char *key, const char *val, int
 		}
 	}
 	return str;
-
 alloc_fail:
-	eprintf ("alloc fail\n");
 	free (str);
 	return NULL;
 }
@@ -1074,8 +1059,7 @@ alloc_fail:
  * g     - if true, replace all occurrences of key
  *
  * It returns a pointer to the modified string */
-R_API char* r_str_replace_thunked(char *str, char *clean, int *thunk, int clen,
-				  const char *key, const char *val, int g) {
+R_API R_MUSTUSE char* r_str_replace_thunked(char *str, char *clean, int *thunk, int clen, const char *key, const char *val, int g) {
 	int i, klen, vlen, slen, delta = 0, bias;
 	char *newstr, *scnd, *p = clean, *str_p;
 
@@ -1110,7 +1094,6 @@ R_API char* r_str_replace_thunked(char *str, char *clean, int *thunk, int clen,
 		// HACK: this 32 avoids overwrites wtf
 		newstr = realloc (str, slen + klen);
 		if (!newstr) {
-			eprintf ("realloc fail\n");
 			R_FREE (str);
 			free (scnd);
 			break;
@@ -1129,10 +1112,9 @@ R_API char* r_str_replace_thunked(char *str, char *clean, int *thunk, int clen,
 	return str;
 }
 
+// R580 - return void to avoid confusion imho
 R_API char *r_str_replace_in(char *str, ut32 sz, const char *key, const char *val, int g) {
-	if (!str || !key || !val) {
-		return NULL;
-	}
+	r_return_val_if_fail (str && key && val, NULL);
 	char *heaped = r_str_replace (strdup (str), key, val, g);
 	if (heaped) {
 		strncpy (str, heaped, sz);
@@ -1154,6 +1136,10 @@ R_API int r_str_unescape(char *buf) {
 		switch (buf[i + 1]) {
 		case 'e':
 			buf[i] = 0x1b;
+			break;
+		case ' ':
+		case 's':
+			buf[i] = ' ';
 			break;
 		case '\\':
 			buf[i] = '\\';
@@ -1191,13 +1177,13 @@ R_API int r_str_unescape(char *buf) {
 		case 'x':
 			err = ch2 = ch = 0;
 			if (!buf[i + 2] || !buf[i + 3]) {
-				eprintf ("Unexpected end of string.\n");
+				R_LOG_ERROR ("Unexpected end of string");
 				return 0;
 			}
 			err |= r_hex_to_byte (&ch,  buf[i + 2]);
 			err |= r_hex_to_byte (&ch2, buf[i + 3]);
 			if (err) {
-				eprintf ("Error: Non-hexadecimal chars in input.\n");
+				R_LOG_ERROR ("Non-hexadecimal chars in input");
 				return 0; // -1?
 			}
 			buf[i] = (ch << 4) + ch2;
@@ -1865,8 +1851,8 @@ R_API char *r_str_format_msvc_argv(size_t argc, const char **argv) {
 			r_strbuf_append (&sb, " ");
 		}
 		const char *arg = argv[i];
-		bool must_escape = strchr (arg, '\"') != NULL;
-		bool must_quote = strpbrk (arg, " \t") != NULL || !*arg;
+		bool must_escape = strchr (arg, '\"');
+		bool must_quote = strpbrk (arg, " \t") || !*arg;
 		if (!must_escape && must_quote && *arg && arg[strlen (arg) - 1] == '\\') {
 			// if the last char is a bs and we would quote it, we must also escape
 			must_escape = true;
@@ -2238,19 +2224,25 @@ R_API char *r_str_ansi_crop(const char *str, ut32 x, ut32 y, ut32 x2, ut32 y2) {
 }
 
 R_API size_t r_str_utf8_codepoint(const char* s, size_t left) {
+	if (!s || left <= 0) {
+		return 0;
+	}
 	if ((*s & 0x80) != 0x80) {
 		return 0;
-	} else if ((*s & 0xe0) == 0xc0 && left >= 1) {
+	} else if ((*s & 0xe0) == 0xc0 && left > 1) {
 		return ((*s & 0x1f) << 6) + (*(s + 1) & 0x3f);
-	} else if ((*s & 0xf0) == 0xe0 && left >= 2) {
+	} else if ((*s & 0xf0) == 0xe0 && left > 2) {
 		return ((*s & 0xf) << 12) + ((*(s + 1) & 0x3f) << 6) + (*(s + 2) & 0x3f);
-	} else if ((*s & 0xf8) == 0xf0 && left >= 3) {
+	} else if ((*s & 0xf8) == 0xf0 && left > 3) {
 		return ((*s & 0x7) << 18) + ((*(s + 1) & 0x3f) << 12) + ((*(s + 2) & 0x3f) << 6) + (*(s + 3) & 0x3f);
 	}
 	return 0;
 }
 
 R_API bool r_str_char_fullwidth(const char* s, size_t left) {
+	if (!s || left <= 0) {
+		return false;
+	}
 	size_t codepoint = r_str_utf8_codepoint (s, left);
 	return (codepoint >= 0x1100 &&
 		 (codepoint <= 0x115f ||                  /* Hangul Jamo init. consonants */
@@ -2350,22 +2342,44 @@ R_API bool r_str_glob(const char* str, const char *glob) {
 	}
 	while (*str) {
 		if (!*glob) {
-			return true;
+			return false;
 		}
 		switch (*glob) {
 		case '*':
 			if (!*++glob) {
 				return true;
 			}
+			// Advance glob an additional time if it is a '**'
+			if (*glob == '*') {
+				if (!*++glob) {
+					return true;
+				}
+			}
+			// Check if there are additional wildcards
+			// if so, we need to search for the substring in between the wildcards
+			const char *needle_end = glob;
+			while (*needle_end != '*' &&
+					*needle_end != '?' &&
+					*needle_end != '$' &&
+					*needle_end != '^' &&
+					*needle_end != '\0') {
+				needle_end++;
+			}
+			// Find the pattern in between wildcards
+			char* needle = r_str_ndup(glob, needle_end - glob);
+			const char *advance_to = strstr (str, needle);
+			free (needle);
+			if (!advance_to) {
+				return false;
+			}
+			// Advance str to found pattern
 			while (*str) {
-				if (*glob == *str) {
+				if (str == advance_to) {
 					break;
 				}
 				str++;
 			}
 			break;
-		case '$':
-			return (*++glob == '\x00');
 		case '?':
 			str++;
 			glob++;
@@ -2623,7 +2637,7 @@ R_API const char *r_str_firstbut(const char *s, char ch, const char *but) {
 		return strchr (s, ch);
 	}
 	if (strlen (but) >= bsz) {
-		eprintf ("r_str_firstbut: but string too long\n");
+		R_LOG_ERROR ("but string too long");
 		return NULL;
 	}
 	for (p = s; *p; p++) {
@@ -2649,7 +2663,7 @@ R_API const char *r_str_firstbut_escape(const char *s, char ch, const char *but)
 		return strchr (s, ch);
 	}
 	if (strlen (but) >= bsz) {
-		eprintf ("r_str_firstbut: but string too long\n");
+		R_LOG_ERROR ("r_str_firstbut: but string too long");
 		return NULL;
 	}
 	for (p = s; *p; p++) {
@@ -2689,7 +2703,7 @@ R_API const char *r_str_lastbut(const char *s, char ch, const char *but) {
 		return r_str_lchr (s, ch);
 	}
 	if (strlen (but) >= bsz) {
-		eprintf ("r_str_lastbut: but string too long\n");
+		R_LOG_ERROR ("r_str_lastbut: but string too long");
 		return NULL;
 	}
 	for (p = s; *p; p++) {
@@ -2735,6 +2749,7 @@ R_API size_t r_str_len_utf8(const char *s) {
 
 R_API size_t r_str_len_utf8_ansi(const char *str) {
 	int i = 0, len = 0, fullwidths = 0;
+	int str_len = strlen (str);
 	while (str[i]) {
 		char ch = str[i];
 		size_t chlen = __str_ansi_length (str + i);
@@ -2742,8 +2757,10 @@ R_API size_t r_str_len_utf8_ansi(const char *str) {
 			i += chlen - 1;
 		} else if ((ch & 0xc0) != 0x80) { // utf8
 			len++;
-			if (r_str_char_fullwidth (str + i, 4)) {
-				fullwidths++;
+			if (str_len - i >= 4) {
+				if (r_str_char_fullwidth (str + i, 4)) {
+					fullwidths++;
+				}
 			}
 		}
 		i++;
@@ -2904,6 +2921,7 @@ R_API char *r_str_uri_encode(const char *s) {
 	return trimDown? trimDown: od;
 }
 
+// XXX antipattern, bigendian should be 1 not 0
 R_API int r_str_utf16_to_utf8(ut8 *dst, int len_dst, const ut8 *src, int len_src, int little_endian) {
 	ut8 *outstart = dst;
 	ut8 *outend = dst + len_dst;
@@ -3290,7 +3308,7 @@ R_API int r_str_do_until_token(str_operation op, char *str, const char tok) {
 }
 
 R_API const char *r_str_pad(const char ch, int sz) {
-	static char pad[1024];
+	static R_TH_LOCAL char pad[1024];
 	if (sz < 0) {
 		sz = 0;
 	}
@@ -3298,7 +3316,7 @@ R_API const char *r_str_pad(const char ch, int sz) {
 	if (sz < sizeof (pad)) {
 		pad[sz] = 0;
 	}
-	pad[sizeof(pad) - 1] = 0;
+	pad[sizeof (pad) - 1] = 0;
 	return pad;
 }
 
@@ -3330,14 +3348,6 @@ R_API char *r_str_between(const char *cmt, const char *prefix, const char *suffi
 		}
 	}
 	return NULL;
-}
-
-R_API bool r_str_startswith(const char *str, const char *needle) {
-	r_return_val_if_fail (str && needle, false);
-	if (str == needle) {
-		return true;
-	}
-	return !strncmp (str, needle, strlen (needle));
 }
 
 R_API bool r_str_endswith(const char *str, const char *needle) {
@@ -3742,6 +3752,7 @@ R_API void r_str_stripLine(char *str, const char *key) {
 }
 
 R_API char *r_str_list_join(RList *str, const char *sep) {
+	r_return_val_if_fail (str && sep, NULL);
 	RStrBuf *sb = r_strbuf_new ("");
 	const char *p;
 	while ((p = r_list_pop_head (str))) {
@@ -3793,6 +3804,9 @@ R_API const char *r_str_bool(int b) {
 }
 
 R_API bool r_str_is_true(const char *s) {
+	if (!s) {
+		return false;
+	}
 	return !r_str_casecmp ("yes", s)
 		|| !r_str_casecmp ("on", s)
 		|| !r_str_casecmp ("true", s)
@@ -3800,6 +3814,9 @@ R_API bool r_str_is_true(const char *s) {
 }
 
 R_API bool r_str_is_false(const char *s) {
+	if (!s) {
+		return true;
+	}
 	return !r_str_casecmp ("no", s)
 		|| !r_str_casecmp ("off", s)
 		|| !r_str_casecmp ("false", s)
@@ -3947,3 +3964,13 @@ R_API int r_str_size(const char *s, int *rows) {
 	}
 	return cols;
 }
+
+#undef r_str_startswith
+R_API bool r_str_startswith(const char *str, const char *needle) {
+	r_return_val_if_fail (str && needle, false);
+	if (str == needle) {
+		return true;
+	}
+	return !strncmp (str, needle, strlen (needle));
+}
+

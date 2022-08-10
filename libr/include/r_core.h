@@ -1,35 +1,38 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #ifndef R2_CORE_H
 #define R2_CORE_H
 
 #include <r_main.h>
-#include "r_socket.h"
-#include "r_types.h"
-#include "r_magic.h"
-#include "r_agraph.h"
-#include "r_io.h"
-#include "r_fs.h"
-#include "r_lib.h"
-#include "r_egg.h"
-#include "r_lang.h"
-#include "r_asm.h"
-#include "r_parse.h"
-#include "r_anal.h"
-#include "r_cmd.h"
-#include "r_cons.h"
-#include "r_search.h"
-#include "r_sign.h"
-#include "r_debug.h"
-#include "r_flag.h"
-#include "r_config.h"
-#include "r_bin.h"
-#include "r_hash.h"
-#include "r_util.h"
-#include "r_util/r_print.h"
-#include "r_crypto.h"
-#include "r_bind.h"
-#include "r_codemeta.h"
+#include <r_socket.h>
+#include <r_types.h>
+#include <r_magic.h>
+#include <r_agraph.h>
+#include <r_io.h>
+#include <r_fs.h>
+#include <r_lib.h>
+#include <r_egg.h>
+#include <r_lang.h>
+#include <r_asm.h>
+#include <r_parse.h>
+#include <r_anal.h>
+#include <r_cmd.h>
+#include <r_cons.h>
+#include <r_search.h>
+#include <r_sign.h>
+#include <r_debug.h>
+#include <r_flag.h>
+#include <r_config.h>
+#include <r_bin.h>
+#include <r_hash.h>
+#include <r_util.h>
+#include <r_util/r_print.h>
+#include <r_crypto.h>
+#include <r_bind.h>
+#include <r_codemeta.h>
+
+// TODO: thois var should be 1 at some point :D
+#define SHELLFILTER 0
 
 #ifdef __cplusplus
 extern "C" {
@@ -217,7 +220,6 @@ typedef struct r_core_visual_t {
 	RList *tabs;
 	int tab;
 } RCoreVisual;
-// #define RCoreVisual Visual
 
 typedef struct {
 	int x;
@@ -242,9 +244,21 @@ typedef struct r_core_tasks_t {
 	bool oneshot_running;
 } RCoreTaskScheduler;
 
+typedef enum {
+	VC_RVC,
+	VC_GIT
+} VcType;
+
+typedef struct {
+	char *path;
+	VcType type;
+	Sdb *db;
+} Rvc;
+
 typedef struct r_core_project_t {
 	char *name;
 	char *path;
+	Rvc *rvc;
 } RProject;
 
 R_API RProject *r_project_new(void);
@@ -255,7 +269,7 @@ R_API bool r_project_open(RProject *p, const char *prjname, const char *path);
 R_API void r_project_save(RProject *p);
 R_API void r_project_free(RProject *p);
 R_API bool r_project_is_loaded(RProject *p);
-R_API bool r_core_project_is_saved(RCore *core);
+R_API bool r_core_project_is_dirty(RCore *core);
 
 struct r_core_t {
 	RBin *bin;
@@ -269,8 +283,8 @@ struct r_core_t {
 	RBuffer *yank_buf;
 	ut64 yank_addr;
 	bool tmpseek;
-	bool vmode;
-	int interrupted; // XXX IS THIS DUPPED SOMEWHERE?
+	bool vmode; // is r2 in visual or panels mode?
+	int interrupted; // XXX R2_580 - this variable is unused and must be removed
 	/* files */
 	RCons *cons;
 	RIO *io;
@@ -313,7 +327,7 @@ struct r_core_t {
 	bool keep_asmqjmps;
 	RCoreVisual visual;
 	// visual // TODO: move them into RCoreVisual
-	int http_up;
+	int http_up; // R2_580 bool
 	int gdbserver_up;
 	RCoreVisualMode printidx;
 	char *stkcmd;
@@ -332,6 +346,9 @@ struct r_core_t {
 	char *cmdfilter;
 	bool break_loop;
 	RList *undos;
+#if R2_580
+	int undoindex;
+#endif
 	bool binat;
 	bool fixedbits; // will be true when using @b:
 	bool fixedarch; // will be true when using @a:
@@ -353,10 +370,12 @@ struct r_core_t {
 	bool allbins;
 	bool marks_init;
 	ut64 marks[UT8_MAX + 1];
+	RThreadChannel *chan; // query
 
 	RMainCallback r_main_radare2;
 	// int (*r_main_radare2)(int argc, char **argv);
 	int (*r_main_rafind2)(int argc, const char **argv);
+	int (*r_main_r2pm)(int argc, const char **argv);
 	int (*r_main_radiff2)(int argc, const char **argv);
 	int (*r_main_rabin2)(int argc, const char **argv);
 	int (*r_main_rarun2)(int argc, const char **argv);
@@ -387,7 +406,7 @@ R_API int r_core_bind(RCore *core, RCoreBind *bnd);
 typedef struct r_core_cmpwatch_t {
 	ut64 addr;
 	int size;
-	char cmd[32];
+	char *cmd;
 	ut8 *odata;
 	ut8 *ndata;
 } RCoreCmpWatcher;
@@ -395,7 +414,15 @@ typedef struct r_core_cmpwatch_t {
 typedef int (*RCoreSearchCallback)(RCore *core, ut64 from, ut8 *buf, int len);
 
 #ifdef R_API
-//#define r_core_ncast(x) (RCore*)(size_t)(x)
+
+typedef int RCmdReturnCode;
+#define R_CMD_RC_FAILURE 1
+#define R_CMD_RC_SUCCESS 0
+#define R_CMD_RC_QUIT -2
+#define R_CMD_RC_FASTQUIT -1
+#define r_core_return_value(core, val) (core)->num->value = (val)
+#define r_core_return_code(core, val) (core)->rc = (val)
+
 R_API RList *r_core_list_themes(RCore *core);
 R_API char *r_core_get_theme(RCore *core);
 R_API const char *r_core_get_section_name(RCore *core, ut64 addr);
@@ -427,11 +454,13 @@ R_API int r_core_fgets(char *buf, int len);
 R_API RFlagItem *r_core_flag_get_by_spaces(RFlag *f, ut64 off);
 R_API int r_core_cmdf(RCore *core, const char *fmt, ...) R_PRINTF_CHECK(2, 3);
 R_API int r_core_cmd0(RCore *core, const char *cmd);
+R_API void r_core_cmd_r(RCore *core, const char *cmd);
 R_API void r_core_cmd_queue(RCore *core, const char *line);
 R_API void r_core_cmd_queue_wait(RCore *core);
 R_API void r_core_cmd_init(RCore *core);
 R_API int r_core_cmd_pipe(RCore *core, char *radare_cmd, char *shell_cmd);
 R_API char *r_core_cmd_str(RCore *core, const char *cmd);
+R_API char *r_core_cmd_str_r(RCore *core, const char *cmd);
 R_API char *r_core_cmd_strf(RCore *core, const char *fmt, ...) R_PRINTF_CHECK(2, 3);
 R_API char *r_core_cmd_str_pipe(RCore *core, const char *cmd);
 R_API RBuffer *r_core_cmd_tobuf(RCore *core, const char *cmd);
@@ -537,6 +566,7 @@ R_API int r_core_set_file_by_name(RBin * bin, const char *name);
 R_API void r_core_debug_rr(RCore *core, RReg *reg, int mode);
 
 /* fortune */
+R_IPI RList *r_core_fortune_types(void);
 R_API void r_core_fortune_list_types(void);
 R_API void r_core_fortune_list(RCore *core);
 R_API void r_core_fortune_print_random(RCore *core);
@@ -609,7 +639,7 @@ R_API int r_core_anal_refs(RCore *core, const char *input);
 R_API void r_core_agraph_print(RCore *core, int use_utf, const char *input);
 R_API bool r_core_esil_cmd(RAnalEsil *esil, const char *cmd, ut64 a1, ut64 a2);
 R_API int r_core_esil_step(RCore *core, ut64 until_addr, const char *until_expr, ut64 *prev_addr, bool stepOver);
-R_API int r_core_esil_step_back(RCore *core);
+R_API bool r_core_esil_step_back(RCore *core);
 R_API ut64 r_core_anal_get_bbaddr(RCore *core, ut64 addr);
 R_API bool r_core_anal_bb_seek(RCore *core, ut64 addr);
 R_API bool r_core_anal_fcn(RCore *core, ut64 at, ut64 from, int reftype, int depth);
@@ -704,7 +734,7 @@ R_API int r_core_gdiff(RCore *core1, RCore *core2);
 R_API int r_core_gdiff_fcn(RCore *c, ut64 addr, ut64 addr2);
 
 R_API bool r_core_project_open(RCore *core, const char *file);
-R_API int r_core_project_cat(RCore *core, const char *name);
+R_API void r_core_project_cat(RCore *core, const char *name);
 R_API int r_core_project_delete(RCore *core, const char *prjfile);
 R_API int r_core_project_list(RCore *core, int mode);
 R_API bool r_core_project_save_script(RCore *core, const char *file, int opts);
@@ -812,16 +842,17 @@ R_API void r_core_hack_help(const RCore *core);
 R_API int r_core_hack(RCore *core, const char *op);
 R_API bool r_core_dump(RCore *core, const char *file, ut64 addr, ut64 size, int append);
 R_API void r_core_diff_show(RCore *core, RCore *core2);
+R_API void r_core_diff_show_json(RCore *core, RCore *core2);
 R_API void r_core_clippy(RCore *core, const char *msg);
 
 /* watchers */
 R_API void r_core_cmpwatch_free(RCoreCmpWatcher *w);
-R_API RCoreCmpWatcher *r_core_cmpwatch_get(RCore *core, ut64 addr);
-R_API int r_core_cmpwatch_add(RCore *core, ut64 addr, int size, const char *cmd);
-R_API int r_core_cmpwatch_del(RCore *core, ut64 addr);
-R_API int r_core_cmpwatch_update(RCore *core, ut64 addr);
-R_API int r_core_cmpwatch_show(RCore *core, ut64 addr, int mode);
-R_API int r_core_cmpwatch_revert(RCore *core, ut64 addr);
+R_API R_BORROW RCoreCmpWatcher *r_core_cmpwatch_get(RCore *core, ut64 addr);
+R_API bool r_core_cmpwatch_add(RCore *core, ut64 addr, int size, const char *cmd);
+R_API bool r_core_cmpwatch_del(RCore *core, ut64 addr);
+R_API bool r_core_cmpwatch_update(RCore *core, ut64 addr);
+R_API bool r_core_cmpwatch_show(RCore *core, ut64 addr, int mode);
+R_API bool r_core_cmpwatch_revert(RCore *core, ut64 addr);
 
 /* undo */
 R_API RCoreUndo *r_core_undo_new(ut64 offset, const char *action, const char *revert);
@@ -829,6 +860,10 @@ R_API void r_core_undo_print(RCore *core, int mode, RCoreUndoCondition *cond);
 R_API void r_core_undo_free(RCoreUndo *cu);
 R_API void r_core_undo_push(RCore *core, RCoreUndo *cu);
 R_API void r_core_undo_pop(RCore *core);
+#if R2_580
+R_API void r_core_undo_up(RCore *core);
+R_API void r_core_undo_down(RCore *core);
+#endif
 
 /* logs */
 typedef int (*RCoreLogCallback)(RCore *core, int count, const char *message);
@@ -847,6 +882,7 @@ R_API char *r_str_widget_list(void *user, RList *list, int rows, int cur, PrintI
 R_API PJ *r_core_pj_new(RCore *core);
 /* help */
 R_API void r_core_cmd_help(const RCore *core, const char *help[]);
+R_API void r_core_cmd_help_json(const RCore *core, const char *help[]);
 R_API void r_core_cmd_help_match(const RCore *core, const char *help[], R_BORROW R_NONNULL char *cmd, bool exact);
 R_API void r_core_cmd_help_match_spec(const RCore *core, const char *help[], R_BORROW R_NONNULL char *cmd, char spec, bool exact);
 
@@ -948,7 +984,7 @@ R_API void r_core_task_del_all_done(RCoreTaskScheduler *scheduler);
 R_API RCoreTask *r_core_task_self(RCoreTaskScheduler *scheduler);
 R_API void r_core_task_join(RCoreTaskScheduler *scheduler, RCoreTask *current, int id);
 typedef void (*inRangeCb) (RCore *core, ut64 from, ut64 to, int vsize, void *cb_user);
-R_API int r_core_search_value_in_range(RCore *core, RInterval search_itv, ut64 vmin, ut64 vmax, int vsize, inRangeCb cb, void *cb_user);
+R_IPI int r_core_search_value_in_range(RCore *core, bool relative, RInterval search_itv, ut64 vmin, ut64 vmax, int vsize, inRangeCb cb, void *cb_user);
 
 R_API RCoreAutocomplete *r_core_autocomplete_add(RCoreAutocomplete *parent, const char* cmd, int type, bool lock);
 R_API void r_core_autocomplete_free(RCoreAutocomplete *obj);

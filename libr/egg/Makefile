@@ -8,8 +8,9 @@ OBJS=egg.o egg_lang.o
 OBJS+=emit_x86.o
 OBJS+=emit_arm.o
 OBJS+=emit_x64.o
+OBJS+=emit_esil.o
 OBJS+=emit_trace.o
-OBJS+=egg_Cfile.o
+OBJS+=egg_cfile.o
 
 all: ${LIBSO} ${LIBAR}
 

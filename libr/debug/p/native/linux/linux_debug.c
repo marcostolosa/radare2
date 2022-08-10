@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <r_userconf.h>
 
@@ -81,7 +81,7 @@ static void linux_dbg_wait_break(RDebug *dbg);
 static RDebugReasonType linux_handle_new_task(RDebug *dbg, int tid);
 
 int linux_handle_signals(RDebug *dbg, int tid) {
-	siginfo_t siginfo = { 0 };
+	siginfo_t siginfo = {0};
 	int ret = r_debug_ptrace (dbg, PTRACE_GETSIGINFO, tid, 0, (r_ptrace_data_t)&siginfo);
 	if (ret == -1) {
 		/* ESRCH means the process already went away :-/ */
@@ -154,8 +154,7 @@ int linux_handle_signals(RDebug *dbg, int tid) {
 			break;
 		}
 		if (dbg->reason.signum != SIGTRAP && (dbg->reason.signum != SIGINT || !r_cons_is_breaked ())) {
-			eprintf ("[+] SIGNAL %d errno=%d addr=0x%08"PFMT64x
-				" code=%d si_pid=%d ret=%d\n",
+			eprintf ("[+] SIGNAL %d errno=%d addr=0x%08"PFMT64x " code=%d si_pid=%d ret=%d\n",
 				siginfo.si_signo, siginfo.si_errno,
 				(ut64) (size_t)siginfo.si_addr, siginfo.si_code, siginfo.si_pid, ret);
 		}
@@ -240,7 +239,7 @@ RDebugReasonType linux_ptrace_event (RDebug *dbg, int ptid, int status, bool dow
 			// The new child has a pending SIGSTOP.  We can't affect it until it
 			// hits the SIGSTOP, but we're already attached.  */
 			if (waitpid ((int)data, &status, 0) == -1) {
-				perror ("waitpid");
+				r_sys_perror ("waitpid");
 			}
 		}
 
@@ -262,7 +261,7 @@ RDebugReasonType linux_ptrace_event (RDebug *dbg, int ptid, int status, bool dow
 			// The new child has a pending SIGSTOP. We can't affect it until it
 			// hits the SIGSTOP, but we're already attached.  */
 			if (waitpid (dbg->forked_pid, &status, 0) == -1) {
-				perror ("waitpid");
+				r_sys_perror ("waitpid");
 			}
 		}
 		eprintf ("(%d) Created process %d\n", ptid, (int)data);
@@ -271,7 +270,7 @@ RDebugReasonType linux_ptrace_event (RDebug *dbg, int ptid, int status, bool dow
 			// breakpoints are inherited from the parent
 			linux_remove_fork_bps (dbg);
 			if (r_debug_ptrace (dbg, PTRACE_DETACH, dbg->forked_pid, NULL, (r_ptrace_data_t)(size_t)NULL) == -1) {
-				perror ("PTRACE_DETACH");
+				r_sys_perror ("PTRACE_DETACH");
 			}
 		}
 		return R_DEBUG_REASON_NEW_PID;
@@ -315,7 +314,7 @@ static RDebugReasonType linux_handle_new_task(RDebug *dbg, int tid) {
 				continue;
 			}
 			// Retrieve the signal without consuming it with PTRACE_GETSIGINFO
-			siginfo_t siginfo = { 0 };
+			siginfo_t siginfo = {0};
 			ret = r_debug_ptrace (dbg, PTRACE_GETSIGINFO, th->pid, 0, (r_ptrace_data_t)(size_t)&siginfo);
 			// Skip if PTRACE_GETSIGINFO fails when the thread is running.
 			if (ret == -1) {
@@ -349,7 +348,7 @@ int linux_step(RDebug *dbg) {
 	ret = r_debug_ptrace (dbg, PTRACE_SINGLESTEP, pid, 0, 0);
 	//XXX(jjd): why?? //linux_handle_signals (dbg);
 	if (ret == -1) {
-		perror ("native-singlestep");
+		r_sys_perror ("native-singlestep");
 		ret = false;
 	} else {
 		ret = true;
@@ -392,7 +391,7 @@ static void linux_detach_all(RDebug *dbg) {
 		r_list_foreach (th_list, it, th) {
 			if (th->pid != dbg->main_pid) {
 				if (r_debug_ptrace (dbg, PTRACE_DETACH, th->pid, NULL, (r_ptrace_data_t)(size_t)NULL) == -1) {
-					perror ("PTRACE_DETACH");
+					r_sys_perror ("PTRACE_DETACH");
 				}
 			}
 		}
@@ -400,7 +399,7 @@ static void linux_detach_all(RDebug *dbg) {
 
 	// Detaching from main proc
 	if (r_debug_ptrace (dbg, PTRACE_DETACH, dbg->main_pid, NULL, (r_ptrace_data_t)(size_t)NULL) == -1) {
-		perror ("PTRACE_DETACH");
+		r_sys_perror ("PTRACE_DETACH");
 	}
 }
 
@@ -465,14 +464,14 @@ static void linux_dbg_wait_break_main(RDebug *dbg) {
 	// in another process group.
 	if (dpgid != tpgid) {
 		if (!linux_kill_thread (dbg->pid, SIGINT)) {
-			eprintf ("Could not interrupt pid (%d)\n", dbg->pid);
+			R_LOG_ERROR ("Could not interrupt pid (%d)", dbg->pid);
 		}
 	}
 }
 
 static void linux_dbg_wait_break(RDebug *dbg) {
 	if (!linux_kill_thread (dbg->pid, SIGINT)) {
-		eprintf ("Could not interrupt pid (%d)\n", dbg->pid);
+		R_LOG_ERROR ("Could not interrupt pid (%d)", dbg->pid);
 	}
 }
 
@@ -509,7 +508,7 @@ RDebugReasonType linux_dbg_wait(RDebug *dbg, int pid) {
 			if (errno == EINTR) {
 				continue;
 			}
-			perror ("waitpid");
+			r_sys_perror ("waitpid");
 			break;
 		} else if (ret == 0) {
 			// Unset WNOHANG to call next waitpid in blocking mode.
@@ -607,7 +606,7 @@ static bool linux_kill_thread(int tid, int signo) {
 	int ret = syscall (__NR_tkill, tid, signo);
 
 	if (ret == -1) {
-		perror ("tkill");
+		r_sys_perror ("tkill");
 		return false;
 	}
 
@@ -616,7 +615,7 @@ static bool linux_kill_thread(int tid, int signo) {
 
 static bool linux_stop_thread(RDebug *dbg, int tid) {
 	int status, ret;
-	siginfo_t siginfo = { 0 };
+	siginfo_t siginfo = {0};
 
 	// Return if the thread is already stopped
 	ret = r_debug_ptrace (dbg, PTRACE_GETSIGINFO, tid, 0,
@@ -627,7 +626,7 @@ static bool linux_stop_thread(RDebug *dbg, int tid) {
 
 	if (linux_kill_thread (tid, SIGSTOP)) {
 		if ((ret = waitpid (tid, &status, 0)) == -1) {
-			perror ("waitpid");
+			r_sys_perror ("waitpid");
 		}
 		return ret == tid;
 	}
@@ -651,7 +650,7 @@ bool linux_stop_threads(RDebug *dbg, int except) {
 }
 
 static bool linux_attach_single_pid(RDebug *dbg, int pid) {
-	siginfo_t sig = { 0 };
+	siginfo_t sig = {0};
 
 	if (pid < 0) {
 		return false;
@@ -664,20 +663,20 @@ static bool linux_attach_single_pid(RDebug *dbg, int pid) {
 	if (r_debug_ptrace (dbg, PTRACE_GETSIGINFO, pid, NULL,
 		(r_ptrace_data_t)&sig) == -1) {
 		if (r_debug_ptrace (dbg, PTRACE_ATTACH, pid, NULL, NULL) == -1) {
-			perror ("ptrace (PT_ATTACH)");
+			r_sys_perror ("ptrace (PT_ATTACH)");
 			return false;
 		}
 
 		// Make sure SIGSTOP is delivered and wait for it since we can't affect the pid
 		// until it hits SIGSTOP.
 		if (!linux_stop_thread (dbg, pid)) {
-			eprintf ("Could not stop pid (%d)\n", pid);
+			R_LOG_ERROR ("Could not stop pid (%d)", pid);
 			return false;
 		}
 	}
 
 	if (!linux_set_options (dbg, pid)) {
-		eprintf("failed set_options on %d\n", pid);
+		R_LOG_ERROR("failed set_options on %d", pid);
 		return false;
 	}
 	dbg->pid = pid;
@@ -869,7 +868,7 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 		struct dirent *de;
 		DIR *dh = opendir (buf);
 		// Update the process' memory maps to set correct paths
-		dbg->corebind.syncDebugMaps (dbg->corebind.core);
+		dbg->coreb.syncDebugMaps (dbg->coreb.core);
 		while ((de = readdir (dh))) {
 			if (!strcmp (de->d_name, ".") || !strcmp (de->d_name, "..")) {
 				continue;
@@ -1028,7 +1027,7 @@ static void print_fpu(void *f){
 	r_cons_printf ("foo = 0x%08x\n", (ut32)fpxregs.foo);
 	r_cons_printf ("fos = 0x%08x\n", (ut32)fpxregs.fos);
 	r_cons_printf ("mxcsr = 0x%08x\n", (ut32)fpxregs.mxcsr);
-	for(i = 0; i < 8; i++) {
+	for (i = 0; i < 8; i++) {
 		ut32 *a = (ut32*)(&fpxregs.xmm_space);
 		ut64 *b = (ut64 *)(&fpxregs.st_space[i * 4]);
 		ut32 *c = (ut32*)&fpxregs.st_space;
@@ -1047,7 +1046,7 @@ static void print_fpu(void *f){
 	struct user_fpregs_struct fpregs = *(struct user_fpregs_struct *)f;
 	r_cons_printf ("---- x86-32-noxmm ----\n");
 	PRINT_FPU_NOXMM (fpregs);
-	for(i = 0; i < 8; i++) {
+	for (i = 0; i < 8; i++) {
 		ut64 *b = (ut64 *)(&fpregs.st_space[i*4]);
 		double *d = (double*)b;
 		ut32 *c = (ut32*)&fpregs.st_space;
@@ -1306,13 +1305,10 @@ int linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 	return false;
 }
 
-RList *linux_desc_list (int pid) {
-	RList *ret = NULL;
-	char path[512], file[512], buf[512];
+RList *linux_desc_list(int pid) {
+	char path[512], buf[512];
 	struct dirent *de;
-	RDebugDesc *desc;
 	int type, perm;
-	int len, len2;
 	struct stat st;
 	DIR *dd = NULL;
 
@@ -1321,40 +1317,51 @@ RList *linux_desc_list (int pid) {
 		r_sys_perror ("opendir /proc/x/fd");
 		return NULL;
 	}
-	ret = r_list_new ();
+	RList *ret = r_list_new ();
 	if (!ret) {
 		closedir (dd);
 		return NULL;
 	}
 	ret->free = (RListFree)r_debug_desc_free;
-	while ((de = (struct dirent *)readdir(dd))) {
+	while ((de = (struct dirent *)readdir (dd))) {
 		if (de->d_name[0] == '.') {
 			continue;
 		}
-		len = strlen (path);
-		len2 = strlen (de->d_name);
-		if (len + len2 + 1 >= sizeof(file)) {
+		char *fn = r_str_newf ("/proc/%d/fd/%s", pid, de->d_name);
+		memset (buf, 0, sizeof (buf));
+		if (readlink (fn, buf, sizeof (buf) - 1) == -1) {
 			r_list_free (ret);
 			closedir (dd);
-			eprintf ("Filename is too long");
-			return NULL;
-		}
-		memcpy (file, path, len);
-		memcpy (file + len, de->d_name, len2 + 1);
-		buf[0] = 0;
-		if (readlink (file, buf, sizeof (buf) - 1) == -1) {
+			free (fn);
+			r_sys_perror ("readlink failure");
 			return NULL;
 		}
 		buf[sizeof (buf) - 1] = 0;
 		type = perm = 0;
-		if (stat (file, &st) != -1) {
-			type  = st.st_mode & S_IFIFO  ? 'P':
+
+		// Read file type
+		if (stat (fn, &st) != -1) {
+			bool isfifo = st.st_mode & S_IFIFO;
 #ifdef S_IFSOCK
-				st.st_mode & S_IFSOCK ? 'S':
+			/* Do *not* remove the == here. S_IFSOCK can be multiple
+			 * bits, and we must match all of them. */
+			bool issock = (st.st_mode & S_IFSOCK) == S_IFSOCK;
 #endif
-				st.st_mode & S_IFCHR  ? 'C':'-';
+			bool ischr = st.st_mode & S_IFCHR;
+			if (isfifo) {
+				type = 'P';
+#ifdef S_IFSOCK
+			} else if (issock) {
+				type = 'S';
+#endif
+			} else if (ischr) {
+				type = 'C';
+			} else {
+				type = '-';
+			}
 		}
-		if (lstat(path, &st) != -1) {
+		// Read permissions // TOCTOU
+		if (lstat (fn, &st) != -1) {
 			if (st.st_mode & S_IRUSR) {
 				perm |= R_PERM_R;
 			}
@@ -1362,8 +1369,28 @@ RList *linux_desc_list (int pid) {
 				perm |= R_PERM_W;
 			}
 		}
-		//TODO: Offset
-		desc = r_debug_desc_new (atoi (de->d_name), buf, perm, type, 0);
+		free (fn);
+		// Get offset
+		fn = r_str_newf ("/proc/%d/fdinfo/%s", pid, de->d_name);
+		int f = open (fn, O_RDONLY);
+		char fdinfo[512];
+		fdinfo[0] = 0;
+		if (f >= 0) {
+			if (read (f, fdinfo, sizeof (fdinfo) - 1) < 0) {
+				R_LOG_WARN ("failed to read %s", fn);
+				close (f);
+				r_list_free (ret);
+				closedir (dd);
+				free (fn);
+				return NULL;
+			}
+			fdinfo[sizeof (fdinfo) - 1] = '\0';
+			close (f);
+		}
+		free (fn);
+		/* First line of fdinfo is "pos: [offset]" */
+		ut64 offset = (int) r_num_math (NULL, r_str_trim_head_ro (fdinfo + 4));
+		RDebugDesc *desc = r_debug_desc_new (atoi (de->d_name), buf, perm, type, offset);
 		if (!desc) {
 			break;
 		}

@@ -1,8 +1,5 @@
-/* radare - LGPL - Copyright 2010-2021 - pancake, rhl */
+/* radare - LGPL - Copyright 2010-2022 - pancake, rhl */
 
-#include <r_types.h>
-#include <r_list.h>
-#include <r_flag.h>
 #include <r_core.h>
 #include <rvc.h>
 #define USE_R2 1
@@ -13,10 +10,10 @@
 // project apis to be used from cmd_project.c
 
 static bool is_valid_project_name(const char *name) {
-	if (r_str_len_utf8 (name) >= 16) {
+	if (r_str_len_utf8 (name) >= 64) {
 		return false;
 	}
-	const char *extention = r_str_endswith (name, ".zip") ? r_str_last (name, ".zip") : NULL;
+	const char *extention = r_str_endswith (name, ".zip")? r_str_last (name, ".zip"): NULL;
 	for (; *name && name != extention; name++) {
 		if (IS_DIGIT (*name) || IS_LOWER (*name) || *name == '_') {
 			continue;
@@ -60,7 +57,7 @@ static int make_projects_directory(RCore *core) {
 	char *prjdir = r_file_abspath (r_config_get (core->config, "dir.projects"));
 	int ret = r_sys_mkdirp (prjdir);
 	if (!ret) {
-		eprintf ("Cannot mkdir dir.projects\n");
+		R_LOG_ERROR ("Cannot mkdir dir.projects");
 	}
 	free (prjdir);
 	return ret;
@@ -68,7 +65,7 @@ static int make_projects_directory(RCore *core) {
 
 R_API bool r_core_is_project(RCore *core, const char *name) {
 	bool ret = false;
-	if (name && *name && *name != '.') {
+	if (R_STR_ISNOTEMPTY (name) && *name != '.') {
 		char *path = get_project_script_path (core, name);
 		if (!path) {
 			return false;
@@ -86,17 +83,18 @@ R_API bool r_core_is_project(RCore *core, const char *name) {
 	return ret;
 }
 
-R_API int r_core_project_cat(RCore *core, const char *name) {
+R_API void r_core_project_cat(RCore *core, const char *name) {
+	r_core_return_value (core, R_CMD_RC_FAILURE);
 	char *path = get_project_script_path (core, name);
 	if (path) {
 		char *data = r_file_slurp (path, NULL);
 		if (data) {
 			r_cons_println (data);
 			free (data);
+			r_core_return_value (core, R_CMD_RC_SUCCESS);
 		}
+		free (path);
 	}
-	free (path);
-	return 0;
 }
 
 R_API int r_core_project_list(RCore *core, int mode) {
@@ -139,30 +137,30 @@ R_API int r_core_project_list(RCore *core, int mode) {
 	return 0;
 }
 
-R_API void r_core_project_undirty(RCore *core) {
-	core->config->is_dirty = false;
-	core->anal->is_dirty = false;
-	core->flags->is_dirty = false;
-}
-
 R_API int r_core_project_delete(RCore *core, const char *prjfile) {
 	if (r_sandbox_enable (0)) {
-		eprintf ("Cannot delete project in sandbox mode\n");
+		R_LOG_ERROR ("Cannot delete project in sandbox mode");
 		return 0;
 	}
 	char *path = get_project_script_path (core, prjfile);
 	if (!path) {
-		eprintf ("Invalid project name '%s'\n", prjfile);
+		R_LOG_ERROR ("Invalid project name '%s'", prjfile);
 		return false;
 	}
 	if (r_core_is_project (core, prjfile)) {
 		char *prj_dir = r_file_dirname (path);
 		if (!prj_dir) {
-			eprintf ("Cannot resolve directory\n");
+			R_LOG_ERROR ("Cannot resolve directory");
 			free (path);
 			return false;
 		}
-		r_file_rm_rf (prj_dir);
+		bool must_rm = true;
+		if (r_config_get_b (core->config, "scr.interactive")) {
+			must_rm = r_cons_yesno ('y', "Confirm project deletion? (Y/n)");
+		}
+		if (must_rm) {
+			r_file_rm_rf (prj_dir);
+		}
 		free (prj_dir);
 	}
 	free (path);
@@ -296,7 +294,7 @@ static bool r_core_project_load(RCore *core, const char *prj_name, const char *r
 	}
 	if (r_project_is_loaded (core->prj)) {
 		eprintf ("o--;e prj.name=\n");
-		return false;
+	//	return false;
 	}
 	if (!r_project_open (core->prj, prj_name, rcpath)) {
 		return false;
@@ -318,6 +316,19 @@ static bool r_core_project_load(RCore *core, const char *prj_name, const char *r
 		r_sandbox_grain (oldgrain);
 	} else {
 		ret = r_core_cmd_file (core, rcpath);
+	}
+	char *prj_path = r_file_dirname(rcpath);
+	if (prj_path) {
+		//check if the project uses git
+		Rvc *vc = r_vc_git_open (prj_path);
+		if (!vc) {
+			// if the project does not use git, try rvc
+			vc = r_vc_open (prj_path);
+		}
+		core->prj->rvc = vc;
+		free (prj_path);
+	} else {
+		R_LOG_ERROR ("Failed to load rvc");
 	}
 	r_config_set_b (core->config, "cfg.fortunes", cfg_fortunes);
 	r_config_set_b (core->config, "scr.interactive", scr_interactive);
@@ -343,8 +354,8 @@ R_API RThread *r_core_project_load_bg(RCore *core, const char *prj_name, const c
 	ps->rc_path = strdup (rc_path);
 	RThread *th = r_th_new (project_load_background, ps, false);
 	if (th) {
-		r_th_start (th, true);
-		char thname[32] = { 0 };
+		r_th_start (th, false);
+		char thname[32] = {0};
 		size_t thlen = R_MIN (strlen (prj_name), sizeof (thname) - 1);
 		r_str_ncpy (thname, prj_name, thlen);
 		r_th_setname (th, thname);
@@ -354,52 +365,52 @@ R_API RThread *r_core_project_load_bg(RCore *core, const char *prj_name, const c
 
 R_API bool r_core_project_open(RCore *core, const char *prj_path) {
 	r_return_val_if_fail (core && !R_STR_ISEMPTY (prj_path), false);
-	int ret, close_current_session = 1;
+	bool interactive = r_config_get_b (core->config, "scr.interactive");
+	bool close_current_session = true;
+	bool ask_for_closing = true;
 	if (r_project_is_loaded (core->prj)) {
-		eprintf ("There's a project already opened\n");
-		bool ccs = r_cons_yesno ('y', "Close current session? (Y/n)");
+		R_LOG_ERROR ("There's a project already opened");
+		ask_for_closing = false;
+		bool ccs = interactive? r_cons_yesno ('y', "Close current session? (Y/n)"): true;
 		if (ccs) {
 			r_core_cmd0 (core, "o--");
+			r_core_cmd0 (core, "P-");
 		} else {
-			eprintf ("Project not loaded.\n");
+			R_LOG_ERROR ("Project not loaded");
 			return false;
 		}
 	}
 	char *prj_name = r_core_project_name (core, prj_path);
 	char *prj_script = get_project_script_path (core, prj_path);
 	if (!prj_script) {
-		eprintf ("Invalid project name '%s'\n", prj_path);
+		R_LOG_ERROR ("Invalid project name '%s'", prj_path);
 		return false;
 	}
-	if (r_project_is_loaded (core->prj)) {
+	if (ask_for_closing && r_project_is_loaded (core->prj)) {
 		if (r_cons_is_interactive ()) {
-			close_current_session = r_cons_yesno ('y', "Close current session? (Y/n)");
+			close_current_session = interactive
+				? r_cons_yesno ('y', "Close current session? (Y/n)")
+				: true;
 		}
 	}
 	if (close_current_session) {
-		r_core_cmd0 (core, "e prj.name=;o--");
+		r_config_set (core->config, "prj.name", "");
+		r_core_cmd0 (core, "o--");
 	}
 	/* load sdb stuff in here */
-	ret = r_core_project_load (core, prj_name, prj_script);
+	bool ret = r_core_project_load (core, prj_name, prj_script);
 	free (prj_name);
 	free (prj_script);
-	if (ret)  {
-		r_core_project_undirty(core);
+	if (ret) {
+		r_core_project_undirty (core);
 	}
 	return ret;
 }
 
-R_API char *r_core_project_name(RCore *core, const char *prjfile) {
-	char buf[256], *file = NULL;
-	if (*prjfile != '/') {
-		return strdup (prjfile);
-	}
-	char *prj = get_project_script_path (core, prjfile);
-	if (!prj) {
-		eprintf ("Invalid project name '%s'\n", prjfile);
-		return NULL;
-	}
-	FILE *fd = r_sandbox_fopen (prj, "r");
+static char *get_project_name(const char *prj_script) {
+	char buf[1024];
+	char *file = NULL;
+	FILE *fd = r_sandbox_fopen (prj_script, "r");
 	if (fd) {
 		for (;;) {
 			if (!fgets (buf, sizeof (buf), fd)) {
@@ -416,8 +427,21 @@ R_API char *r_core_project_name(RCore *core, const char *prjfile) {
 		}
 		fclose (fd);
 	} else {
-		eprintf ("Cannot open project info (%s)\n", prj);
+		R_LOG_ERROR ("Cannot open project info (%s)", prj_script);
 	}
+	return file;
+}
+
+R_API char *r_core_project_name(RCore *core, const char *prjfile) {
+	if (*prjfile != '/') {
+		return strdup (prjfile);
+	}
+	char *prj = get_project_script_path (core, prjfile);
+	if (!prj) {
+		R_LOG_ERROR ("Invalid project name '%s'", prjfile);
+		return NULL;
+	}
+	char *file = get_project_name (prj);
 	free (prj);
 	if (R_STR_ISEMPTY (file)) {
 		free (file);
@@ -454,8 +478,8 @@ static bool store_files_and_maps(RCore *core, RIODesc *desc, ut32 id) {
 		if ((maps = r_io_map_get_by_fd (core->io, id))) { //wtf
 			r_list_foreach (maps, iter, map) {
 				r_cons_printf ("om %d 0x%" PFMT64x " 0x%" PFMT64x " 0x%" PFMT64x " %s%s%s\n", fdc,
-					r_io_map_begin (map), r_io_map_size (map), map->delta, r_str_rwx_i (map->perm),
-					map->name ? " " : "", r_str_get (map->name));
+						r_io_map_begin (map), r_io_map_size (map), map->delta, r_str_rwx_i (map->perm),
+						map->name? " " : "", r_str_get (map->name));
 			}
 			r_list_free (maps);
 		}
@@ -465,115 +489,134 @@ static bool store_files_and_maps(RCore *core, RIODesc *desc, ut32 id) {
 }
 #endif
 
+static char *r_cons_drain(void) {
+	const char *buf = r_cons_get_buffer ();
+	size_t buf_size = r_cons_get_buffer_len ();
+	char *s = r_str_ndup (buf, buf_size);
+	r_cons_reset ();
+	return s;
+}
+static void flush(RStrBuf *sb) {
+	char * s = r_cons_drain ();
+	if (s) {
+		r_strbuf_append (sb, s);
+		free (s);
+	}
+}
+
 R_API bool r_core_project_save_script(RCore *core, const char *file, int opts) {
-	char *filename, *hl, *ohl = NULL;
-	int fdold;
+	char *hl, *ohl = NULL;
 
 	if (R_STR_ISEMPTY (file)) {
 		return false;
 	}
 
-	filename = r_str_word_get_first (file);
-	int fd = r_sandbox_open (file, O_BINARY | O_RDWR | O_CREAT | O_TRUNC, 0644);
-	if (fd == -1) {
-		free (filename);
-		return false;
-	}
+	char *filename = r_str_word_get_first (file);
 
 	hl = r_cons_singleton ()->highlight;
 	if (hl) {
 		ohl = strdup (hl);
 		r_cons_highlight (NULL);
 	}
-	fdold = r_cons_singleton ()->fdout;
-	r_cons_singleton ()->fdout = fd;
+	RStrBuf *sb = r_strbuf_new ("");
 	r_cons_singleton ()->context->is_interactive = false;
-	r_str_write (fd, "# r2 rdb project file\n");
+	r_cons_printf ("# r2 rdb project file\n");
 	// new behaviour to project load routine (see io maps below).
 	if (opts & R_CORE_PRJ_EVAL) {
-		r_str_write (fd, "# eval\n");
-		r_config_list (core->config, NULL, true);
-		r_cons_flush ();
+		r_cons_printf ("# eval\n");
+		r_config_list (core->config, NULL, 'r');
+		flush (sb);
 	}
 	r_core_cmd (core, "o*", 0);
+	r_core_cmd (core, "om*", 0);
 	r_core_cmd0 (core, "tcc*");
 	if (opts & R_CORE_PRJ_FCNS) {
-		r_str_write (fd, "# functions\n");
-		r_str_write (fd, "fs functions\n");
+		r_cons_printf ("# functions\n");
+		r_cons_printf ("fs functions\n");
 		r_core_cmd (core, "afl*", 0);
-		r_cons_flush ();
+		flush (sb);
 	}
-
+	{
+		r_cons_printf ("# registers\n");
+		r_core_cmd (core, "ar*", 0);
+		flush (sb);
+		r_core_cmd (core, "arR", 0);
+		flush (sb);
+	}
 	if (opts & R_CORE_PRJ_FLAGS) {
-		r_str_write (fd, "# flags\n");
+		r_cons_printf ("# flags\n");
 		r_flag_space_push (core->flags, NULL);
 		r_flag_list (core->flags, true, NULL);
 		r_flag_space_pop (core->flags);
-		r_cons_flush ();
+		flush (sb);
 	}
 #if PROJECT_EXPERIMENTAL
 	if (opts & R_CORE_PRJ_IO_MAPS && core->io && core->io->files) {
 		fdc = 3;
 		r_id_storage_foreach (core->io->files, (RIDStorageForeachCb)store_files_and_maps, core);
-		r_cons_flush ();
+		flush (sb);
 	}
 #endif
 	{
 		r_core_cmd (core, "fz*", 0);
-		r_cons_flush ();
+		flush (sb);
 	}
 	if (opts & R_CORE_PRJ_META) {
-		r_str_write (fd, "# meta\n");
+		r_cons_printf ("# meta\n");
 		r_meta_print_list_all (core->anal, R_META_TYPE_ANY, 1, NULL);
-		r_cons_flush ();
+		flush (sb);
 		r_core_cmd (core, "fV*", 0);
-		r_cons_flush ();
+		flush (sb);
 	}
 	if (opts & R_CORE_PRJ_XREFS) {
 		r_core_cmd (core, "ax*", 0);
-		r_cons_flush ();
+		flush (sb);
 	}
 	if (opts & R_CORE_PRJ_FLAGS) {
 		r_core_cmd (core, "f.**", 0);
-		r_cons_flush ();
+		flush (sb);
 	}
 	if (opts & R_CORE_PRJ_DBG_BREAK) {
 		r_core_cmd (core, "db*", 0);
-		r_cons_flush ();
+		flush (sb);
 	}
 	if (opts & R_CORE_PRJ_ANAL_HINTS) {
 		r_core_cmd (core, "ah*", 0);
-		r_cons_flush ();
+		flush (sb);
 	}
 	if (opts & R_CORE_PRJ_ANAL_TYPES) {
-		r_str_write (fd, "# types\n");
+		r_cons_printf ("# types\n");
 		r_core_cmd (core, "t*", 0);
-		r_cons_flush ();
+		flush (sb);
 	}
 	if (opts & R_CORE_PRJ_ANAL_MACROS) {
-		r_str_write (fd, "# macros\n");
+		r_cons_printf ("# macros\n");
 		r_core_cmd (core, "(*", 0);
-		r_str_write (fd, "# aliases\n");
+		r_cons_printf ("# aliases\n");
 		r_core_cmd (core, "$*", 0);
-		r_cons_flush ();
+		flush (sb);
 	}
 	r_core_cmd (core, "wc*", 0);
 	if (opts & R_CORE_PRJ_ANAL_SEEK) {
-		r_cons_printf ("# seek\n"
-			       "s 0x%08" PFMT64x "\n",
-			core->offset);
-		r_cons_flush ();
+		r_cons_printf ("# seek\n" "s 0x%08" PFMT64x "\n", core->offset);
+		flush (sb);
 	}
-
-	r_cons_singleton ()->fdout = fdold;
 	r_cons_singleton ()->context->is_interactive = true;
+	flush (sb);
+	char *s = r_strbuf_drain (sb);
+	if (!strcmp (filename, "/dev/stdout")) {
+		r_cons_printf ("%s\n", s);
+	} else {
+		if (!r_file_dump (filename, (const ut8*)s, strlen (s), 0)) {
+			R_LOG_ERROR ("Cannot save file");
+		}
+	}
+	free (s);
 
 	if (ohl) {
 		r_cons_highlight (ohl);
 		free (ohl);
 	}
-
-	close (fd);
 	free (filename);
 
 	return true;
@@ -587,12 +630,12 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 	r_return_val_if_fail (prj_name && *prj_name, false);
 
 	if (r_config_get_b (core->config, "cfg.debug")) {
-		eprintf ("radare2 does not support projects on debugged bins.\n");
+		R_LOG_ERROR ("radare2 does not support projects on debugged bins");
 		return false;
 	}
 	char *script_path = get_project_script_path (core, prj_name);
 	if (!script_path) {
-		eprintf ("Invalid project name '%s'\n", prj_name);
+		R_LOG_ERROR ("Invalid project name '%s'", prj_name);
 		return false;
 	}
 	char *prj_dir = r_str_endswith (script_path, R_SYS_DIR "rc.r2")
@@ -600,14 +643,14 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 		: r_str_newf ("%s.d", script_path);
 	if (r_file_exists (script_path)) {
 		if (r_file_is_directory (script_path)) {
-			eprintf ("Structural error: rc.r2 shouldnt be a directory.\n");
+			R_LOG_ERROR ("Structural error: rc.r2 shouldnt be a directory");
 		}
 	}
 	if (!prj_dir) {
 		prj_dir = strdup (prj_name);
 	}
 	if (r_core_is_project (core, prj_name) && strcmp (prj_name, r_config_get (core->config, "prj.name"))) {
-		eprintf ("A project with this name already exists\n");
+		R_LOG_ERROR ("A project with this name already exists. Use P-%s to delete it", prj_name);
 		free (script_path);
 		free (prj_dir);
 		return false;
@@ -615,8 +658,8 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 	if (!r_file_is_directory (prj_dir)) {
 		r_sys_mkdirp (prj_dir);
 	}
-	if (r_config_get_i (core->config, "scr.null")) {
-		r_config_set_i (core->config, "scr.null", false);
+	if (r_config_get_b (core->config, "scr.null")) {
+		r_config_set_b (core->config, "scr.null", false);
 		scr_null = true;
 	}
 	make_projects_directory (core);
@@ -634,28 +677,28 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 
 	r_config_set (core->config, "prj.name", prj_name);
 	if (!r_core_project_save_script (core, script_path, R_CORE_PRJ_ALL)) {
-		eprintf ("Cannot open '%s' for writing\n", prj_name);
+		R_LOG_ERROR ("Cannot open '%s' for writing", prj_name);
 		ret = false;
 		r_config_set (core->config, "prj.name", "");
 	}
 
-	if (r_config_get_i (core->config, "prj.files")) {
-		eprintf ("TODO: prj.files: support copying more than one file into the project directory\n");
+	if (r_config_get_b (core->config, "prj.files")) {
 		char *bin_file = r_core_project_name (core, prj_name);
 		const char *bin_filename = r_file_basename (bin_file);
 		char *prj_bin_dir = r_str_newf ("%s" R_SYS_DIR "bin", prj_dir);
 		char *prj_bin_file = r_str_newf ("%s" R_SYS_DIR "%s", prj_bin_dir, bin_filename);
 		r_sys_mkdirp (prj_bin_dir);
 		if (!r_file_copy (bin_file, prj_bin_file)) {
-			eprintf ("Warning: Cannot copy '%s' into '%s'\n", bin_file, prj_bin_file);
+			R_LOG_WARN ("Cannot copy '%s' into '%s'", bin_file, prj_bin_file);
 		}
 		free (prj_bin_file);
 		free (prj_bin_dir);
 		free (bin_file);
 	}
-	if (r_config_get_b (core->config, "prj.vc")) {
-		if (!rvc_git_repo_exists (core, prj_dir)) {
-			if (!rvc_git_init (core, prj_dir)) {
+	if (core->prj->rvc || r_config_get_b (core->config, "prj.vc")) {
+		// assume that if the repo is not loaded, the repo doesn't exist
+		if (!core->prj->rvc) {
+			if (!(core->prj->rvc = rvc_git_init (core, prj_dir))) {
 				free (prj_dir);
 				free (script_path);
 				return false;
@@ -664,7 +707,8 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 		RList *paths = r_list_new ();
 		if (paths) {
 			if (r_list_append (paths, prj_dir)) {
-				if (!rvc_git_commit (core, prj_dir, NULL, NULL, paths)) {
+				if (!rvc_git_commit (core, core->prj->rvc,
+							NULL, NULL, paths)) {
 					r_list_free (paths);
 					free (prj_dir);
 					free (script_path);
@@ -691,10 +735,10 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 				r_sys_cmdf ("rm -f '%s.zip'; zip -r '%s'.zip '%s'",
 					prj_name, prj_name, prj_name);
 			} else {
-				eprintf ("Command injection attempt?\n");
+				R_LOG_WARN ("Command injection attempt?");
 			}
 		} else {
-			eprintf ("Cannot chdir %s\n", prj_dir);
+			R_LOG_ERROR ("Cannot chdir %s", prj_dir);
 		}
 		r_sys_chdir (cwd);
 		free (cwd);
@@ -702,13 +746,15 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 	// LEAK : not always in heap free (prj_name);
 	free (prj_dir);
 	if (scr_null) {
-		r_config_set_i (core->config, "scr.null", true);
+		r_config_set_b (core->config, "scr.null", true);
 	}
 	free (script_path);
 	r_config_set (core->config, "prj.name", prj_name);
-	r_core_project_undirty(core);
+	r_core_project_undirty (core);
 	return ret;
 }
+
+// dirty bits
 
 R_API char *r_core_project_notes_file(RCore *core, const char *prj_name) {
 	const char *prjdir = r_config_get (core->config, "dir.projects");
@@ -718,8 +764,12 @@ R_API char *r_core_project_notes_file(RCore *core, const char *prj_name) {
 	return notes_txt;
 }
 
-R_API bool r_core_project_is_saved(RCore *core) {
-	return !R_IS_DIRTY (core->config)
-		&& !R_IS_DIRTY (core->anal)
-		&& !R_IS_DIRTY (core->flags);
+R_API bool r_core_project_is_dirty(RCore *core) {
+	return !R_IS_DIRTY (core->config) && !R_IS_DIRTY (core->anal) && !R_IS_DIRTY (core->flags);
+}
+
+R_API void r_core_project_undirty(RCore *core) {
+	core->config->is_dirty = false;
+	core->anal->is_dirty = false;
+	core->flags->is_dirty = false;
 }

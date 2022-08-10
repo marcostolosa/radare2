@@ -1,9 +1,6 @@
 /* radare - LGPL - Copyright 2007-2020 - pancake */
 
-#include "r_types.h"
-#include "r_util.h"
-#include <stdio.h>
-#include <ctype.h>
+#include <r_util.h>
 
 /* int c; ret = hex_to_byte(&c, 'c'); */
 R_API bool r_hex_to_byte(ut8 *val, ut8 c) {
@@ -465,9 +462,9 @@ R_API int r_hex_str2bin_until_new(const char *in, ut8 **out) {
 
 	int ret = -1;
 	size_t nibbles = 0;
-	ut8 *buf = malloc (len);
+	ut8 *buf = calloc (1, len);
 	if (buf) {
-		while (!r_hex_to_byte (buf + nibbles / 2, *in)) {
+		while (!r_hex_to_byte (buf + (nibbles / 2), *in)) {
 			nibbles++;
 			in++;
 		}
@@ -476,7 +473,7 @@ R_API int r_hex_str2bin_until_new(const char *in, ut8 **out) {
 			ret = 0;
 		} else {
 			ret = nibbles / 2;
-			*out = realloc (buf, ret);
+			*out = (ut8*)realloc (buf, ret);
 			if (!*out) {
 				ret = -1;
 			}
@@ -491,16 +488,19 @@ R_API int r_hex_str2bin_until_new(const char *in, ut8 **out) {
 
 R_API int r_hex_str2binmask(const char *in, ut8 *out, ut8 *mask) {
 	ut8 *ptr;
-	int len, ilen = strlen (in)+1;
-	int has_nibble = 0;
+	int ilen = strlen (in) + 1;
 	memcpy (out, in, ilen);
 	for (ptr = out; *ptr; ptr++) {
 		if (*ptr == '.') {
 			*ptr = '0';
 		}
 	}
-	len = r_hex_str2bin ((char*)out, out);
-	if (len<0) { has_nibble = 1; len = -(len+1); }
+	int len = r_hex_str2bin ((char*)out, out);
+	bool has_nibble = false;
+	if (len < 0) {
+		has_nibble = true;
+		len = -(len + 1);
+	}
 	if (len != -1) {
 		memcpy (mask, in, ilen);
 		if (has_nibble) {

@@ -65,7 +65,6 @@ R_API char* r_core_asm_search(RCore *core, const char *input) {
 // TODO: add support for byte-per-byte opcode search
 R_API RList *r_core_asm_strsearch(RCore *core, const char *input, ut64 from, ut64 to, int maxhits, int regexp, int everyByte, int mode) {
 	RCoreAsmHit *hit;
-	RAsmOp op;
 	RList *hits;
 	ut64 at, toff = core->offset;
 	ut8 *buf;
@@ -90,12 +89,12 @@ R_API RList *r_core_asm_strsearch(RCore *core, const char *input, ut64 from, ut6
 	ut64 usrimm = r_num_math (core->num, inp);
 	ut64 usrimm2 = inp_arg? r_num_math (core->num, inp_arg): usrimm;
 	if (usrimm > usrimm2) {
-		eprintf ("Error: /ci : Invalid range\n");
+		R_LOG_ERROR ("/ci : Invalid range");
 		return NULL;
 	}
 
 	if (core->blocksize < 8) {
-		eprintf ("error: block size too small\n");
+		R_LOG_ERROR ("block size too small");
 		return NULL;
 	}
 	if (!(buf = (ut8 *)calloc (core->blocksize, 1))) {
@@ -155,6 +154,7 @@ R_API RList *r_core_asm_strsearch(RCore *core, const char *input, ut64 from, ut6
 					match = (val != UT64_MAX && val >= usrimm && val <= usrimm2);
 				}
 				if (match) {
+					RAsmOp op;
 					if (!(hit = r_core_asm_hit_new ())) {
 						r_list_purge (hits);
 						R_FREE (hits);
@@ -188,6 +188,7 @@ R_API RList *r_core_asm_strsearch(RCore *core, const char *input, ut64 from, ut6
 				opst = strdup (r_strbuf_get (&analop.esil));
 				r_anal_op_fini (&analop);
 			} else {
+				RAsmOp op;
 				if (!(len = r_asm_disassemble (
 					      core->rasm, &op,
 					      buf + addrbytes * idx,
@@ -208,7 +209,7 @@ R_API RList *r_core_asm_strsearch(RCore *core, const char *input, ut64 from, ut6
 				if (mode == 'a') { // check for case sensitive
 					matches = !r_str_ncasecmp (opst, tokens[matchcount], strlen (tokens[matchcount]));
 				} else if (!regexp) {
-					matches = strstr (opst, tokens[matchcount]) != NULL;
+					matches = !!strstr (opst, tokens[matchcount]);
 				} else {
 					rx = r_regex_new (tokens[matchcount], "es");
 					matches = r_regex_exec (rx, opst, 0, 0, 0) == 0;
@@ -249,7 +250,7 @@ R_API RList *r_core_asm_strsearch(RCore *core, const char *input, ut64 from, ut6
 					if (maxhits) {
 						count++;
 						if (count >= maxhits) {
-							//eprintf ("Error: search.maxhits reached\n");
+							//R_LOG_ERROR ("search.maxhits reached");
 							goto beach;
 						}
 					}
@@ -311,7 +312,7 @@ static void add_hit_to_hits(RList* hits, ut64 addr, int len, ut8 is_valid) {
 }
 
 static int prune_hits_in_addr_range(RList *hits, ut64 addr, ut64 len, ut8 is_valid) {
-	RCoreAsmHit hit = R_EMPTY;
+	RCoreAsmHit hit = {0};
 	hit.addr = addr;
 	hit.len = len;
 	hit.valid = is_valid;
@@ -364,7 +365,6 @@ static int handle_forward_disassemble(RCore* core, RList *hits, ut8* buf, ut64 l
 	ut64 temp_instr_len = 0;
 	ut64 start = 0, end = 0;
 	ut8 is_valid = false;
-	RAsmOp op;
 
 	if (end_addr < current_instr_addr) {
 		return end_addr;
@@ -372,6 +372,7 @@ static int handle_forward_disassemble(RCore* core, RList *hits, ut8* buf, ut64 l
 
 	r_asm_set_pc (core->rasm, current_instr_addr);
 	while (tmp_current_buf_pos < len && temp_instr_addr < end_addr) {
+		RAsmOp op;
 		temp_instr_len = len - tmp_current_buf_pos;
 		IFDBG eprintf("Current position: %"PFMT64d" instr_addr: 0x%"PFMT64x"\n", tmp_current_buf_pos, temp_instr_addr);
 		temp_instr_len = r_asm_disassemble (core->rasm, &op, buf+tmp_current_buf_pos, temp_instr_len);
@@ -404,6 +405,7 @@ static int handle_forward_disassemble(RCore* core, RList *hits, ut8* buf, ut64 l
 
 		temp_instr_addr += temp_instr_len;
 		tmp_current_buf_pos += temp_instr_len;
+		r_asm_op_fini (&op);
 	}
 	return temp_instr_addr;
 }
@@ -483,7 +485,6 @@ static int is_hit_inrange(RCoreAsmHit *hit, ut64 start_range, ut64 end_range){
 }
 
 R_API RList *r_core_asm_bwdisassemble(RCore *core, ut64 addr, int n, int len) {
-	RAsmOp op;
 	// if (n > core->blocksize) n = core->blocksize;
 	ut64 at;
 	ut32 idx = 0, hit_count;
@@ -539,10 +540,12 @@ R_API RList *r_core_asm_bwdisassemble(RCore *core, ut64 addr, int n, int len) {
 	at = addr - idx / addrbytes;
 	r_asm_set_pc (core->rasm, at);
 	for (hit_count = 0; hit_count < n; hit_count++) {
+		RAsmOp op;
 		int instrlen = r_asm_disassemble (core->rasm, &op,
 			buf + len - addrbytes * (addr - at), addrbytes * (addr - at));
 		add_hit_to_hits (hits, at, instrlen, true);
 		at += instrlen;
+		r_asm_op_fini (&op);
 	}
 	free (buf);
 	return hits;
@@ -552,7 +555,6 @@ static RList *r_core_asm_back_disassemble_all(RCore *core, ut64 addr, ut64 len, 
 	RList *hits = r_core_asm_hit_list_new ();
 	RCoreAsmHit dummy_value;
 	RCoreAsmHit *hit = NULL;
-	RAsmOp op;
 	ut8 *buf = (ut8 *)malloc (len + extra_padding);
 	int current_instr_len = 0;
 	ut64 current_instr_addr = addr,
@@ -582,6 +584,7 @@ static RList *r_core_asm_back_disassemble_all(RCore *core, ut64 addr, ut64 len, 
 	}
 
 	do {
+		RAsmOp op;
 		if (r_cons_is_breaked ()) {
 			break;
 		}
@@ -599,15 +602,15 @@ static RList *r_core_asm_back_disassemble_all(RCore *core, ut64 addr, ut64 len, 
 		current_buf_pos--;
 		current_instr_addr--;
 		hit_count++;
+		r_asm_op_fini (&op);
 	} while ( ((int) current_buf_pos  >= 0) && (int)(len - current_buf_pos) >= 0 && hit_count <= max_hit_count);
 
-	free(buf);
+	free (buf);
 	return hits;
 }
 
 static RList *r_core_asm_back_disassemble(RCore *core, ut64 addr, int len, ut64 max_hit_count, ut8 disassmble_each_addr, ut32 extra_padding) {
 	RList *hits;;
-	RAsmOp op;
 	ut8 *buf = NULL;
 	ut8 max_invalid_b4_exit = 4,
 		last_num_invalid = 0;
@@ -662,6 +665,7 @@ static RList *r_core_asm_back_disassemble(RCore *core, ut64 addr, int len, ut64 
 	next_buf_pos = len + extra_padding - 1;
 	current_instr_addr = addr - 1;
 	do {
+		RAsmOp op;
 		if (r_cons_is_breaked ()) {
 			break;
 		}
@@ -742,6 +746,7 @@ static RList *r_core_asm_back_disassemble(RCore *core, ut64 addr, int len, ut64 
 		current_instr_addr -= 1;
 		current_buf_pos -= 1;
 
+		r_asm_op_fini (&op);
 		if (hit_count >= max_hit_count &&
 			(last_num_invalid >= max_invalid_b4_exit || last_num_invalid == 0)) {
 			break;

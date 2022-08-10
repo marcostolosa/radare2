@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -21,11 +21,15 @@ typedef struct {
 extern RBinWrite r_bin_write_mach0;
 
 static RBinInfo *info(RBinFile *bf);
-
 static void swizzle_io_read(struct MACH0_(obj_t) *obj, RIO *io);
 static int rebasing_and_stripping_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count);
 static void rebase_buffer(struct MACH0_(obj_t) *obj, ut64 off, RIODesc *fd, ut8 *buf, int count);
 
+
+static R_TH_LOCAL void *origread = NULL;
+static R_TH_LOCAL int origdesc = 0;
+static R_TH_LOCAL RIOPlugin *origplugin = NULL;
+static R_TH_LOCAL RIOPlugin *heapplugin = NULL;
 #define IS_PTR_AUTH(x) ((x & (1ULL << 63)) != 0)
 #define IS_PTR_BIND(x) ((x & (1ULL << 62)) != 0)
 
@@ -68,6 +72,16 @@ static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadadd
 }
 
 static void destroy(RBinFile *bf) {
+	if (origplugin) {
+		RIOBind *iob = &bf->rbin->iob;
+		RIO *io = iob->io;
+		RIODesc *desc = iob->desc_get (io, origdesc);
+		if (desc) {
+			desc->plugin = origplugin;
+		}
+		origplugin = NULL;
+		R_FREE (heapplugin);
+	}
 	MACH0_(mach0_free) (bf->o->bin_obj);
 }
 
@@ -117,7 +131,7 @@ static void process_constructors(RBinFile *bf, RList *ret, int bits) {
 			}
 			int read = r_buf_read_at (bf->buf, sec->paddr, buf, sec->size);
 			if (read < sec->size) {
-				eprintf ("process_constructors: cannot process section %s\n", sec->name);
+				R_LOG_ERROR ("process_constructors: cannot process section %s", sec->name);
 				continue;
 			}
 			if (bits == 32) {
@@ -206,7 +220,6 @@ static RList *symbols(RBinFile *bf) {
 #if 0
 	const char *lang = "c"; // XXX deprecate this
 #endif
-	int wordsize = 0;
 	if (!ret) {
 		return NULL;
 	}
@@ -215,7 +228,22 @@ static RList *symbols(RBinFile *bf) {
 		return NULL;
 	}
 	bool isStripped = false;
-	wordsize = MACH0_(get_bits) (obj->bin_obj);
+	bool isDwarfed = false;
+
+	if (!bf->o->sections) {
+		bf->o->sections = sections (bf);
+	}
+	if (bf->o->sections) {
+		RListIter *iter;
+		RBinSection *section;
+		r_list_foreach (bf->o->sections, iter, section) {
+			if (strstr (section->name, "DWARF.__debug_line")) {
+				isDwarfed = true;
+				break;
+			}
+		}
+	}
+	int wordsize = MACH0_(get_bits) (obj->bin_obj);
 
 	// OLD CODE
 	if (!(syms = MACH0_(get_symbols) (obj->bin_obj))) {
@@ -321,6 +349,9 @@ static RList *symbols(RBinFile *bf) {
 #endif
 	if (isStripped) {
 		bin->dbg_info |= R_BIN_DBG_STRIPPED;
+	}
+	if (isDwarfed) {
+		bin->dbg_info |= R_BIN_DBG_LINENUMS;
 	}
 	sdb_free (symcache);
 	return ret;
@@ -490,20 +521,19 @@ static RList *libs(RBinFile *bf) {
 }
 
 static RBinInfo *info(RBinFile *bf) {
-	struct MACH0_(obj_t) *bin = NULL;
-	char *str;
-
 	r_return_val_if_fail (bf && bf->o, NULL);
 	RBinInfo *ret = R_NEW0 (RBinInfo);
 	if (!ret) {
 		return NULL;
 	}
 
-	bin = bf->o->bin_obj;
+	struct MACH0_(obj_t) *bin = bf->o->bin_obj;
 	if (bf->file) {
 		ret->file = strdup (bf->file);
 	}
-	if ((str = MACH0_(get_class) (bf->o->bin_obj))) {
+
+	char *str = MACH0_(get_class) (bf->o->bin_obj);
+	if (str) {
 		ret->bclass = str;
 	}
 	if (bin) {
@@ -514,7 +544,7 @@ static RBinInfo *info(RBinFile *bf) {
 		ret->lang = bin->lang;
 	}
 	ret->intrp = r_str_dup (NULL, MACH0_(get_intrp)(bf->o->bin_obj));
-	ret->compiler = r_str_dup (NULL, "");
+	ret->compiler = strdup ("clang");
 	ret->rclass = strdup ("mach0");
 	ret->os = strdup (MACH0_(get_os)(bf->o->bin_obj));
 	ret->subsystem = strdup ("darwin");
@@ -549,7 +579,7 @@ static bool _patch_reloc(struct MACH0_(obj_t) *bin, RIOBind *iob, struct reloc_t
 			ins_len = 5;
 			break;
 		default:
-			eprintf ("Warning: unsupported reloc type for X86_64 (%d), please file a bug.\n", reloc->type);
+			R_LOG_WARN ("unsupported reloc type for X86_64 (%d), please file a bug", reloc->type);
 			return false;
 		}
 		break;
@@ -562,7 +592,7 @@ static bool _patch_reloc(struct MACH0_(obj_t) *bin, RIOBind *iob, struct reloc_t
 	case CPU_TYPE_ARM:
 		break;
 	default:
-		eprintf ("Warning: unsupported architecture for patching relocs, please file a bug. %s\n", MACH0_(get_cputype_from_hdr)(&bin->hdr));
+		R_LOG_WARN ("unsupported architecture for patching relocs, please file a bug. %s", MACH0_(get_cputype_from_hdr)(&bin->hdr));
 		return false;
 	}
 
@@ -709,14 +739,23 @@ beach:
 
 static void swizzle_io_read(struct MACH0_(obj_t) *obj, RIO *io) {
 	r_return_if_fail (io && io->desc && io->desc->plugin);
-	RIOPlugin *plugin = io->desc->plugin;
+	RIOPlugin *plugin = R_NEW0 (RIOPlugin);
+	if (heapplugin) {
+		R_LOG_WARN ("Here be dragons");
+	}
+	origplugin = io->desc->plugin;
+	origdesc = io->desc->fd;
+	memcpy (plugin, origplugin, sizeof (RIOPlugin));
+	io->desc->plugin = plugin;
 	obj->original_io_read = plugin->read;
+	origread = plugin->read;
 	plugin->read = &rebasing_and_stripping_io_read;
+	heapplugin = plugin;
 }
 
 static int rebasing_and_stripping_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	r_return_val_if_fail (io, -1);
-	RCore *core = (RCore*) io->corebind.core;
+	RCore *core = (RCore*) io->coreb.core;
 	if (!core || !core->bin || !core->bin->binfiles) {
 		return -1;
 	}
@@ -749,24 +788,26 @@ static int rebasing_and_stripping_io_read(RIO *io, RIODesc *fd, ut8 *buf, int co
 		}
 		return fd->plugin->read (io, fd, buf, count);
 	}
+	if (!obj->original_io_read) {
+		return -1;
+	}
 	if (obj->rebasing_buffer) {
 		return obj->original_io_read (io, fd, buf, count);
 	}
-	static ut8 *internal_buffer = NULL;
-	static int internal_buf_size = 0;
-	if (count > internal_buf_size) {
-		if (internal_buffer) {
-			R_FREE (internal_buffer);
-			internal_buffer = NULL;
+	if (count > obj->internal_buffer_size) {
+		R_FREE (obj->internal_buffer);
+		obj->internal_buffer_size = R_MAX (count, 8);
+		obj->internal_buffer = (ut8 *) calloc (1, obj->internal_buffer_size);
+		if (!obj->internal_buffer) {
+			obj->internal_buffer_size = 0;
+			return -1;
 		}
-		internal_buf_size = R_MAX (count, 8);
-		internal_buffer = (ut8 *) malloc (internal_buf_size);
 	}
 	ut64 io_off = io->off;
-	int result = obj->original_io_read (io, fd, internal_buffer, count);
+	int result = obj->original_io_read (io, fd, obj->internal_buffer, count);
 	if (result == count) {
-		rebase_buffer (obj, io_off - bf->o->boffset, fd, internal_buffer, count);
-		memcpy (buf, internal_buffer, result);
+		rebase_buffer (obj, io_off - bf->o->boffset, fd, obj->internal_buffer, obj->internal_buffer_size);
+		memcpy (buf, obj->internal_buffer, result);
 	}
 	return result;
 }
@@ -776,17 +817,17 @@ static bool rebase_buffer_callback(void * context, RFixupEventDetails * event_de
 
 	ut64 in_buf = event_details->offset - ctx->off;
 	switch (event_details->type) {
-		case R_FIXUP_EVENT_BIND:
-		case R_FIXUP_EVENT_BIND_AUTH:
-			r_write_le64 (&ctx->buf[in_buf], 0);
-			break;
-		case R_FIXUP_EVENT_REBASE:
-		case R_FIXUP_EVENT_REBASE_AUTH:
-			r_write_le64 (&ctx->buf[in_buf], ((RFixupRebaseEventDetails *) event_details)->ptr_value);
-			break;
-		default:
-			eprintf ("Unexpected event while rebasing buffer\n");
-			return false;
+	case R_FIXUP_EVENT_BIND:
+	case R_FIXUP_EVENT_BIND_AUTH:
+		r_write_le64 (&ctx->buf[in_buf], 0);
+		break;
+	case R_FIXUP_EVENT_REBASE:
+	case R_FIXUP_EVENT_REBASE_AUTH:
+		r_write_le64 (&ctx->buf[in_buf], ((RFixupRebaseEventDetails *) event_details)->ptr_value);
+		break;
+	default:
+		R_LOG_ERROR ("Unexpected event while rebasing buffer");
+		return false;
 	}
 
 	return true;

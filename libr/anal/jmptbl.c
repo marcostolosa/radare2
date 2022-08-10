@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2010-2021 - nibble, alvaro, pancake, th3str4ng3r */
+/* radare - LGPL - Copyright 2010-2022 - nibble, alvaro, pancake, th3str4ng3r */
 
 #include <r_anal.h>
 #include <r_parse.h>
@@ -13,13 +13,13 @@ static void apply_case(RAnal *anal, RAnalBlock *block, ut64 switch_addr, ut64 of
 	// eprintf ("** apply_case: 0x%"PFMT64x " from 0x%"PFMT64x "\n", case_addr, case_addr_loc);
 	r_meta_set_data_at (anal, case_addr_loc, offset_sz);
 	r_anal_hint_set_immbase (anal, case_addr_loc, 10);
-	r_anal_xrefs_set (anal, switch_addr, case_addr, R_ANAL_REF_TYPE_CODE);
+	r_anal_xrefs_set (anal, switch_addr, case_addr, R_ANAL_REF_TYPE_CODE | R_ANAL_REF_TYPE_EXEC);
 	if (block) {
 		r_anal_block_add_switch_case (block, switch_addr, id, case_addr);
 	}
 	if (anal->flb.set) {
 		char flagname[0x30];
-		int iid = R_ABS((int)id);
+		int iid = R_ABS ((int)id);
 		snprintf (flagname, sizeof (flagname), "case.0x%"PFMT64x ".%d", (ut64)switch_addr, iid);
 		anal->flb.set (anal->flb.f, flagname, case_addr, 1);
 	}
@@ -33,7 +33,7 @@ static void apply_switch(RAnal *anal, ut64 switch_addr, ut64 jmptbl_addr, ut64 c
 		snprintf (tmp, sizeof (tmp), "switch.0x%08"PFMT64x, switch_addr);
 		anal->flb.set (anal->flb.f, tmp, switch_addr, 1);
 		if (default_case_addr != UT64_MAX) {
-			r_anal_xrefs_set (anal, switch_addr, default_case_addr, R_ANAL_REF_TYPE_CODE);
+			r_anal_xrefs_set (anal, switch_addr, default_case_addr, R_ANAL_REF_TYPE_CODE | R_ANAL_REF_TYPE_EXEC);
 			snprintf (tmp, sizeof (tmp), "case.default.0x%"PFMT64x, switch_addr);
 			anal->flb.set (anal->flb.f, tmp, default_case_addr, 1);
 		}
@@ -59,14 +59,14 @@ static inline void analyze_new_case(RAnal *anal, RAnalFunction *fcn, RAnalBlock 
 			if (block) {
 				if (block->addr != ip) {
 					st64 d = block->addr - ip;
-					eprintf ("Cannot find basic block for switch case at 0x%08"PFMT64x" bbdelta = %d\n", ip, (int)R_ABS (d));
+					R_LOG_ERROR ("Cannot find basic block for switch case at 0x%08"PFMT64x" bbdelta = %d", ip, (int)R_ABS (d));
 					block = NULL;
 					return;
 				} else {
-					eprintf ("Inconsistent basicblock storage issue at 0x%08"PFMT64x"\n", ip);
+					R_LOG_ERROR ("Inconsistent basicblock storage issue at 0x%08"PFMT64x, ip);
 				}
 			} else {
-				eprintf ("Major disaster at 0x%08"PFMT64x"\n", ip);
+				R_LOG_ERROR ("Major disaster at 0x%08"PFMT64x, ip);
 				return;
 			}
 			// analyze at given address
@@ -191,8 +191,8 @@ R_API bool try_walkthrough_jmptbl(RAnal *anal, RAnalFunction *fcn, RAnalBlock *b
 	if (!jmptbl) {
 		return false;
 	}
-	bool is_arm = anal->cur->arch && !strncmp (anal->cur->arch, "arm", 3);
-	bool is_x86 = !is_arm && anal->cur->arch && !strncmp (anal->cur->arch, "x86", 3);
+	bool is_arm = anal->cur->arch && r_str_startswith (anal->cur->arch, "arm");
+	bool is_x86 = !is_arm && anal->cur->arch && r_str_startswith (anal->cur->arch, "x86");
 	const bool is_v850 = !is_arm && !is_x86 && ((anal->cur->arch && !strncmp (anal->cur->arch, "v850", 4)) || !strncmp (anal->coreb.cfgGet (anal->coreb.core, "asm.cpu"), "v850", 4));
 	// eprintf ("JMPTBL AT 0x%"PFMT64x"\n", jmptbl_loc);
 	anal->iob.read_at (anal->iob.io, jmptbl_loc, jmptbl, jmptblsz);
@@ -213,6 +213,9 @@ R_API bool try_walkthrough_jmptbl(RAnal *anal, RAnalFunction *fcn, RAnalBlock *b
 		default:
 			jmpptr = r_read_le64 (jmptbl + offs);
 			break;
+		}
+		if (is_arm && anal->config->bits == 64 && ip > 4096 && jmpptr < 4096 && jmpptr < ip) {
+			jmpptr += ip;
 		}
 		// eprintf ("WALKING %llx\n", jmpptr);
 		// if we don't check for 0 here, the next check with ptr+jmpptr
@@ -429,8 +432,8 @@ R_API bool try_get_jmptbl_info(RAnal *anal, RAnalFunction *fcn, ut64 addr, RAnal
 	/* if UJMP is in .plt section just skip it */
 	RBinSection *s = anal->binb.get_vsect_at (anal->binb.bin, addr);
 	if (s && s->name[0]) {
-		bool in_plt = strstr (s->name, ".plt") != NULL;
-		if (!in_plt && strstr (s->name, "_stubs") != NULL) {
+		bool in_plt = strstr (s->name, ".plt");
+		if (!in_plt && strstr (s->name, "_stubs")) {
 			/* for mach0 */
 			in_plt = true;
 		}

@@ -27,7 +27,7 @@ R_API const ut8 *r_uleb128(const ut8 *data, int datalen, ut64 *v, const char **e
 				c = *(data++) & 0xff;
 				if (s > 63) {
 					if (error) {
-						*error = r_str_newf ("r_uleb128: undefined behaviour in %d shift on ut32\n", (int)s);
+						*error = r_str_newf ("r_uleb128: undefined behaviour in %d shift on ut32", (int)s);
 					}
 					break;
 				} else {
@@ -40,7 +40,7 @@ R_API const ut8 *r_uleb128(const ut8 *data, int datalen, ut64 *v, const char **e
 			}
 			if (malformed_uleb) {
 				if (error) {
-					*error = r_str_newf ("malformed uleb128\n");
+					*error = r_str_newf ("malformed uleb128");
 				}
 			}
 		} else {
@@ -158,11 +158,13 @@ R_API st64 r_sleb128(const ut8 **data, const ut8 *end) {
 		st64 chunk;
 		value = *p;
 		chunk = value & 0x7f;
-		result |= (chunk << offset);
+		if (offset < 64) {
+			result |= (chunk << offset);
+		}
 		offset += 7;
 	} while (cond = *p & 0x80 && p + 1 < end, p++, cond);
 
-	if ((value & 0x40) != 0) {
+	if ((value & 0x40) != 0 && offset < 64) {
 		result |= ~0ULL << offset;
 	}
 	*data = p;

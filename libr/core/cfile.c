@@ -1,5 +1,6 @@
 /* radare - LGPL - Copyright 2009-2022 - pancake */
 
+#define R_LOG_ORIGIN "cfile"
 #include <r_core.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,14 +28,16 @@ R_API bool r_core_file_close_all_but(RCore *core) {
        return true;
 }
 
-static bool __isMips(RAsm *a) {
-	return a && a->cur && a->cur->arch && strstr (a->cur->arch, "mips");
+static bool its_a_mips(RCore *core) {
+	RArchConfig *cfg = core->rasm->config;
+	return cfg && cfg->arch && !strcmp (cfg->arch, "mips");
 }
 
 static void loadGP(RCore *core) {
-	if (__isMips (core->rasm)) {
+	if (its_a_mips (core)) {
+		ut64 e0 = r_num_math (core->num, "entry0");
 		ut64 gp = r_num_math (core->num, "loc._gp");
-		if (!gp || gp == UT64_MAX) {
+		if ((!gp || gp == UT64_MAX) && (e0 && e0 != UT64_MAX)) {
 			r_config_set (core->config, "anal.roregs", "zero");
 			r_core_cmd0 (core, "10aes@entry0");
 			r_config_set (core->config, "anal.roregs", "zero,gp");
@@ -76,12 +79,12 @@ R_API bool r_core_file_reopen(RCore *core, const char *args, int perm, int loadb
 	}
 
 	if (r_sandbox_enable (0)) {
-		eprintf ("Cannot reopen in sandbox\n");
+		R_LOG_ERROR ("Cannot reopen in sandbox");
 		free (obinfilepath);
 		return false;
 	}
 	if (!odesc) {
-		eprintf ("No file opened to reopen\n");
+		R_LOG_ERROR ("No file opened to reopen");
 		free (ofilepath);
 		free (obinfilepath);
 		return false;
@@ -101,7 +104,7 @@ R_API bool r_core_file_reopen(RCore *core, const char *args, int perm, int loadb
 		}
 	}
 	if (!ofilepath) {
-		eprintf ("Unknown file path");
+		R_LOG_ERROR ("Unknown file path");
 		free (obinfilepath);
 		return false;
 	}
@@ -146,7 +149,6 @@ R_API bool r_core_file_reopen(RCore *core, const char *args, int perm, int loadb
 		r_io_fd_close (core->io, odesc->fd);
 		eprintf ("File %s reopened in %s mode\n", path,
 			(perm & R_PERM_W)? "read-write": "read-only");
-
 		if (loadbin && (loadbin == 2 || had_rbin_info)) {
 			ut64 baddr;
 			if (isdebug) {
@@ -159,7 +161,7 @@ R_API bool r_core_file_reopen(RCore *core, const char *args, int perm, int loadb
 			ret = r_core_bin_load (core, obinfilepath, baddr);
 			r_core_bin_update_arch_bits (core);
 			if (!ret) {
-				eprintf ("Error: Failed to reload rbin for: %s", path);
+				R_LOG_ERROR ("Failed to reload rbin for: %s", path);
 			}
 			origoff = r_num_math (core->num, "entry0");
 		}
@@ -170,12 +172,11 @@ R_API bool r_core_file_reopen(RCore *core, const char *args, int perm, int loadb
 		}
 		// close old file
 	} else if (odesc) {
-		eprintf ("r_core_file_reopen: Cannot reopen file: %s with perms 0x%x,"
-			" attempting to open read-only.\n", path, perm);
+		R_LOG_ERROR ("Cannot reopen file: %s with perms 0x%x, attempting to open read-only", path, perm);
 		// lower it down back
 		//ofile = r_core_file_open (core, path, R_PERM_R, addr);
 	} else {
-		eprintf ("Cannot reopen\n");
+		R_LOG_ERROR ("Cannot reopen");
 	}
 	if (core->io->desc) {
 		core->switch_file_view = 1;
@@ -254,7 +255,7 @@ R_API char *r_core_sysenv_begin(RCore *core, const char *cmd) {
 	}
 	r_sys_setenv ("R2_OFFSET", r_strf ("%"PFMT64d, core->offset));
 	r_sys_setenv ("R2_XOFFSET", r_strf ("0x%08"PFMT64x, core->offset));
-	r_sys_setenv ("R2_ENDIAN", core->rasm->big_endian? "big": "little");
+	r_sys_setenv ("R2_ENDIAN", core->rasm->config->big_endian? "big": "little");
 	r_sys_setenv ("R2_BSIZE", r_strf ("%d", core->blocksize));
 #if 0
 	// dump current config file so other r2 tools can use the same options
@@ -337,20 +338,20 @@ static bool setbpint(RCore *r, const char *mode, const char *sym) {
 #endif
 		return true;
 	}
-	eprintf ("Cannot set breakpoint at %s\n", sym);
+	R_LOG_ERROR ("Cannot set breakpoint at %s", sym);
 	return false;
 }
 #endif
 
 // XXX - need to handle index selection during debugging
-static int r_core_file_do_load_for_debug(RCore *r, ut64 baseaddr, const char *filenameuri) {
+static int r_core_file_do_load_for_debug(RCore *r, ut64 baseaddr, R_NULLABLE const char *filenameuri) {
 	RIODesc *desc = r->io->desc;
 	RBinFile *binfile = NULL;
 	RBinPlugin *plugin;
 	int xtr_idx = 0; // if 0, load all if xtr is used
 
 	// TODO : Honor file.path eval var too?
-	if (!strncmp ("dbg://", filenameuri, 6)) {
+	if (filenameuri && r_str_startswith (filenameuri, "dbg://")) {
 		filenameuri += 6;
 	}
 	if (!desc) {
@@ -411,7 +412,7 @@ static int r_core_file_do_load_for_debug(RCore *r, ut64 baseaddr, const char *fi
 	}
 
 	if (plugin && !strcmp (plugin->name, "dex")) {
-		r_core_cmd0 (r, "\"(fix-dex,wx `ph sha1 $s-32 @32` @12 ; wx `ph adler32 $s-12 @12` @8)\"\n");
+		r_core_cmd0 (r, "\"(fix-dex;wx `ph sha1 $s-32 @32` @12 ; wx `ph adler32 $s-12 @12` @8)\"");
 	}
 
 	return true;
@@ -433,13 +434,12 @@ static int r_core_file_do_load_for_io_plugin(RCore *r, ut64 baseaddr, ut64 loada
 	// opt.fd = fd;
 	opt.xtr_idx = xtr_idx;
 	if (!r_bin_open_io (r->bin, &opt)) {
-		//eprintf ("Failed to load the bin with an IO Plugin.\n");
 		return false;
 	}
 	binfile = r_bin_cur (r->bin);
 	if (r_core_bin_set_env (r, binfile)) {
 		if (r->anal->verbose && !sdb_const_get (r->anal->sdb_cc, "default.cc", 0)) {
-			R_LOG_WARN ("No calling convention defined for this file, analysis may be inaccurate.\n");
+			R_LOG_WARN ("No calling convention defined for this file, analysis may be inaccurate");
 		}
 	}
 	plugin = r_bin_file_cur_plugin (binfile);
@@ -449,7 +449,7 @@ static int r_core_file_do_load_for_io_plugin(RCore *r, ut64 baseaddr, ut64 loada
 		if (!info) {
 			return false;
 		}
-		info->bits = r->rasm->bits;
+		info->bits = r->rasm->config->bits;
 		// set use of raw strings
 		r_core_bin_set_arch_bits (r, binfile->file, info->arch, info->bits);
 		// r_config_set_i (r->config, "io.va", false);
@@ -470,7 +470,7 @@ static int r_core_file_do_load_for_io_plugin(RCore *r, ut64 baseaddr, ut64 loada
 	}
 
 	if (plugin && !strcmp (plugin->name, "dex")) {
-		r_core_cmd0 (r, "\"(fix-dex,wx `ph sha1 $s-32 @32` @12 ; wx `ph adler32 $s-12 @12` @8)\"\n");
+		r_core_cmd0 (r, "\"(fix-dex;wx `ph sha1 $s-32 @32` @12 ; wx `ph adler32 $s-12 @12` @8)\"");
 	}
 	return true;
 }
@@ -705,13 +705,12 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 		desc->perm |= R_PERM_X;
 	}
 	if (plugin && plugin->name && !strcmp (plugin->name, "dex")) {
-		r_core_cmd0 (r, "\"(fix-dex,wx `ph sha1 $s-32 @32` @12 ;"
-			" wx `ph adler32 $s-12 @12` @8)\"\n");
+		r_core_cmd0 (r, "\"(fix-dex;wx `ph sha1 $s-32 @32` @12;wx `ph adler32 $s-12 @12` @8)\"");
 	}
 	if (!r_config_get_b (r->config, "cfg.debug")) {
 		loadGP (r);
 	}
-	if (r_config_get_i (r->config, "bin.libs")) {
+	if (r_config_get_b (r->config, "bin.libs")) {
 		const char *lib;
 		RListIter *iter;
 		RList *libs = r_bin_get_libs (r->bin);
@@ -727,7 +726,7 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 		}
 		r_core_cmd0 (r, "obb 0;s entry0");
 		r_config_set_i (r->config, "bin.at", true);
-		eprintf ("[bin.libs] Linking imports...\n");
+		R_LOG_INFO ("[bin.libs] Linking imports");
 		RBinImport *imp;
 		const RList *imports = r_bin_get_imports (r->bin);
 		r_list_foreach (imports, iter, imp) {
@@ -736,7 +735,7 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 			RFlagItem *impsym = r_flag_get (r->flags, flagname);
 			free (flagname);
 			if (!impsym) {
-				//eprintf ("Cannot find '%s' import in the PLT\n", imp->name);
+				//R_LOG_ERROR ("Cannot find '%s' import in the PLT", imp->name);
 				continue;
 			}
 			ut64 imp_addr = impsym->offset;
@@ -753,8 +752,7 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 	}
 
 	//If type == R_BIN_TYPE_CORE, we need to create all the maps
-	if (plugin && binfile && plugin->file_type
-		 && plugin->file_type (binfile) == R_BIN_TYPE_CORE) {
+	if (plugin && binfile && plugin->file_type && plugin->file_type (binfile) == R_BIN_TYPE_CORE) {
 		ut64 sp_addr = (ut64)-1;
 		RIOMap *stack_map = NULL;
 
@@ -768,9 +766,9 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 		}
 		if (binfile->o->regstate) {
 			if (r_reg_arena_set_bytes (r->anal->reg, binfile->o->regstate)) {
-				eprintf ("Setting up coredump: Problem while setting the registers\n");
+				R_LOG_INFO ("Setting up coredump: Problem while setting the registers");
 			} else {
-				eprintf ("Setting up coredump: Registers have been set\n");
+				R_LOG_INFO ("Setting up coredump: Registers have been set");
 				const char *regname = r_reg_get_name (r->anal->reg, R_REG_NAME_SP);
 				if (regname) {
 					RRegItem *reg = r_reg_get (r->anal->reg, regname, -1);
@@ -859,7 +857,7 @@ R_API RIODesc *r_core_file_open(RCore *r, const char *file, int flags, ut64 load
 	if (!flags) {
 		flags = R_PERM_R;
 	}
-	r->io->bits = r->rasm->bits; // TODO: we need an api for this
+	r->io->bits = r->rasm->config->bits; // TODO: we need an api for this
 	RIODesc *fd = r_io_open_nomap (r->io, file, flags, 0644);
 	if (r_cons_is_breaked()) {
 		goto beach;
@@ -902,7 +900,7 @@ R_API RIODesc *r_core_file_open(RCore *r, const char *file, int flags, ut64 load
 		if (r->dbg->h && r->dbg->h->canstep) {
 			swstep = false;
 		}
-		r_config_set_i (r->config, "dbg.swstep", swstep);
+		r_config_set_b (r->config, "dbg.swstep", swstep);
 		// Set the correct debug handle
 		if (fd->plugin && fd->plugin->isdbg) {
 			char *dh = r_str_ndup (file, (strstr (file, "://") - file));

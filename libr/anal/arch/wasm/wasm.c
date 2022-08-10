@@ -629,8 +629,8 @@ R_IPI int wasm_dis(WasmOp *op, const unsigned char *buf, int buf_len) {
 				if (!(n > 0 && n < buf_len)) {
 					goto err;
 				}
-				switch (0x80 - val) {
-				case R_BIN_WASM_VALUETYPE_EMPTY:
+				switch (val) {
+				case R_BIN_WASM_VALUETYPE_VOID:
 					r_strbuf_set (sb, opdef->txt);
 					break;
 				case R_BIN_WASM_VALUETYPE_i32:
@@ -1124,7 +1124,7 @@ R_IPI int wasm_dis(WasmOp *op, const unsigned char *buf, int buf_len) {
 					goto err;
 				}
 				op->len += 16;
-				ut8 bytes[16] = { 0 };
+				ut8 bytes[16] = {0};
 				int i;
 				for (i = 0; i < 16; i++) {
 					bytes[i] = buf[i + 1 + simdop_size];

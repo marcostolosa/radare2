@@ -584,6 +584,9 @@ R_API int r_utf8_strlen(const ut8 *str) {
 	return len;
 }
 
+// XXX this function name is really bad, rename to r_utf8_is_printable()
+// XXX but a single char rune is useless without processing the next chars
+// XXX not to mention int != bool
 R_API int r_isprint(const RRune c) {
 	// RRunes are most commonly single byte... We can early out with this common case.
 	if (c < 0x34F) {
@@ -655,7 +658,7 @@ R_API wchar_t *r_utf8_to_utf16_l(const char *cstring, int len) {
 
 	if ((wcsize = MultiByteToWideChar (CP_UTF8, 0, cstring, len, NULL, 0))) {
 		wcsize ++;
-		if ((rutf16 = (wchar_t *) calloc (wcsize + 1, sizeof (wchar_t)))) {
+		if ((rutf16 = (wchar_t *) calloc (wcsize + 2, sizeof (wchar_t)))) {
 			MultiByteToWideChar (CP_UTF8, 0, cstring, len, rutf16, wcsize);
 			if (len != -1) {
 				rutf16[wcsize - 1] = L'\0';
@@ -748,7 +751,7 @@ R_API int *r_utf_block_list(const ut8 *str, int len, int **freq_list) {
 	if (len < 0) {
 		len = strlen ((const char *)str);
 	}
-	static int block_freq[r_utf_blocks_count] = {0};
+	static R_TH_LOCAL int block_freq[r_utf_blocks_count] = {0};
 	int *list = R_NEWS (int, len + 1);
 	if (!list) {
 		return NULL;

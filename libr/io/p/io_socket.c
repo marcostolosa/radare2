@@ -46,9 +46,9 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int count) {
 				int osz = mal->size;
 				io_memory_resize (io, desc, mal->size + c);
 				memcpy (mal->buf + osz, mem, c);
-				io->corebind.cmdf (io->corebind.core, "f nread_%d %d %d",
+				io->coreb.cmdf (io->coreb.core, "f nread_%d %d %d",
 					sdat->count, c, mal->size);
-				io->corebind.cmdf (io->corebind.core, "omr 1 %d", mal->size);
+				io->coreb.cmdf (io->coreb.core, "omr 1 %d", mal->size);
 				sdat->count++;
 			}
 			free (mem);
@@ -66,12 +66,12 @@ static bool __close(RIODesc *desc) {
 }
 
 static bool __check(RIO *io, const char *pathname, bool many) {
-	return !strncmp (pathname, SOCKETURI, strlen (SOCKETURI));
+	return r_str_startswith (pathname, SOCKETURI);
 }
 
 static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 	if (r_sandbox_enable (false)) {
-		eprintf ("Do not permit " SOCKETURI " in sandbox mode.\n");
+		R_LOG_ERROR ("Do not permit " SOCKETURI " in sandbox mode");
 		return NULL;
 	}
 	if (!__check (io, pathname, 0)) {
@@ -102,7 +102,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 		/* listen and wait for connection */
 		data->sl = r_socket_new (false);
 		if (!r_socket_listen (data->sl, pathname + 1, NULL)) {
-			eprintf ("Cannot listen\n");
+			R_LOG_ERROR ("Cannot listen");
 			r_socket_free (data->sl);
 			data->sl = NULL;
 			return NULL;
@@ -119,7 +119,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 		if (port) {
 			*port++ = 0;
 		} else {
-			eprintf ("Missing port.\n");
+			R_LOG_ERROR ("Missing port");
 			free_socketdata (data);
 			free (host);
 			return NULL;
@@ -127,7 +127,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 		/* listen and wait for connection */
 		data->sc = r_socket_new (false);
 		if (!r_socket_connect (data->sc, host, port, R_SOCKET_PROTO_TCP, 0)) {
-			eprintf ("Cannot connect\n");
+			R_LOG_ERROR ("Cannot connect");
 			free (host);
 			free_socketdata (data);
 			return NULL;

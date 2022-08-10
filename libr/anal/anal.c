@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake, nibble */
+/* radare - LGPL - Copyright 2009-2022 - pancake, nibble */
 
 #include <r_anal.h>
 #include <r_util.h>
@@ -77,6 +77,7 @@ static void r_meta_item_free(void *_item) {
 	}
 }
 
+// Take nullable RArchConfig as argument?
 R_API RAnal *r_anal_new(void) {
 	int i;
 	RAnal *anal = R_NEW0 (RAnal);
@@ -90,13 +91,13 @@ R_API RAnal *r_anal_new(void) {
 	anal->bb_tree = NULL;
 	anal->ht_addr_fun = ht_up_new0 ();
 	anal->ht_name_fun = ht_pp_new0 ();
-	anal->os = strdup (R_SYS_OS);
+	anal->config = r_arch_config_new ();
 	anal->esil_goto_limit = R_ANAL_ESIL_GOTO_LIMIT;
 	anal->opt.nopskip = true; // skip nops in code analysis
 	anal->opt.hpskip = false; // skip `mov reg,reg` and `lea reg,[reg]`
 	anal->gp = 0LL;
 	anal->sdb = sdb_new0 ();
-	anal->cpp_abi = R_ANAL_CPP_ABI_ITANIUM;
+	anal->cxxabi = R_ANAL_CPP_ABI_ITANIUM;
 	anal->opt.depth = 32;
 	anal->opt.noncode = false; // do not analyze data by default
 	r_spaces_init (&anal->meta_spaces, "CS");
@@ -132,7 +133,7 @@ R_API RAnal *r_anal_new(void) {
 	anal->fcns = r_list_newf ((RListFree)r_anal_function_free);
 	anal->leaddrs = NULL;
 	anal->imports = r_list_newf (free);
-	r_anal_set_bits (anal, 32);
+/// 	r_anal_set_bits (anal, 32);
 	anal->plugins = r_list_newf ((RListFree) r_anal_plugin_free);
 	if (anal->plugins) {
 		for (i = 0; anal_static_plugins[i]; i++) {
@@ -151,9 +152,9 @@ R_API void r_anal_plugin_free(RAnalPlugin *p) {
 
 void __block_free_rb(RBNode *node, void *user);
 
-R_API RAnal *r_anal_free(RAnal *a) {
+R_API void r_anal_free(RAnal *a) {
 	if (!a) {
-		return NULL;
+		return;
 	}
 	/* TODO: Free anals here */
 	free (a->pincmd);
@@ -163,8 +164,7 @@ R_API RAnal *r_anal_free(RAnal *a) {
 	set_u_free (a->visited);
 	r_anal_hint_storage_fini (a);
 	r_interval_tree_fini (&a->meta);
-	free (a->cpu);
-	free (a->os);
+	r_unref (a->config);
 	free (a->zign_path);
 	r_list_free (a->plugins);
 	r_rbtree_free (a->bb_tree, __block_free_rb, NULL);
@@ -185,7 +185,6 @@ R_API RAnal *r_anal_free(RAnal *a) {
 	r_list_free (a->imports);
 	r_str_constpool_fini (&a->constpool);
 	free (a);
-	return NULL;
 }
 
 R_API void r_anal_set_user_ptr(RAnal *anal, void *user) {
@@ -216,10 +215,16 @@ R_API int r_anal_add(RAnal *anal, RAnalPlugin *foo) {
 	return true;
 }
 
+R_API char *r_anal_mnemonics(RAnal *anal, int id, bool json) {
+	if (anal->cur && anal->cur->mnemonics) {
+		return anal->cur->mnemonics (anal, id, json);
+	}
+	return NULL;
+}
+
 R_API bool r_anal_use(RAnal *anal, const char *name) {
 	RListIter *it;
 	RAnalPlugin *h;
-
 	if (anal) {
 		r_list_foreach (anal->plugins, it, h) {
 			if (!h->name || strcmp (h->name, name)) {
@@ -232,6 +237,7 @@ R_API bool r_anal_use(RAnal *anal, const char *name) {
 			}
 #endif
 			anal->cur = h;
+			r_arch_use (anal->config, h->arch);
 			r_anal_set_reg_profile (anal, NULL);
 			return true;
 		}
@@ -272,10 +278,10 @@ R_API bool r_anal_set_triplet(RAnal *anal, const char *os, const char *arch, int
 		arch = anal->cur? anal->cur->arch: R_SYS_ARCH;
 	}
 	if (bits < 1) {
-		bits = anal->bits;
+		bits = anal->config->bits;
 	}
-	free (anal->os);
-	anal->os = strdup (os);
+	free (anal->config->os);
+	anal->config->os = strdup (os);
 	r_anal_set_bits (anal, bits);
 	return r_anal_use (anal, arch);
 }
@@ -313,36 +319,12 @@ R_API bool r_anal_set_os(RAnal *anal, const char *os) {
 }
 
 R_API bool r_anal_set_bits(RAnal *anal, int bits) {
-	switch (bits) {
-	case 8:
-	case 16:
-	case 27:
-	case 32:
-	case 64:
-		if (anal->bits != bits) {
-			anal->bits = bits;
-			r_anal_set_reg_profile (anal, NULL);
-		}
-		return true;
+	int obits = anal->config->bits;
+	r_arch_set_bits (anal->config, bits);
+	if (bits != obits) {
+		r_anal_set_reg_profile (anal, NULL);
 	}
-	return false;
-}
-
-R_API void r_anal_set_cpu(RAnal *anal, const char *cpu) {
-	free (anal->cpu);
-	anal->cpu = cpu ? strdup (cpu) : NULL;
-	int v = r_anal_archinfo (anal, R_ANAL_ARCHINFO_ALIGN);
-	if (v != -1) {
-		anal->pcalign = v;
-	}
-}
-
-R_API void r_anal_set_big_endian(RAnal *anal, int bigend) {
-	r_return_if_fail (anal);
-	anal->big_endian = bigend;
-	if (anal->reg) {
-		anal->reg->big_endian = bigend;
-	}
+	return true;
 }
 
 R_API ut8 *r_anal_mask(RAnal *anal, int size, const ut8 *data, ut64 at) {
@@ -471,6 +453,11 @@ R_API int r_anal_archinfo(RAnal *anal, int query) {
 		break;
 	}
 	return -1;
+}
+
+R_API bool r_anal_is_aligned(RAnal *anal, const ut64 addr) {
+	const int align = r_anal_archinfo (anal, R_ANAL_ARCHINFO_ALIGN);
+	return align <= 1 || !(addr % align);
 }
 
 static bool __nonreturn_print_commands(void *p, const char *k, const char *v) {
@@ -611,7 +598,7 @@ R_API bool r_anal_noreturn_drop(RAnal *anal, const char *expr) {
 		free (tmp);
 		return true;
 	}
-	eprintf ("Can't find prototype for %s in types database", fcnname);
+	eprintf ("Can't find prototype for %s in types database\n", fcnname);
 #endif
 	return false;
 }
@@ -645,7 +632,7 @@ static bool noreturn_recurse(RAnal *anal, ut64 addr) {
 	ut8 bbuf[0x10] = {0};
 	ut64 recurse_addr = UT64_MAX;
 	if (!anal->iob.read_at (anal->iob.io, addr, bbuf, sizeof (bbuf))) {
-		eprintf ("Couldn't read buffer\n");
+		R_LOG_ERROR ("Couldn't read buffer");
 		return false;
 	}
 	if (r_anal_op (anal, &op, addr, bbuf, sizeof (bbuf), R_ANAL_OP_MASK_BASIC | R_ANAL_OP_MASK_VAL) < 1) {
@@ -710,7 +697,9 @@ R_API void r_anal_bind(RAnal *anal, RAnalBind *b) {
 		b->encode = (RAnalEncode)r_anal_opasm;
 		b->decode = (RAnalDecode)r_anal_op;
 		b->opinit = r_anal_op_init;
+		b->mnemonics = r_anal_mnemonics;
 		b->opfini = r_anal_op_fini;
+		b->use = r_anal_use;
 	}
 }
 

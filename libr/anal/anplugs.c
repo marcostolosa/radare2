@@ -1,7 +1,5 @@
-/* radare - LGPL - Copyright 2021 - pancake */
+/* radare - LGPL - Copyright 2021-2022 - pancake */
 
-#include <stdio.h>
-#include <r_types.h>
 #include <r_util.h>
 #include <r_asm.h>
 
@@ -84,6 +82,7 @@ R_API SdbGperf *r_anal_get_gperf_cc(const char *k) {
 	while (*gp) {
 		SdbGperf *g = *gp;
 		if (!strcmp (kk, g->name)) {
+			free (kk);
 			return *gp;
 		}
 		gp++;

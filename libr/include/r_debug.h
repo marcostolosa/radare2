@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #ifndef R2_DEBUG_H
 #define R2_DEBUG_H
@@ -11,6 +11,7 @@
 #include <r_reg.h>
 #include <r_egg.h>
 #include <r_bp.h>
+#include <r_cmd.h>
 #include <r_io.h>
 #include <r_syscall.h>
 
@@ -242,6 +243,8 @@ typedef struct r_debug_tracepoint_t {
 } RDebugTracepoint;
 
 typedef struct r_debug_t {
+	// R2_570
+	// use RArchConfig here
 	char *arch;
 	int bits; /// XXX: MUST SET ///
 	int hitinfo;
@@ -314,7 +317,7 @@ typedef struct r_debug_t {
 	RDebugSession *session;
 
 	Sdb *sgnls;
-	RCoreBind corebind;
+	RCoreBind coreb;
 	PJ *pj;
 	// internal use only
 	int _mode;
@@ -358,6 +361,7 @@ typedef struct r_debug_info_t {
 } RDebugInfo;
 
 /* TODO: pass dbg and user data pointer everywhere */
+typedef int (*RDebugCmdCb)(RDebug *dbg, const char *cmd);
 typedef struct r_debug_plugin_t {
 	const char *name;
 	const char *license;
@@ -404,6 +408,7 @@ typedef struct r_debug_plugin_t {
 	bool (*init)(RDebug *dbg);
 	int (*drx)(RDebug *dbg, int n, ut64 addr, int size, int rwx, int g, int api_type);
 	RDebugDescPlugin desc;
+	RDebugCmdCb cmd;
 	// TODO: use RList here
 } RDebugPlugin;
 
@@ -442,6 +447,7 @@ R_API const char *r_debug_reason_to_string(int type);
 /* wait for another event */
 R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp);
 
+R_API int r_debug_cmd(RDebug *dbg, const char *s);
 /* continuations */
 R_API int r_debug_step(RDebug *dbg, int steps);
 R_API int r_debug_step_over(RDebug *dbg, int steps);
@@ -517,16 +523,16 @@ R_API int r_debug_desc_dup(RDebug *dbg, int fd, int newfd);
 R_API int r_debug_desc_read(RDebug *dbg, int fd, ut64 addr, int len);
 R_API int r_debug_desc_seek(RDebug *dbg, int fd, ut64 addr); // TODO: whence?
 R_API int r_debug_desc_write(RDebug *dbg, int fd, ut64 addr, int len);
-R_API int r_debug_desc_list(RDebug *dbg, int rad);
+R_API int r_debug_desc_list(RDebug *dbg, bool show_commands);
 
 /* registers */
-R_API int r_debug_reg_sync(RDebug *dbg, int type, int write);
+R_API bool r_debug_reg_sync(RDebug *dbg, int type, int write);
 R_API bool r_debug_reg_list(RDebug *dbg, int type, int size, PJ *pj, int rad, const char *use_color);
-R_API int r_debug_reg_set(RDebug *dbg, const char *name, ut64 num);
+R_API bool r_debug_reg_set(RDebug *dbg, const char *name, ut64 num);
 R_API ut64 r_debug_reg_get(RDebug *dbg, const char *name);
 R_API ut64 r_debug_reg_get_err(RDebug *dbg, const char *name, int *err, utX *value);
 
-R_API ut64 r_debug_execute(RDebug *dbg, const ut8 *buf, int len, int restore);
+R_API bool r_debug_execute(RDebug *dbg, const ut8 *buf, int len, R_OUT ut64 *ret, bool restore, bool ignore_stack);
 R_API bool r_debug_map_sync(RDebug *dbg);
 
 R_API int r_debug_stop(RDebug *dbg);

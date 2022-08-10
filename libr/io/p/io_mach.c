@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <r_userconf.h>
 
@@ -113,8 +113,8 @@ static task_t task_for_pid_ios9pangu(int pid) {
 
 static task_t pid_to_task(RIODesc *fd, int pid) {
 	task_t task = 0;
-	static task_t old_task = 0;
-	static int old_pid = -1;
+	static R_TH_LOCAL task_t old_task = 0;
+	static R_TH_LOCAL int old_pid = -1;
 	kern_return_t kr;
 
 	RIOMachData *iodd = fd? (RIOMachData *)fd->data: NULL;
@@ -145,8 +145,8 @@ static task_t pid_to_task(RIODesc *fd, int pid) {
 		if (task == MACH_PORT_NULL) {
 			task = task_for_pid_ios9pangu (pid);
 			if (task != MACH_PORT_NULL) {
-				//eprintf ("Failed to get task %d for pid %d.\n", (int)task, (int)pid);
-				//eprintf ("Missing priviledges? 0x%x: %s\n", err, MACH_ERROR_STRING (err));
+				//R_LOG_ERROR ("Failed to get task %d for pid %d", (int)task, (int)pid);
+				//R_LOG_ERROR ("Missing priviledges? 0x%x: %s", err, MACH_ERROR_STRING (err));
 				return -1;
 			}
 		}
@@ -163,7 +163,7 @@ static bool task_is_dead(RIODesc *fd, int pid) {
 	return (kr != KERN_SUCCESS || !count);
 }
 
-static ut64 the_lower = UT64_MAX;
+static R_TH_LOCAL ut64 the_lower = UT64_MAX;
 
 static ut64 getNextValid(RIO *io, RIODesc *fd, ut64 addr) {
 	struct vm_region_submap_info_64 info;
@@ -293,7 +293,7 @@ static int tsk_getperm(RIO *io, task_t task, vm_address_t addr) {
 static int tsk_pagesize(RIODesc *desc) {
 	int tid = __get_pid (desc);
 	task_t task = pid_to_task (desc, tid);
-	static vm_size_t pagesize = 0;
+	static R_TH_LOCAL vm_size_t pagesize = 0;
 	return pagesize
 		? pagesize
 		: (host_page_size (task, &pagesize) == KERN_SUCCESS)
@@ -309,7 +309,7 @@ static bool tsk_setperm(RIO *io, task_t task, vm_address_t addr, int len, int pe
 	kern_return_t kr;
 	kr = vm_protect (task, addr, len, 0, perm);
 	if (kr != KERN_SUCCESS) {
-		perror ("tsk_setperm");
+		r_sys_perror ("tsk_setperm");
 		return false;
 	}
 	return true;
@@ -370,7 +370,7 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int len) {
 }
 
 static bool __plugin_open(RIO *io, const char *file, bool many) {
-	return (!strncmp (file, "attach://", 9) || !strncmp (file, "mach://", 7));
+	return r_str_startswith (file, "attach://") || r_str_startswith (file, "mach://");
 }
 
 static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
@@ -383,6 +383,9 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 	if (!__plugin_open (io, file, false) && !__plugin_open (io, (const char *)&file[1], false)) {
 		return NULL;
 	}
+	if (!r_sandbox_check (R_SANDBOX_GRAIN_EXEC)) {
+		return NULL;
+	}
 	pidfile = file + (file[0] == 'a' ? 9 : (file[0] == 's' ? 8 : 7));
 	pid = (int)strtol (pidfile, &endptr, 10);
 	if (endptr == pidfile || pid < 0) {
@@ -393,9 +396,8 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 		return NULL;
 	}
 	if (!task) {
-		if (pid > 0 && !strncmp (file, "smach://", 8)) {
+		if (pid > 0 && r_str_startswith (file, "smach://")) {
 			kill (pid, SIGKILL);
-			eprintf ("Child killed\n");
 		}
 #if 0
 		/* this is broken, referer gets set in the riodesc after this function returns the riodesc
@@ -408,15 +410,14 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 #endif
 		switch (errno) {
 		case EPERM:
-			eprintf ("Operation not permitted\n");
+			R_LOG_ERROR ("Operation not permitted");
 			break;
 		case EINVAL:
-			perror ("ptrace: Cannot attach");
+			r_sys_perror ("ptrace: Cannot attach");
 			eprintf ("Possibly unsigned r2. Please see doc/macos.md\n");
-			eprintf ("ERRNO: %d (EINVAL)\n", errno);
 			break;
 		default:
-			eprintf ("unknown error in debug_attach\n");
+			R_LOG_ERROR ("unknown error in debug_attach");
 			break;
 		}
 		return NULL;
@@ -436,10 +437,8 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 	iodd->magic = r_str_hash ("mach");
 	iodd->data = riom;
 	// sleep 1s to get proper path (program name instead of ls) (racy)
-	pidpath = pid
-		? r_sys_pid_to_path (pid)
-		: strdup ("kernel");
-	if (!strncmp (file, "smach://", 8)) {
+	pidpath = pid ? r_sys_pid_to_path (pid): strdup ("kernel");
+	if (r_str_startswith (file, "smach://")) {
 		ret = r_io_desc_new (io, &r_io_plugin_mach, &file[1],
 			       rw | R_PERM_X, mode, iodd);
 	} else {
@@ -478,14 +477,15 @@ static bool __close(RIODesc *fd) {
 	task_t task = pid_to_task (fd, iodd->pid);
 	kern_return_t kr = mach_port_deallocate (mach_task_self (), task);
 	if (kr != KERN_SUCCESS) {
-		perror ("__close io_mach");
+		r_sys_perror ("__close io_mach");
 	}
 	R_FREE (fd->data);
 	return kr == KERN_SUCCESS;
 }
 
 static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
-	if (!io || !fd || !cmd || !fd->data) {
+	r_return_val_if_fail (io && fd, NULL);
+	if (!cmd || !fd->data) {
 		return NULL;
 	}
 	RIOMachData *iodd = fd->data;
@@ -495,7 +495,7 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 	if (!strcmp (cmd, "")) {
 		return NULL;
 	}
-	if (!strncmp (cmd, "perm", 4)) {
+	if (r_str_startswith (cmd, "perm")) {
 		int perm = r_str_rwx (cmd + 4);
 		if (perm) {
 			int pagesize = tsk_pagesize (fd);
@@ -506,7 +506,7 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 		}
 		return NULL;
 	}
-	if (!strncmp (cmd, "pid", 3)) {
+	if (r_str_startswith (cmd, "pid")) {
 		RIOMachData *iodd = fd->data;
 		RIOMach *riom = iodd->data;
 		const char *pidstr = r_str_trim_head_ro (cmd + 3);

@@ -5,7 +5,7 @@
 #include <r_lib.h>
 #include <r_asm.h>
 #include <r_anal.h>
-#include <capstone.h>
+#include <capstone/capstone.h>
 
 #if CS_API_MAJOR >= 5 || (CS_API_MAJOR >= 4 && CS_API_MINOR >= 1)
 #define CAPSTONE_HAS_MOS65XX 1
@@ -14,33 +14,24 @@
 #endif
 
 #if CAPSTONE_HAS_MOS65XX
-#include <mos65xx.h>
+#include <capstone/mos65xx.h>
 
-static csh handle = 0;
+#define CSINC MOS65XX
+#include "capstone.inc"
 
 static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
-	static int omode = 0;
 #if USE_ITER_API
-	static
+	static R_TH_LOCAL
 #endif
 	cs_insn *insn = NULL;
-	int mode = 0;
-	int n, ret;
-
-	if (handle && mode != omode) {
-		cs_close (&handle);
-		handle = 0;
-	}
-	omode = mode;
+	
+	csh handle = init_capstone (a);
 	if (handle == 0) {
-		ret = cs_open (CS_ARCH_MOS65XX, mode, &handle);
-		if (ret != CS_ERR_OK) {
-			handle = 0;
-			return 0;
-		}
+		return -1;
 	}
+
+	int n;
 	op->cycles = 1; // aprox
-	cs_option (handle, CS_OPT_DETAIL, CS_OPT_ON);
 	// capstone-next
 #if USE_ITER_API
 	{
@@ -221,6 +212,7 @@ RAnalPlugin r_anal_plugin_6502_cs = {
 	.bits = 8,
 	.op = &analop,
 	.set_reg_profile = &set_reg_profile,
+	.mnemonics = &cs_mnemonics,
 };
 
 #ifndef R2_PLUGIN_INCORE

@@ -1,8 +1,8 @@
-/* radare2 - LGPL - Copyright 2015-2018 - pancake */
+/* radare2 - LGPL - Copyright 2015-2022 - pancake */
 
 #include <r_asm.h>
 #include <r_lib.h>
-#include <capstone.h>
+#include <capstone/capstone.h>
 
 #ifdef CAPSTONE_M68K_H
 #define CAPSTONE_HAS_M68K 1
@@ -16,8 +16,94 @@
 #endif
 
 #if CAPSTONE_HAS_M68K
-#include <m68k.h>
+#include <capstone/m68k.h>
 // http://www.mrc.uidaho.edu/mrc/people/jff/digital/M68Kir.html
+
+// clang-format off
+// Source: https://wiki.neogeodev.org/index.php?title=68k_instructions_timings
+
+#define CYCLES_MOVE_LUT_SRCS 12
+#define CYCLES_MOVE_LUT_DSTS 9
+typedef ut8 cycles_move_lut[CYCLES_MOVE_LUT_SRCS][CYCLES_MOVE_LUT_DSTS];
+
+// move.b, move.w
+static cycles_move_lut cycles_move_w = {
+   /*  Dn, An, (An), (An)+, -(An), d(An), d(An,ix), xxx.W, xxx.L */
+    {   4,  4,    8,     8,     8,    12,       14,    12,    16 }, /* Dn       */
+    {   4,  4,    8,     8,     8,    12,       14,    12,    16 }, /* An       */
+    {   8,  8,   12,    12,    12,    16,       18,    16,    20 }, /* (An)     */
+    {   8,  8,   12,    12,    12,    16,       18,    16,    20 }, /* (An)+    */
+    {  10, 10,   14,    14,    14,    18,       20,    18,    22 }, /* -(An)    */
+    {  12, 12,   16,    16,    16,    20,       22,    20,    24 }, /* d(An)    */
+    {  14, 14,   18,    18,    18,    22,       24,    22,    26 }, /* d(An,ix) */
+    {  12, 12,   16,    16,    16,    20,       22,    20,    24 }, /* xxx.W    */
+    {  16, 16,   20,    20,    20,    24,       26,    24,    28 }, /* xxx.L    */
+    {  12, 12,   16,    16,    16,    20,       22,    20,    24 }, /* d(PC)    */
+    {  14, 14,   18,    18,    18,    22,       24,    22,    26 }, /* d(PC,ix) */
+    {  8,   8,   12,    12,    12,    16,       18,    16,    20 }, /* #xxx     */
+};
+
+// move.l
+static cycles_move_lut cycles_move_l = {
+   /*  Dn, An, (An), (An)+, -(An), d(An), d(An,ix), xxx.W, xxx.L */
+    {   4,  4,   12,    12,    12,    16,       18,    16,    20 }, /* Dn       */
+    {   4,  4,   12,    12,    12,    16,       18,    16,    20 }, /* An       */
+    {  12, 12,   20,    20,    20,    24,       26,    24,    28 }, /* (An)     */
+    {  12, 12,   20,    20,    20,    24,       26,    24,    28 }, /* (An)+    */
+    {  14, 14,   22,    22,    22,    26,       28,    26,    30 }, /* -(An)    */
+    {  16, 16,   24,    24,    24,    28,       30,    28,    32 }, /* d(An)    */
+    {  18, 18,   26,    26,    26,    30,       32,    30,    34 }, /* d(An,ix) */
+    {  16, 16,   24,    24,    24,    28,       30,    28,    32 }, /* xxx.W    */
+    {  20, 20,   28,    28,    28,    32,       34,    32,    36 }, /* xxx.L    */
+    {  16, 16,   24,    24,    24,    28,       30,    28,    32 }, /* d(PC)    */
+    {  18, 18,   26,    26,    26,    30,       32,    30,    34 }, /* d(PC,ix) */
+    {  12, 12,   20,    20,    20,    24,       26,    24,    28 }  /* #xxx     */
+};
+
+static int get_move_cycles (m68k_address_mode dst, m68k_address_mode src, bool is_long) {
+	ut8 dst_idx = ((ut8) dst) - 1;
+	ut8 src_idx = ((ut8) src) - 1;
+	if (dst_idx >= CYCLES_MOVE_LUT_DSTS || src_idx >= CYCLES_MOVE_LUT_SRCS) {
+		return 0;
+	}
+	cycles_move_lut *lut = is_long? & cycles_move_l: & cycles_move_w;
+	return (*lut)[src_idx][dst_idx];
+}
+
+// End of instruction timings
+// clang-format on
+
+static int get_capstone_mode (RAnal *a) {
+	int mode = a->config->big_endian? CS_MODE_BIG_ENDIAN: CS_MODE_LITTLE_ENDIAN;
+	// XXX no arch->cpu ?!?! CS_MODE_MICRO, N64
+	// replace this with the asm.features?
+	const char *cpu = a->config->cpu;
+	if (R_STR_ISNOTEMPTY (cpu)) {
+		if (strstr (cpu, "68000")) {
+			mode |= CS_MODE_M68K_000;
+		}
+		if (strstr (cpu, "68010")) {
+			mode |= CS_MODE_M68K_010;
+		}
+		if (strstr (cpu, "68020")) {
+			mode |= CS_MODE_M68K_020;
+		}
+		if (strstr (cpu, "68030")) {
+			mode |= CS_MODE_M68K_030;
+		}
+		if (strstr (cpu, "68040")) {
+			mode |= CS_MODE_M68K_040;
+		}
+		if (strstr (cpu, "68060")) {
+			mode |= CS_MODE_M68K_060;
+		}
+	}
+	return mode;
+}
+
+#define CSINC M68K
+#define CSINC_MODE get_capstone_mode(a)
+#include "capstone.inc"
 
 #define OPERAND(x) insn->detail->m68k.operands[x]
 #define REG(x) cs_reg_name (*handle, insn->detail->m68k.operands[x].reg)
@@ -134,7 +220,7 @@ static int parse_reg_name(RRegItem *reg, csh handle, cs_insn *insn, int reg_num)
 }
 
 static void op_fillval(RAnalOp *op, csh handle, cs_insn *insn) {
-	static RRegItem reg;
+	static R_TH_LOCAL RRegItem reg;
 	switch (op->type & R_ANAL_OP_TYPE_MASK) {
 	case R_ANAL_OP_TYPE_MOV:
 		ZERO_FILL (reg);
@@ -163,51 +249,17 @@ static void op_fillval(RAnalOp *op, csh handle, cs_insn *insn) {
 }
 
 static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAnalOpMask mask) {
-	int n, ret, opsize = -1;
-	static csh handle = 0;
-	static int omode = -1;
-	static int obits = 32;
+	csh handle = init_capstone (a);
+	if (handle == 0) {
+		return -1;
+	}
+	
+	int n, opsize = -1;
 	cs_insn* insn = NULL;
 	cs_m68k *m68k;
 	cs_detail *detail;
-
-	int mode = a->big_endian? CS_MODE_BIG_ENDIAN: CS_MODE_LITTLE_ENDIAN;
-
-	//mode |= (a->bits==64)? CS_MODE_64: CS_MODE_32;
-	if (mode != omode || a->bits != obits) {
-		cs_close (&handle);
-		handle = 0;
-		omode = mode;
-		obits = a->bits;
-	}
-// XXX no arch->cpu ?!?! CS_MODE_MICRO, N64
-	// replace this with the asm.features?
-	if (a->cpu && strstr (a->cpu, "68000")) {
-		mode |= CS_MODE_M68K_000;
-	}
-	if (a->cpu && strstr (a->cpu, "68010")) {
-		mode |= CS_MODE_M68K_010;
-	}
-	if (a->cpu && strstr (a->cpu, "68020")) {
-		mode |= CS_MODE_M68K_020;
-	}
-	if (a->cpu && strstr (a->cpu, "68030")) {
-		mode |= CS_MODE_M68K_030;
-	}
-	if (a->cpu && strstr (a->cpu, "68040")) {
-		mode |= CS_MODE_M68K_040;
-	}
-	if (a->cpu && strstr (a->cpu, "68060")) {
-		mode |= CS_MODE_M68K_060;
-	}
+	
 	op->size = 4;
-	if (handle == 0) {
-		ret = cs_open (CS_ARCH_M68K, mode, &handle);
-		if (ret != CS_ERR_OK) {
-			goto fin;
-		}
-		cs_option (handle, CS_OPT_DETAIL, CS_OPT_ON);
-	}
 	n = cs_disasm (handle, (ut8*)buf, len, addr, 1, &insn);
 	int on = n;
 	if (!insn || !strncmp (insn->mnemonic, "dc.w", 4)) {
@@ -592,6 +644,12 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 		op->type = R_ANAL_OP_TYPE_LEA;
 		break;
 	case M68K_INS_MOVE:
+		op->type = R_ANAL_OP_TYPE_MOV;
+		assert (m68k->op_count >= 2);
+		assert (m68k->op_size.type == M68K_SIZE_TYPE_CPU);
+		bool is_long = m68k->op_size.cpu_size == M68K_CPU_SIZE_LONG;
+		op->cycles = get_move_cycles (m68k->operands[0].address_mode, m68k->operands[1].address_mode, is_long);
+		break;
 	case M68K_INS_MOVEA:
 	case M68K_INS_MOVEC:
 	case M68K_INS_MOVEM:
@@ -727,7 +785,6 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 beach:
 	cs_free (insn, on);
 	//cs_close (&handle);
-fin:
 	return opsize;
 }
 
@@ -800,6 +857,14 @@ static int archinfo(RAnal *anal, int q) {
 		return 2;
 	case R_ANAL_ARCHINFO_MIN_OP_SIZE:
 		return 2;
+	case R_ANAL_ARCHINFO_DATA_ALIGN:
+		{
+		const char *cpu = anal->config->cpu;
+		if (strstr (cpu, "68030") || strstr (cpu, "68040") || strstr (cpu, "68060")) {
+			return 1;
+		}
+		return 2;
+		}
 	}
 	return 2;
 }
@@ -807,6 +872,7 @@ static int archinfo(RAnal *anal, int q) {
 RAnalPlugin r_anal_plugin_m68k_cs = {
 	.name = "m68k",
 	.desc = "Capstone M68K analyzer",
+	.cpus = "68000,68010,68020,68030,68040,68060",
 	.license = "BSD",
 	.esil = false,
 	.arch = "m68k",
@@ -814,6 +880,7 @@ RAnalPlugin r_anal_plugin_m68k_cs = {
 	.set_reg_profile = &set_reg_profile,
 	.bits = 32,
 	.op = &analop,
+	.mnemonics = cs_mnemonics,
 };
 #else
 RAnalPlugin r_anal_plugin_m68k_cs = {

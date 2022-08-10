@@ -1,10 +1,12 @@
-/* radare - LGPL - Copyright 2009-2019 - pancake */
+/* radare - LGPL - Copyright 2009-2022 - pancake */
 
 #include <r_cons.h>
+#include <r_th.h>
 #include <r_util/r_assert.h>
 #define I r_cons_singleton ()
 
 #if __WINDOWS__
+
 static void __fill_tail(int cols, int lines) {
 	lines++;
 	if (lines > 0) {
@@ -19,9 +21,11 @@ static void __fill_tail(int cols, int lines) {
 	}
 }
 
+static R_TH_LOCAL HANDLE hStdout = NULL;
+static R_TH_LOCAL HANDLE hStderr = NULL;
+static R_TH_LOCAL CONSOLE_SCREEN_BUFFER_INFO csbi;
+
 R_API void r_cons_w32_clear(void) {
-	static HANDLE hStdout = NULL;
-	static CONSOLE_SCREEN_BUFFER_INFO csbi;
 	COORD startCoords;
 	DWORD dummy;
 	if (I->vtmode) {
@@ -48,9 +52,7 @@ R_API void r_cons_w32_clear(void) {
 }
 
 R_API void r_cons_w32_gotoxy(int fd, int x, int y) {
-	static HANDLE hStdout = NULL;
-	static HANDLE hStderr = NULL;
-	HANDLE *hConsole = fd == 1 ? &hStdout : &hStderr;
+	HANDLE *hConsole = (fd == 1)? &hStdout : &hStderr;
 	COORD coord;
 	coord.X = x;
 	coord.Y = y;
@@ -62,7 +64,8 @@ R_API void r_cons_w32_gotoxy(int fd, int x, int y) {
 		write (fd, "\x1b[0;0H", 6);
 	}
 	if (!*hConsole) {
-		*hConsole = GetStdHandle (fd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+		*hConsole = GetStdHandle ((fd == 1)?
+			STD_OUTPUT_HANDLE: STD_ERROR_HANDLE);
 	}
 	CONSOLE_SCREEN_BUFFER_INFO info;
 	GetConsoleScreenBufferInfo (*hConsole, &info);
@@ -211,7 +214,7 @@ static int r_cons_w32_hprint(DWORD hdl, const char *ptr, int len, bool vmode) {
 		if (esc == 1) {
 			// \x1b[2J
 			if (ptr[0] != '[') {
-				eprintf ("Oops invalid escape char\n");
+				R_LOG_ERROR ("Oops invalid escape char");
 				esc = 0;
 				str = ptr + 1;
 				continue;
