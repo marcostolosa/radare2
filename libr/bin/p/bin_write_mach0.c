@@ -13,7 +13,7 @@ typedef struct machoPointers_t {
 } MachoPointers;
 
 static MachoPointers findLastCommand(RBinFile *bf) {
-	struct MACH0_(obj_t) *bin = bf->o->bin_obj;
+	struct MACH0_(obj_t) *bin = bf->bo->bin_obj;
 	int i = 0;
 	ut64 off;
 	MachoPointers mp = {0};
@@ -21,7 +21,7 @@ static MachoPointers findLastCommand(RBinFile *bf) {
 	mp.ncmds_off = 0x10;
 	mp.sizeofcmds = bin->hdr.sizeofcmds;
 	mp.sizeofcmds_off = 0x14;
-	
+
 	for (i = 0, off = 0x20 + bin->header_at; i < mp.ncmds; i++) {
 		ut32 loadc[2] = {0};
 		r_buf_read_at (bin->b, off, (ut8*)&loadc, sizeof (loadc));

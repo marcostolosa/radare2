@@ -17,10 +17,10 @@ EOF
 EXPECT=<<EOF
 rcall
 call
-0x00000000 4 bl 0x4e3f84
+0x00000000 call 4 bl 0x4e3f84
 --
 --
-0x00000004 4 blr x8
+0x00000004 rcall 4 blr x8
 EOF
 RUN
 
@@ -54,7 +54,6 @@ ii
 iE
 EOF
 EXPECT=<<EOF
-[Imports]
 nth vaddr      bind   type   lib name
 -------------------------------------
 3   0x00020060 GLOBAL NOTYPE     _bss_end__
@@ -72,11 +71,8 @@ nth vaddr      bind   type   lib name
 16  0x00020060 GLOBAL NOTYPE     _end
 17  0x00000710 GLOBAL FUNC       free
 18  0x00000720 GLOBAL FUNC       __cxa_atexit
-
-[Exports]
-
-nth paddr      vaddr      bind   type size lib name
----------------------------------------------------
+nth paddr      vaddr      bind   type size lib name            demangled
+------------------------------------------------------------------------
 6   0x0000aa20 0x0000aa20 GLOBAL FUNC 1176     Java_o__003dc_e
 EOF
 RUN
@@ -93,14 +89,12 @@ address: 0x100007f10
 opcode: irg x8, sp, x8
 esilcost: 0
 disasm: irg x8, sp, x8
-pseudo: irg x8,sp,x8 
+pseudo: irg x8, sp, x8
 mnemonic: irg
 description: insert random tag
 mask: ffffffff
-prefix: 0
-id: 0
+id: 429
 bytes: e813c89a
-refptr: 0
 size: 4
 sign: false
 type: mov
@@ -108,22 +102,22 @@ cycles: 0
 family: sec
 --
 address: 0x100007f14
-opcode: addg x9, x8, 0x20, 0x0
+opcode: addg x9, x8, 0x20, 0
 esilcost: 0
-disasm: addg x9, x8, 0x20, 0x0
-pseudo: addg x9,x8,0x20, 0x0 
+disasm: addg x9, x8, 0x20, 0
+pseudo: addg x9, x8, 0x20, 0
 mnemonic: addg
 description: add with tag
 mask: ffffffff
-prefix: 0
-id: 0
+id: 7
 bytes: 09018291
-refptr: 0
+val: 0x00000020
 size: 4
 sign: false
 type: add
-cycles: 0
-family: sec
+cycles: 1
+esil: 0x20,x8,+,x9,=
+family: cpu
 EOF
 RUN
 
@@ -140,53 +134,51 @@ ao@8
 EOF
 EXPECT=<<EOF
 address: 0x0
-opcode: addg x12, x8, 0x0, 0x2
+opcode: addg x12, x8, 0x200, 2
 esilcost: 0
-disasm: addg x12, x8, 0x0, 0x2
-pseudo: addg x12,x8,0x0, 0x2 
+disasm: addg x12, x8, 0x200, 2
+pseudo: addg x12, x8, 0x200, 2
 mnemonic: addg
 description: add with tag
 mask: ffffffff
-prefix: 0
-id: 0
+id: 7
 bytes: 91a0090c
-refptr: 0
+val: 0x00000200
 size: 4
 sign: false
 type: add
-cycles: 0
-family: sec
+cycles: 1
+esil: 0x200,x8,+,x12,=
+family: cpu
 ---
 address: 0x4
-opcode: addg x9, x8, 0x20, 0x0
+opcode: addg x9, x8, 0x20, 0
 esilcost: 0
-disasm: addg x9, x8, 0x20, 0x0
-pseudo: addg x9,x8,0x20, 0x0 
+disasm: addg x9, x8, 0x20, 0
+pseudo: addg x9, x8, 0x20, 0
 mnemonic: addg
 description: add with tag
 mask: ffffffff
-prefix: 0
-id: 0
+id: 7
 bytes: 91820109
-refptr: 0
+val: 0x00000020
 size: 4
 sign: false
 type: add
-cycles: 0
-family: sec
+cycles: 1
+esil: 0x20,x8,+,x9,=
+family: cpu
 ---
 address: 0x8
 opcode: irg x8, sp, x8
 esilcost: 0
 disasm: irg x8, sp, x8
-pseudo: irg x8,sp,x8 
+pseudo: irg x8, sp, x8
 mnemonic: irg
 description: insert random tag
 mask: ffffffff
-prefix: 0
-id: 0
+id: 429
 bytes: 9ac813e8
-refptr: 0
 size: 4
 sign: false
 type: mov
@@ -56075,3 +56067,52 @@ EXPECT=<<EOF
 0x10012bfe0 -> 0x10012c1c0  CODE:--x
 EOF
 RUN
+
+NAME=aae honors given size
+FILE=bins/mach0/BatteryLife.arm_64.1
+CMDS=<<EOF
+aae 0x7c @ 0x10000f5dc
+axt str.setWindow:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=axt find mem reads xrefs
+ARGS=-a arm -b 64
+FILE=bins/mach0/TestApp.ios
+CMDS=<<EOF
+aae
+axt 0x100009394~[1]
+EOF
+EXPECT=<<EOF
+0x100005eb4
+0x100006078
+0x1000060e0
+EOF
+RUN
+
+NAME=aaex honors given size
+FILE=bins/mach0/BatteryLife.arm_64.1
+CMDS=<<EOF
+aaex 0x7c @ 0x10000f5dc
+axt str.setWindow:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=aaex plus axt find mem reads xrefs
+ARGS=-a arm -b 64
+FILE=bins/mach0/TestApp.ios
+CMDS=<<EOF
+aaex
+axt 0x100009394~[1]
+EOF
+EXPECT=<<EOF
+0x100005eb4
+0x100006078
+0x1000060e0
+EOF
+RUN
+

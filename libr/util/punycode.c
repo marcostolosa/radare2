@@ -164,7 +164,7 @@ static ut32 encode_var_int(const ut32 bias, const ut32 delta, char *dst) {
 }
 
 static ut32 decode_digit(ut32 v) {
-	if (IS_DIGIT (v)) {
+	if (isdigit (v)) {
 		return v - 22;
 	}
 	if (v >= 'a' && v <= 'z') {
@@ -298,6 +298,10 @@ R_API char *r_punycode_decode(const char *src, int srclen, int *dstlen) {
 		org_i = i;
 
 		for (w = 1, k = BASE;; k += BASE) {
+			if (si >= srclen) {
+				free (dst);
+				return NULL;
+			}
 			digit = decode_digit (src[si++]);
 
 			if (digit == UT32_MAX) {
@@ -342,7 +346,7 @@ R_API char *r_punycode_decode(const char *src, int srclen, int *dstlen) {
 		n += i / (di + 1);
 		i %= (di + 1);
 
-		memmove (dst + i + 1, dst + i, (di - i) * sizeof(ut32));
+		memmove (dst + i + 1, dst + i, (di - i) * sizeof (ut32));
 		dst[i++] = n;
 	}
 

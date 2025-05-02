@@ -1,3 +1,18 @@
+NAME=optype
+FILE=-
+ARGS=-a arm -b64
+CMDS=<<EOF
+'(optype;ao~type)
+(optype)()
+wa nop
+(optype)()
+EOF
+EXPECT=<<EOF
+type: ill
+type: nop
+EOF
+RUN
+
 NAME=escaping colons
 FILE=-
 CMDS=<<EOF
@@ -178,5 +193,55 @@ Hello 1
 World 0
 00
 Hello 1
+EOF
+RUN
+
+NAME=json
+FILE=-
+CMDS=<<EOF
+(foo;bar;cow)
+(bar;cow;foo)
+(j)~{}
+?e --
+(j~{}
+?e --
+(j)~{}>$a
+$a~name
+EOF
+EXPECT=<<EOF
+{
+  "cmd": "(j",
+  "macros": [
+    {
+      "name": "foo",
+      "args": "",
+      "cmds": "bar\ncow"
+    },
+    {
+      "name": "bar",
+      "args": "",
+      "cmds": "cow\nfoo"
+    }
+  ]
+}
+--
+{
+  "cmd": "(j",
+  "macros": [
+    {
+      "name": "foo",
+      "args": "",
+      "cmds": "bar\ncow"
+    },
+    {
+      "name": "bar",
+      "args": "",
+      "cmds": "cow\nfoo"
+    }
+  ]
+}
+--
+      "name": "foo",
+      "name": "bar",
 EOF
 RUN

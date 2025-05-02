@@ -53,13 +53,13 @@ R_IPI void pager_printpage(const char *line, int *index, RList **mla, int from, 
 		return;
 	}
 
-	RStrpool *p = r_strpool_new (0);
+	RStrpool *p = r_strpool_new ();
 	if (!p) {
 		return;
 	}
 	for (i = from; i < to; i++) {
 		pager_color_line (line + index[i], p, mla[i]);
-		r_strpool_ansi_chop (p, w);
+		r_strpool_ansi_trim (p, w);
 		r_cons_reset_colors ();
 		if (i + 1 == to) {
 			r_cons_print (p->str);
@@ -76,7 +76,7 @@ R_IPI int pager_next_match(int from, RList **mla, int lcount) {
 	if (from > lcount - 2) {
 		return from;
 	}
-	for (l = from + 1; l < lcount; l++){
+	for (l = from + 1; l < lcount; l++) {
 		/* if there's at least one match on the line */
 		if (r_list_first (mla[l])) {
 			return l;
@@ -117,8 +117,8 @@ R_IPI bool pager_all_matches(const char *s, RRegex *rx, RList **mla, int *lines,
 			if (!cpos || m.rm_so >= ncpos) {
 				break;
 			}
-			RRegexMatch *ms = R_NEW0 (RRegexMatch);
-			if (ms && cpos) {
+			if (cpos) {
+				RRegexMatch *ms = R_NEW0 (RRegexMatch);
 				ms->rm_so = cpos[m.rm_so];
 				ms->rm_eo = cpos[m.rm_eo];
 				r_list_append (mla[l], ms);
@@ -135,14 +135,12 @@ R_IPI bool pager_all_matches(const char *s, RRegex *rx, RList **mla, int *lines,
 
 R_IPI int *pager_splitlines(char *s, int *lines_count) {
 	int lines_size = 128;
-	int *lines = NULL;
 	int i, row = 0;
-	int sidx = 0;
 
 	if (lines_size * sizeof (int) < lines_size) {
 		return NULL;
 	}
-	lines = malloc (lines_size * sizeof (int));
+	int *lines = (int *)malloc (lines_size * sizeof (int));
 	if (lines) {
 		lines[row++] = 0;
 		for (i = 0; s[i]; i++) {
@@ -164,7 +162,6 @@ R_IPI int *pager_splitlines(char *s, int *lines_count) {
 				s[i] = 0;
 				lines[row++] = i + 1;
 			}
-			sidx++;
 		}
 		*lines_count = row;
 	}

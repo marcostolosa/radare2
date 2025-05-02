@@ -8,8 +8,12 @@
 LANG=C
 LC_ALL=C
 LOADLIBS=1
-EXT=so
-[ "`uname`" = Darwin ] && EXT=dylib
+if [ -z "$EXT_SO" ]; then
+	EXT=so
+	[ "`uname`" = Darwin ] && EXT=dylib
+else
+	EXT="${EXT_SO}"
+fi
 
 export LANG
 export LC_ALL
@@ -35,6 +39,7 @@ help () {
 cfg=./plugins.cfg
 
 if [ ! -f "$cfg" ]; then
+  echo "configure-plugins: Copying dist/plugins-cfg/plugins.def.cfg"
   cp -f dist/plugins-cfg/plugins.def.cfg plugins.cfg
 fi
 
@@ -46,12 +51,6 @@ load () {
     echo "configure-plugins: Loading $1 .."
     . "$1"
   fi
-}
-
-save () {
-  cp $cfg plugins.cfg
- # echo "STATIC=\"$STATIC\"" > $cfg
- # echo "SHARED=\"$SHARED\"" >>$cfg
 }
 
 generate_configh () {
@@ -262,6 +261,5 @@ check_conflicts || exit 1
 echo SHARED: ${SHARED}
 echo STATIC: ${STATIC}
 
-save
 
 exit 0

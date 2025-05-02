@@ -167,10 +167,10 @@ static void emit_string(REgg *egg, const char *dstvar, const char *str, int j) {
 	/* XXX: Hack: Adjust offset in R_BP correctly for 64b addresses */
 #define BPOFF (R_SZ-4)
 #define M32(x) (unsigned int)((x) & 0xffffffff)
-	/* XXX: Assumes sizeof(ut32) == 4 */
-	for (i=4; i<=oj; i+=4) {
+	/* XXX: Assumes sizeof (ut32) == 4 */
+	for (i = 4; i <= oj; i += 4) {
 		/* XXX endian issues (non-portable asm) */
-		ut32 *n = (ut32 *)(s+i-4);
+		ut32 *n = (ut32 *)(s + i - 4);
 		p = r_egg_mkvar (egg, str2, dstvar, i+BPOFF);
 		if (attsyntax) {
 			r_egg_printf (egg, "  movl $0x%x, %s\n", M32 (*n), p);
@@ -212,20 +212,23 @@ static void emit_string(REgg *egg, const char *dstvar, const char *str, int j) {
 #if 0
 	char *p, str2[64];
 	int i, oj = j;
-	for (i=0; i<oj; i+=4) {
+	for (i = 0; i < oj; i += 4) {
 		/* XXX endian and 32/64bit issues */
 		int *n = (int *)(str+i);
 		p = r_egg_mkvar (egg, str2, dstvar, j);
-		if (attsyntax) r_egg_printf (egg, "  movl $0x%x, %s\n", *n, p);
-		else r_egg_printf (egg, "  mov %s, 0x%x\n", p, *n);
+		if (attsyntax) {
+			r_egg_printf (egg, "  movl $0x%x, %s\n", *n, p);
+		} else {
+			r_egg_printf (egg, "  mov %s, 0x%x\n", p, *n);
+		}
 		j -= 4;
 	}
 	p = r_egg_mkvar (egg, str2, dstvar, oj);
-	if (attsyntax) r_egg_printf (egg, "  lea %s, %%"R_AX"\n", p);
-	else r_egg_printf (egg, "  lea "R_AX", %s\n", p);
+	if (attsyntax) { r_egg_printf (egg, "  lea %s, %%"R_AX"\n", p);
+	} else { r_egg_printf (egg, "  lea "R_AX", %s\n", p); }
 	p = r_egg_mkvar (egg, str2, dstvar, 0);
-	if (attsyntax) r_egg_printf (egg, "  mov %%"R_AX", %s\n", p);
-	else r_egg_printf (egg, "  mov %s, "R_AX"\n", p);
+	if (attsyntax) { r_egg_printf (egg, "  mov %%"R_AX", %s\n", p);
+	} else { r_egg_printf (egg, "  mov %s, "R_AX"\n", p); }
 #endif
 	free (s);
 }
@@ -254,7 +257,7 @@ static void emit_jmp(REgg *egg, const char *str, int atr) {
 			r_egg_printf (egg, "  jmp %s\n", str);
 		}
 	} else {
-		eprintf ("Jump without destination\n");
+		R_LOG_ERROR ("Jump without destination");
 	}
 }
 
@@ -392,7 +395,6 @@ static void emit_load_ptr(REgg *egg, const char *dst) {
 			d = atoi (p + 1);
 		}
 	}
-	//eprintf ("emit_load_ptr: HACK\n");
 	// XXX: 32/64bit care
 	//r_egg_printf (egg, "# DELTA IS (%s)\n", dst);
 	if (attsyntax) {
@@ -418,8 +420,7 @@ static void emit_branch(REgg *egg, char *b, char *g, char *e, char *n, int sz, c
 			op = e? "jae": "ja";
 		}
 		arg = b+1;
-	} else
-	if (g) {
+	} else if (g) {
 		*g = '\0';
 		if (signed_value) {
 			op = e? "jle": "jl";
@@ -521,9 +522,9 @@ static void emit_mathop(REgg *egg, int ch, int vs, int type, const char *eq, con
 		}
 		// TODO:
 #if 0
-		eprintf ("TYPE = %c\n", type);
-		eprintf ("  %s%c %c%s, %s\n", op, vs, type, eq, p);
-		eprintf ("  %s %s, [%s]\n", op, p, eq);
+		R_LOG_DEBUG ("TYPE = %c", type);
+		R_LOG_DEBUG ("  %s%c %c%s, %s", op, vs, type, eq, p);
+		R_LOG_DEBUG ("  %s %s, [%s]", op, p, eq);
 #endif
 		if (type == '*') {
 			r_egg_printf (egg, "  %s %s, [%s]\n", op, p, eq);

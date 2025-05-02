@@ -1,4 +1,4 @@
-.Dd Feb 3, 2017
+.Dd Aug 18, 2023
 .Dt RARUN2 1
 .Sh NAME
 .Nm rarun2
@@ -9,13 +9,13 @@
 .Op [script.rr2]
 .Op [--] [program] [args]
 .Sh DESCRIPTION
-This program is used as a launcher for running programs with different environment, arguments, permissions, directories and overridden default filedescriptors.
+This program is used as a launcher for running programs with different environment, arguments, permissions, directories and overridden default file descriptors.
 .Pp
 rarun2 -t will show the terminal name and wait for a connection from another process. try rarun2 stdio=<ttypath> program=/bin/sh
 .Pp
 The program just accepts a single argument which is the filename of the configuration file to run the program.
 .Pp
-It is useful when you have to run a program using long arguments or pass long data to stdin or things like that usually required for exploiting crackmes :)
+It is useful when you have to run a program using long arguments or pass long data to stdin or things like that usually are required for exploiting crackmes :)
 .Sh DIRECTIVES
 .Pp
 The rr2 (rarun2) configuration file accepts the following directives, described as key=value entries and comments defined as lines starting with '#'.
@@ -34,8 +34,8 @@ run the program in chroot. requires some previous setup
 unset the whole environment
 .It Ar core
 set no limit the core file size
-.It Ar time
-boolean value (true|false) to show ms in base10 to stderr after program execution
+.It Ar times
+boolean value (true|false) to print runtime in milliseconds to stderr after program execution
 .It Ar connect
 connect stdin/stdout/stderr to a socket
 .It Ar pty
@@ -82,6 +82,8 @@ set effective process group id
 set effective process uid
 .It Ar setgid
 set process group id
+.It Ar stderrout true|false
+Redirect stderr filedescriptor to stdout
 .It Ar setuid
 set process uid
 .It Ar sleep
@@ -140,7 +142,7 @@ Connecting a program to a socket
   $ nc \-l 9999
   $ rarun2 program=/bin/ls connect=localhost:9999
 .Pp
-Debugging a program redirecting io to another terminal
+Debugging a program redirecting IO to another terminal
 .Pp
   ## open a new terminal and type 'tty' to get
   $ tty ; clear ; sleep 999999
@@ -160,6 +162,8 @@ You can also use the -- flag to specify program and arguments in a more natural 
 Run a library function
 .Pp
   $ rarun2 runlib=/lib/libc-2.25.so runlib.fcn=system arg1="ls /"
+.Sh ENVIRONMENT
+ RARUN2_ARGS     useful to just run "rarun2" but parse arguments from environment var
 .Sh SEE ALSO
 .Pp
 .Xr radare2(1)

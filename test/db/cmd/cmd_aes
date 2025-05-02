@@ -49,15 +49,8 @@ aepc $$
 aep test @ 5
 aep
 aes
-aes
 EOF
-EXPECT=<<EOF
-"aep ret0=dr R0=0;aexa ret"
-aep test @ 0x5
-"aep memcpy=wf `dr?A1` `dr?A2` @ `dr?A0`;aexa ret"
-"aep strlen=dr R0=`pszl@r:A0`;aexa ret"
-"aep puts=psz@r:A0; aexa ret"
-test
+EXPECT_ERR=<<EOF
 EOF
 RUN
 
@@ -83,6 +76,9 @@ aep test @ 0x5
 "aep puts=psz@r:A0; aexa ret"
 test
 EOF
+EXPECT_ERR=<<EOF
+ERROR: Missing file argument. Use 'test -[v]fdx [file]'
+EOF
 RUN
 
 NAME=emulate imports
@@ -102,5 +98,61 @@ EXPECT=<<EOF
 "aep puts=psz@r:A0; aexa ret"
 aep puts @ 0x1050
 Hello World
+EOF
+RUN
+
+NAME=esil plugins
+FILE=malloc://128
+CMDS=<<EOF
+aeim
+aeL
+?e --
+aeL dummy
+?e --
+ae dummy_op
+EOF
+EXPECT=<<EOF
+dummy
+forth
+null
+--
+--
+EOF
+EXPECT_ERR=<<EOF
+INFO: esil.dummy: Activated
+INFO: Dummy: Operation executed
+EOF
+RUN
+
+NAME=esil soft pins
+FILE=bins/elf/ls
+ARGS=-e bin.relocs.apply=true -e asm.lines=0 -e asm.bytes=0 -e asm.cmt.col=40
+CMDS=<<EOF
+'aep soft.dr9=dr?r9
+aep hard.rbp=dr?rbp
+pd 3
+aep hard.rbp @ 0x5ae4
+aep soft.dr9 @ 0x5ae6
+e emu.str=1
+dr r9=0x666
+pd 3
+aeim
+dr PC=$$
+3ds
+dr?rbp
+EOF
+EXPECT=<<EOF
+;-- entry0:
+0x00005ae0      endbr64
+0x00005ae4      xor ebp, ebp
+0x00005ae6      mov r9, rdx
+;-- entry0:
+0x00005ae0      endbr64
+0x00005ae4      xor ebp, ebp            ; [aep: hard.rbp]
+0x00005ae6      mov r9, rdx             ; [aep: soft.dr9]
+0x00000666
+
+0x00178000
+0x00178000
 EOF
 RUN

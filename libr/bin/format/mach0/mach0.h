@@ -5,9 +5,6 @@
 #ifndef _INCLUDE_R_BIN_MACH0_H_
 #define _INCLUDE_R_BIN_MACH0_H_
 
-// 20% faster loading times for macho if enabled
-#define FEATURE_SYMLIST 0
-
 #define R_BIN_MACH0_STRING_LENGTH 256
 
 
@@ -49,32 +46,14 @@ typedef enum {
 #define R_FIXUP_EVENT_MASK_ALL (R_FIXUP_EVENT_MASK_BIND_ALL | R_FIXUP_EVENT_MASK_REBASE_ALL)
 
 struct section_t {
-	ut64 offset;
-	ut64 addr;
+	ut64 paddr;
+	ut64 vaddr;
 	ut64 size;
 	ut64 vsize;
 	ut32 align;
 	ut32 flags;
 	int perm;
 	char name[R_BIN_MACH0_STRING_LENGTH];
-	int last;
-};
-
-struct symbol_t {
-	ut64 offset;
-	ut64 addr;
-	ut64 size;
-	int bits;
-	int type;
-	bool is_imported;
-	char *name;
-	bool last;
-};
-
-struct import_t {
-	char name[R_BIN_MACH0_STRING_LENGTH];
-	int ord;
-	int last;
 };
 
 struct reloc_t {
@@ -82,8 +61,8 @@ struct reloc_t {
 	ut64 addr;
 	st64 addend;
 	ut8 type;
+	ut64 ntype;
 	int ord;
-	int last;
 	char name[256];
 	bool external;
 	bool pc_relative;
@@ -94,11 +73,6 @@ struct addr_t {
 	ut64 offset;
 	ut64 addr;
 	ut64 haddr;
-	int last;
-};
-
-struct lib_t {
-	char name[R_BIN_MACH0_STRING_LENGTH];
 	int last;
 };
 
@@ -118,13 +92,24 @@ struct super_blob_t {
 	struct blob_index_t index[];
 };
 
+// TODO generalize into RBinFileOptions
 struct MACH0_(opts_t) {
 	bool verbose;
 	ut64 header_at;
 	ut64 symbols_off;
 	int maxsymlen;
+	bool parse_start_symbols;
 	RBinFile *bf;
 };
+
+static inline void r_bin_section_fini(RBinSection *bs) {
+	if (bs) {
+		free (bs->name);
+		free (bs->format);
+	}
+}
+
+R_VEC_TYPE_WITH_FINI(RVecSegment, RBinSection, r_bin_section_fini);
 
 struct MACH0_(obj_t) {
 	struct MACH0_(mach_header) hdr;
@@ -151,6 +136,7 @@ struct MACH0_(obj_t) {
 	RBinImport **imports_by_ord;
 	size_t imports_by_ord_size;
 	HtPP *imports_by_name;
+	struct MACH0_(opts_t) options;
 
 	struct dysymtab_command dysymtab;
 	struct load_command main_cmd;
@@ -169,9 +155,10 @@ struct MACH0_(obj_t) {
 		struct arm_thread_state32 arm_32;
 		struct arm_thread_state64 arm_64;
 	} thread_state;
-	char (*libs)[R_BIN_MACH0_STRING_LENGTH];
+	bool libs_loaded;
+	RPVector libs_cache;
 	int nlibs;
-	int size;
+	ut64 size;
 	ut64 baddr;
 	ut64 entry;
 	bool big_endian;
@@ -179,10 +166,11 @@ struct MACH0_(obj_t) {
 	RBuffer *b;
 	int os;
 	Sdb *kv;
-	int has_crypto;
+	bool has_crypto;
 	int has_canary;
 	int has_retguard;
 	int has_sanitizers;
+	int has_libinjprot;
 	int has_blocks_ext;
 	int dbg_info;
 	const char *lang;
@@ -190,17 +178,31 @@ struct MACH0_(obj_t) {
 	int func_size;
 	bool verbose;
 	ut64 header_at;
+	bool parse_start_symbols;
+	bool symbols_loaded;
+	RVecRBinSymbol *symbols_vec; // pointer to &bf->bo->symbols_vec
+	RVecSegment *segments_vec;  // R2_590 pointer of &bf->bo->segments_vec
 	ut64 symbols_off;
 	void *user;
 	ut64 (*va2pa)(ut64 p, ut32 *offset, ut32 *left, RBinFile *bf);
-	struct symbol_t *symbols;
 	ut64 main_addr;
 	int (*original_io_read)(RIO *io, RIODesc *fd, ut8 *buf, int count);
 	bool rebasing_buffer;
-	RList *symbols_cache;
-	RList *sections_cache;
+	bool sections_loaded;
+	RVector sections_cache;
+	bool imports_loaded;
+	RPVector imports_cache;
+	bool relocs_loaded;
+	RSkipList *relocs_cache;
+	RList *reloc_fixups;
 	ut8 *internal_buffer;
 	int internal_buffer_size;
+	int limit; // user defined
+	bool nofuncstarts;
+	ut64 exports_trie_off;
+	ut32 exports_trie_size;
+	RInterval lastrange;
+	ut64 lastrange_pa;
 };
 
 typedef struct {
@@ -208,6 +210,7 @@ typedef struct {
 	struct MACH0_(obj_t) *bin;
 	ut64 offset;
 	ut64 raw_ptr;
+	ut64 ptr_size;
 } RFixupEventDetails;
 
 typedef struct {
@@ -215,6 +218,7 @@ typedef struct {
 	struct MACH0_(obj_t) *bin;
 	ut64 offset;
 	ut64 raw_ptr;
+	ut64 ptr_size;
 	ut64 ordinal;
 	ut64 addend;
 } RFixupBindEventDetails;
@@ -224,6 +228,7 @@ typedef struct {
 	struct MACH0_(obj_t) *bin;
 	ut64 offset;
 	ut64 raw_ptr;
+	ut64 ptr_size;
 	ut32 ordinal;
 	ut8 key;
 	ut8 addr_div;
@@ -235,6 +240,7 @@ typedef struct {
 	struct MACH0_(obj_t) *bin;
 	ut64 offset;
 	ut64 raw_ptr;
+	ut64 ptr_size;
 	ut64 ptr_value;
 } RFixupRebaseEventDetails;
 
@@ -243,6 +249,7 @@ typedef struct {
 	struct MACH0_(obj_t) *bin;
 	ut64 offset;
 	ut64 raw_ptr;
+	ut64 ptr_size;
 	ut64 ptr_value;
 	ut8 key;
 	ut8 addr_div;
@@ -253,18 +260,17 @@ typedef bool (*RFixupCallback)(void * context, RFixupEventDetails * event_detail
 
 void MACH0_(opts_set_default)(struct MACH0_(opts_t) *options, RBinFile *bf);
 struct MACH0_(obj_t) *MACH0_(mach0_new)(const char *file, struct MACH0_(opts_t) *options);
-struct MACH0_(obj_t) *MACH0_(new_buf)(RBuffer *buf, struct MACH0_(opts_t) *options);
+struct MACH0_(obj_t) *MACH0_(new_buf)(RBinFile *bf, RBuffer *buf, struct MACH0_(opts_t) *options);
 void *MACH0_(mach0_free)(struct MACH0_(obj_t) *bin);
-struct section_t *MACH0_(get_sections)(struct MACH0_(obj_t) *bin);
-//RList *MACH0_(get_segments)(struct MACH0_(obj_t) *bin);
-RList *MACH0_(get_segments)(RBinFile *bf); // struct MACH0_(obj_t) *bin);
-const struct symbol_t *MACH0_(get_symbols)(struct MACH0_(obj_t) *bin);
-const RList *MACH0_(get_symbols_list)(struct MACH0_(obj_t) *bin);
+const RVector *MACH0_(load_sections)(struct MACH0_(obj_t) *mo);
+RList *MACH0_(get_segments)(RBinFile *bf, struct MACH0_(obj_t) *mo);
+RVecSegment *MACH0_(get_segments_vec)(RBinFile *bf, struct MACH0_(obj_t) *mo);
+const bool MACH0_(load_symbols)(struct MACH0_(obj_t) *mo);
 void MACH0_(pull_symbols)(struct MACH0_(obj_t) *mo, RBinSymbolCallback cb, void *user);
-struct import_t *MACH0_(get_imports)(struct MACH0_(obj_t) *bin);
-RSkipList *MACH0_(get_relocs)(struct MACH0_(obj_t) *bin);
+const RPVector *MACH0_(load_imports)(RBinFile* bf, struct MACH0_(obj_t) *bin);
+const RSkipList *MACH0_(load_relocs)(struct MACH0_(obj_t) *bin);
 struct addr_t *MACH0_(get_entrypoint)(struct MACH0_(obj_t) *bin);
-struct lib_t *MACH0_(get_libs)(struct MACH0_(obj_t) *bin);
+const RPVector *MACH0_(load_libs)(struct MACH0_(obj_t) *bin);
 ut64 MACH0_(get_baddr)(struct MACH0_(obj_t) *bin);
 char *MACH0_(get_class)(struct MACH0_(obj_t) *bin);
 int MACH0_(get_bits)(struct MACH0_(obj_t) *bin);
@@ -278,7 +284,7 @@ char *MACH0_(get_cpusubtype)(struct MACH0_(obj_t) *bin);
 char *MACH0_(get_cpusubtype_from_hdr)(struct MACH0_(mach_header) *hdr);
 char *MACH0_(get_filetype)(struct MACH0_(obj_t) *bin);
 char *MACH0_(get_filetype_from_hdr)(struct MACH0_(mach_header) *hdr);
-ut64 MACH0_(get_main)(struct MACH0_(obj_t) *bin);
+ut64 MACH0_(get_main)(struct MACH0_(obj_t) *mo);
 const char *MACH0_(get_cputype_from_hdr)(struct MACH0_(mach_header) *hdr);
 int MACH0_(get_bits_from_hdr)(struct MACH0_(mach_header) *hdr);
 struct MACH0_(mach_header) *MACH0_(get_hdr)(RBuffer *buf);

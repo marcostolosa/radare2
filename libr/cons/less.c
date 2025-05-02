@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2014-2022 - pancake, Judge_Dredd */
+/* radare2 - LGPL - Copyright 2014-2025 - pancake */
 
 #include <r_cons.h>
 #include <r_regex.h>
@@ -6,7 +6,7 @@
 #include "pager_private.h"
 
 static const char *r_cons_less_help = \
-	" u/space  - page up/down\n"
+	" u/space  - page up/down (same as ^F / ^B)\n"
 	" jk       - line down/up\n"
 	" gG       - begin/end buffer\n"
 	" /        - search in buffer\n"
@@ -16,9 +16,9 @@ static const char *r_cons_less_help = \
 	" ?        - show this help\n"
 	"\n";
 
-R_API int r_cons_less_str(const char *str, const char *exitkeys) {
-	r_return_val_if_fail (str && *str, 0);
-	if (!r_cons_is_interactive ()) {
+R_API int r_cons_less_str(RCons *cons, const char *str, const char *exitkeys) {
+	R_RETURN_VAL_IF_FAIL (R_STR_ISNOTEMPTY (str), 0);
+	if (!r_kons_is_interactive (cons)) {
 		R_LOG_ERROR ("Internal less requires scr.interactive=true");
 		return 0;
 	}
@@ -57,7 +57,7 @@ R_API int r_cons_less_str(const char *str, const char *exitkeys) {
 	}
 	r_cons_set_raw (true);
 	r_cons_show_cursor (false);
-	r_cons_reset ();
+	r_kons_reset (cons);
 	h = 0;
 	while (ui) {
 		w = r_cons_get_size (&h);
@@ -83,37 +83,39 @@ R_API int r_cons_less_str(const char *str, const char *exitkeys) {
 		ch = r_cons_arrow_to_hjkl (ch);
 		switch (ch) {
 		case '_':
-			r_cons_hud_string (ostr);
+			r_cons_hud_string (cons, ostr);
 			break;
 		case '?':
 			if (!in_help) {
 				in_help = true;
-				(void)r_cons_less_str (r_cons_less_help, NULL);
+				(void)r_cons_less_str (cons, r_cons_less_help, NULL);
 				in_help = false;
 			}
 			break;
+		case 104: // ^B
 		case 'u':
 			from -= h;
 			if (from < 0) {
 				from = 0;
 			}
 			break;
+		case 108: // ^F
 		case ' ': from += h; break;
 		case 'g': from = 0; break;
-		case 'G': from = lines_count-h; break;
+		case 'G': from = lines_count - h; break;
 		case -1: // EOF
 		case '\x03': // ^C
 		case 'q': ui = 0; break;
 		case '\r':
 		case '\n':
 		case 'j': from++; break;
-		case 'J': from+=h; break;
+		case 'J': from += h; break;
 		case 'k':
 			if (from > 0) {
 				from--;
 			}
 			break;
-		case 'K': from = (from>=h)? from-h: 0;
+		case 'K': from = (from>=h)? from - h: 0;
 			break;
 		case '/': 	/* search */
 			r_cons_reset_colors ();
@@ -137,6 +139,7 @@ R_API int r_cons_less_str(const char *str, const char *exitkeys) {
 			if (pager_all_matches (p, rx, mla, lines, lines_count)) {
 				from = pager_next_match (from, mla, lines_count);
 			}
+			r_cons_set_raw (true);
 			break;
 		case 'n': 	/* next match */
 			/* search already performed */
@@ -166,8 +169,8 @@ R_API int r_cons_less_str(const char *str, const char *exitkeys) {
 	return 0;
 }
 
-R_API void r_cons_less(void) {
-	(void)r_cons_less_str (r_cons_context ()->buffer, NULL);
+R_API void r_cons_less(RCons *cons) {
+	(void)r_cons_less_str (cons, cons->context->buffer, NULL);
 }
 
 #if 0

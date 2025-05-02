@@ -1,16 +1,13 @@
-/* radare - LGPL - Copyright 2009-2022 - pancake */
+/* radare - LGPL - Copyright 2009-2024 - pancake */
 
 #include <r_userconf.h>
 
 #if DEBUGGER
 #include <r_debug.h>
 #include <r_asm.h>
-#include <r_reg.h>
 #include <r_lib.h>
 #include <r_anal.h>
-#include <signal.h>
 #include <sys/uio.h>
-#include <errno.h>
 #include "linux_debug.h"
 #include "../procfs.h"
 
@@ -32,13 +29,15 @@ char *linux_reg_profile (RDebug *dbg) {
 #elif __riscv
 #	include "reg/linux-riscv64.h"
 #elif __arm64__ || __aarch64__
-	if (dbg->bits & R_SYS_BITS_32) {
-#		include "reg/linux-arm.h"
-	} else {
+	const bool is64 = R_SYS_BITS_CHECK (dbg->bits, 64);
+	if (is64) {
 #		include "reg/linux-arm64.h"
+	} else {
+#		include "reg/linux-arm.h"
 	}
 #elif __mips__
-	if ((dbg->bits & R_SYS_BITS_32) && (dbg->bp->endian == 1)) {
+	const bool is32 = R_SYS_BITS_CHECK (dbg->bits, 32);
+	if (is32 && (dbg->bp->endian == 1)) {
 #		include "reg/linux-mips.h"
 	} else {
 #		include "reg/linux-mips64.h"
@@ -46,7 +45,8 @@ char *linux_reg_profile (RDebug *dbg) {
 #elif __loongarch__
 #		include "reg/linux-loongarch64.h"
 #elif (__i386__ || __x86_64__)
-	if (dbg->bits & R_SYS_BITS_32) {
+	const bool is32 = R_SYS_BITS_CHECK (dbg->bits, 32);
+	if (is32) {
 #if __x86_64__
 #		include "reg/linux-x64-32.h"
 #else
@@ -56,13 +56,19 @@ char *linux_reg_profile (RDebug *dbg) {
 #		include "reg/linux-x64.h"
 	}
 #elif __powerpc__
-	if (dbg->bits & R_SYS_BITS_32) {
-#		include "reg/linux-ppc.h"
-	} else {
+	const bool is64 = R_SYS_BITS_CHECK (dbg->bits, 64);
+	if (is64) {
 #		include "reg/linux-ppc64.h"
+	} else {
+#		include "reg/linux-ppc.h"
 	}
 #elif __s390x__
-#	include "reg/linux-s390x.h"
+	const bool is64 = R_SYS_BITS_CHECK (dbg->bits, 64);
+	if (is64) {
+#		include "reg/linux-zarch.h"
+	} else {
+#		include "reg/linux-s390x.h"
+	}
 #else
 #	error "Unsupported Linux CPU"
 	return NULL;
@@ -125,8 +131,8 @@ int linux_handle_signals(RDebug *dbg, int tid) {
 					if (p) {
 						if (r_str_startswith (p, "dbg.libs")) {
 							const char *name = strstr (b->data, "sym.imp.dlopen")
-								? r_reg_get_name (dbg->reg, R_REG_NAME_A0)
-								: r_reg_get_name (dbg->reg, R_REG_NAME_A1);
+								? r_reg_alias_getname (dbg->reg, R_REG_ALIAS_A0)
+								: r_reg_alias_getname (dbg->reg, R_REG_ALIAS_A1);
 							b->data = r_str_appendf (b->data, ";ps@r:%s", name);
 							dbg->reason.type = R_DEBUG_REASON_NEW_LIB;
 							break;
@@ -154,8 +160,9 @@ int linux_handle_signals(RDebug *dbg, int tid) {
 			break;
 		}
 		if (dbg->reason.signum != SIGTRAP && (dbg->reason.signum != SIGINT || !r_cons_is_breaked ())) {
-			eprintf ("[+] SIGNAL %d errno=%d addr=0x%08"PFMT64x " code=%d si_pid=%d ret=%d\n",
-				siginfo.si_signo, siginfo.si_errno,
+			const char *name = r_signal_tostring (dbg->reason.signum);
+			eprintf ("[+] SIGNAL %d (aka %s) errno=%d addr=0x%08"PFMT64x " code=%d si_pid=%d ret=%d\n",
+				siginfo.si_signo, name, siginfo.si_errno,
 				(ut64) (size_t)siginfo.si_addr, siginfo.si_code, siginfo.si_pid, ret);
 		}
 		return true;
@@ -171,8 +178,6 @@ int linux_handle_signals(RDebug *dbg, int tid) {
 // Used to remove breakpoints before detaching from a fork, without it the child
 // will die upon hitting a breakpoint while not being traced
 static void linux_remove_fork_bps(RDebug *dbg) {
-	RListIter *iter;
-	RBreakpointItem *b;
 	int prev_pid = dbg->pid;
 	int prev_tid = dbg->tid;
 
@@ -180,14 +185,16 @@ static void linux_remove_fork_bps(RDebug *dbg) {
 	dbg->pid = dbg->forked_pid;
 	dbg->tid = dbg->forked_pid;
 	r_debug_select (dbg, dbg->forked_pid, dbg->forked_pid);
-
+#if __i386__ || __x86_64__
+	RListIter *iter;
+	RBreakpointItem *b;
 	// Unset all hw breakpoints in the child process
 	r_debug_reg_sync (dbg, R_REG_TYPE_DRX, false);
 	r_list_foreach (dbg->bp->bps, iter, b) {
 		r_debug_drx_unset (dbg, r_bp_get_index_at (dbg->bp, b->addr));
 	}
 	r_debug_reg_sync (dbg, R_REG_TYPE_DRX, true);
-
+#endif
 	// Unset software breakpoints in the child process
 	r_debug_bp_update (dbg);
 	r_bp_restore (dbg->bp, false);
@@ -346,7 +353,6 @@ int linux_step(RDebug *dbg) {
 	int ret = false;
 	int pid = dbg->tid;
 	ret = r_debug_ptrace (dbg, PTRACE_SINGLESTEP, pid, 0, 0);
-	//XXX(jjd): why?? //linux_handle_signals (dbg);
 	if (ret == -1) {
 		r_sys_perror ("native-singlestep");
 		ret = false;
@@ -685,7 +691,7 @@ static bool linux_attach_single_pid(RDebug *dbg, int pid) {
 
 static RList *get_pid_thread_list(RDebug *dbg, int main_pid) {
 	RList *list = r_list_new ();
-	if (list) {
+	if (R_LIKELY (list)) {
 		list = linux_thread_list (dbg, main_pid, list);
 		dbg->main_pid = main_pid;
 	}
@@ -854,12 +860,18 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 	char *ptr, buf[PATH_MAX];
 	RDebugPid *pid_info = NULL;
 	ut64 pc = 0;
-	int prev_tid = dbg->tid;
-
-	if (!pid) {
+	if (pid < 1) {
 		r_list_free (list);
 		return NULL;
 	}
+	if (dbg->tid < 1) {
+		dbg->tid = pid;
+		dbg->pid = pid;
+	}
+	int prev_pid = dbg->pid;
+	int prev_tid = dbg->tid;
+	dbg->pid = pid;
+	dbg->tid = pid;
 
 	list->free = (RListFree)&r_debug_pid_free;
 	/* if this process has a task directory, use that */
@@ -868,6 +880,7 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 		struct dirent *de;
 		DIR *dh = opendir (buf);
 		// Update the process' memory maps to set correct paths
+		dbg->pid = pid;
 		dbg->coreb.syncDebugMaps (dbg->coreb.core);
 		while ((de = readdir (dh))) {
 			if (!strcmp (de->d_name, ".") || !strcmp (de->d_name, "..")) {
@@ -913,7 +926,7 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 		closedir (dh);
 		// Return to the original thread
 		linux_attach_single_pid (dbg, prev_tid);
-		dbg->pid = pid;
+		dbg->pid = prev_pid;
 		dbg->tid = prev_tid;
 		r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false);
 	} else {
@@ -922,7 +935,7 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 #define MAXPID 99999
 		/* otherwise, brute force the pids */
 		for (i = pid; i < MAXPID; i++) { // XXX
-			if (procfs_pid_slurp (i, "status", buf, sizeof(buf)) == -1) {
+			if (procfs_pid_slurp (i, "status", buf, sizeof (buf)) == -1) {
 				continue;
 			}
 			int uid = 0;
@@ -940,9 +953,9 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 					continue;
 				}
 
-				if (procfs_pid_slurp (i, "comm", buf, sizeof(buf)) == -1) {
+				if (procfs_pid_slurp (i, "comm", buf, sizeof (buf)) == -1) {
 					/* fall back to auto-id */
-					snprintf (buf, sizeof(buf), "thread_%d", thid++);
+					snprintf (buf, sizeof (buf), "thread_%d", thid++);
 				}
 				r_list_append (list, r_debug_pid_new (buf, i, uid, 's', 0));
 			}
@@ -970,7 +983,11 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 	r_cons_printf ("foo = 0x%04lx          \n", (fpregs).foo);\
 	r_cons_printf ("fos = 0x%04lx              ", (fpregs).fos)
 
-static void print_fpu(void *f){
+static void print_fpu(void *f) {
+	if (!f) {
+		R_LOG_WARN ("getfpregs not implemented");
+		return;
+	}
 #if __x86_64__
 	int i,j;
 	struct user_fpregs_struct fpregs = *(struct user_fpregs_struct *)f;
@@ -1062,13 +1079,13 @@ static void print_fpu(void *f){
 #endif
 }
 
-int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
+bool linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 	bool showfpu = false;
 	int pid = dbg->tid;
 	if (pid == -1) {
 		if (dbg->pid == -1) {
-			eprintf ("linux_reg_read: Invalid pid %d\n", pid);
-			return 0;
+			R_LOG_ERROR ("Invalid pid %d", pid);
+			return false;
 		}
 		pid = dbg->pid;
 	}
@@ -1092,8 +1109,8 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 			}
 			long ret = r_debug_ptrace (dbg, PTRACE_PEEKUSER, pid,
 					(void *)r_offsetof (struct user, u_debugreg[i]), 0);
-			if ((i+1) * sizeof (ret) > size) {
-				eprintf ("linux_reg_get: Buffer too small %d\n", size);
+			if ((i + 1) * sizeof (ret) > size) {
+				R_LOG_ERROR ("Buffer of %d is too small for ptrace.peekuser", size);
 				break;
 			}
 			memcpy (buf + (i * sizeof (ret)), &ret, sizeof (ret));
@@ -1108,12 +1125,10 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 		return true;
 		break;
 	case R_REG_TYPE_FPU:
-	case R_REG_TYPE_MMX:
-	case R_REG_TYPE_XMM:
-#if __POWERPC__
-		return false;
-#elif __x86_64__ || __i386__
+	case R_REG_TYPE_VEC64: // MMX
+	case R_REG_TYPE_VEC128: // XMM
 		{
+#if __x86_64__ || __i386__
 		struct user_fpregs_struct fpregs;
 		if (type == R_REG_TYPE_FPU) {
 #if __x86_64__
@@ -1167,54 +1182,26 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 #endif // !__ANDROID__
 #endif // __i386__
 		}
-		}
+		return size;
 #else
+		if (showfpu) {
+			print_fpu (NULL);
+		}
 	#warning getfpregs not implemented for this platform
 #endif
-		break;
-	case R_REG_TYPE_SEG:
-	case R_REG_TYPE_FLG:
-	case R_REG_TYPE_GPR:
-		{
-			R_DEBUG_REG_T regs;
-			memset (&regs, 0, sizeof (regs));
-			memset (buf, 0, size);
-#if (__arm64__ || __aarch64__ || __s390x__) && defined(PTRACE_GETREGSET)
-			struct iovec io = {
-				.iov_base = &regs,
-				.iov_len = sizeof (regs)
-			};
-			ret = r_debug_ptrace (dbg, PTRACE_GETREGSET, pid, (size_t)1, &io);
-			// ret = ptrace (PTRACE_GETREGSET, pid, (void*)(size_t)(NT_PRSTATUS), NULL); // &io);
-#elif __BSD__ && (__POWERPC__ || __sparc__)
-			ret = r_debug_ptrace (dbg, PTRACE_GETREGS, pid, &regs, NULL);
-#else
-			/* linux -{arm/mips/riscv/x86/x86_64} */
-			ret = r_debug_ptrace (dbg, PTRACE_GETREGS, pid, NULL, &regs);
-#endif
-			/*
-			 * if perror here says 'no such process' and the
-			 * process exists still.. is because there's a missing call
-			 * to 'wait'. and the process is not yet available to accept
-			 * more ptrace queries.
-			 */
-			if (ret != 0) {
-				r_sys_perror ("PTRACE_GETREGS");
-				return false;
-			}
-			size = R_MIN (sizeof (regs), size);
-			memcpy (buf, &regs, size);
-			return size;
 		}
 		break;
-	case R_REG_TYPE_YMM:
+	case R_REG_TYPE_VEC512: // ZMM
+		R_LOG_DEBUG ("zmm registers not supported yet");
+		break;
+	case R_REG_TYPE_VEC256: // YMM
 		{
 #if HAVE_YMM && __x86_64__ && defined(PTRACE_GETREGSET)
 		ut32 ymm_space[128];	// full ymm registers
 		struct _xstate xstate;
 		struct iovec iov = {};
 		iov.iov_base = &xstate;
-		iov.iov_len = sizeof(struct _xstate);
+		iov.iov_len = sizeof (struct _xstate);
 		ret = r_debug_ptrace (dbg, PTRACE_GETREGSET, pid, (void*)NT_X86_XSTATE, &iov);
 		if (errno == ENODEV) {
 			// ignore ENODEV, it just means this CPU or kernel doesn't support XSTATE
@@ -1229,7 +1216,7 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 		// stitch together xstate.fpstate._xmm and xstate.ymmh assuming LE
 		int ri,rj;
 		for (ri = 0; ri < 16; ri++)	{
-			for (rj=0; rj < 4; rj++)	{
+			for (rj = 0; rj < 4; rj++)	{
 #ifdef __ANDROID__
 				ymm_space[ri*8+rj] = ((struct _libc_fpstate*) &xstate.fpstate)->_xmm[ri].element[rj];
 #else
@@ -1247,11 +1234,53 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 		return false;
 		}
 		break;
+	case R_REG_TYPE_SEG:
+	case R_REG_TYPE_FLG:
+	case R_REG_TYPE_GPR:
+		{
+			R_DEBUG_REG_T regs;
+			memset (&regs, 0, sizeof (regs));
+			memset (buf, 0, size);
+#if (__arm64__ || __aarch64__ || __s390x__) && defined(PTRACE_GETREGSET)
+			struct iovec io = {
+				.iov_base = &regs,
+				.iov_len = sizeof (regs)
+			};
+			ret = r_debug_ptrace (dbg, PTRACE_GETREGSET, pid, (void*)(size_t)1, &io);
+			// ret = ptrace (PTRACE_GETREGSET, pid, (void*)(size_t)(NT_PRSTATUS), NULL); // &io);
+#elif R2__BSD__ && (__POWERPC__ || __sparc__)
+			ret = r_debug_ptrace (dbg, PTRACE_GETREGS, pid, &regs, NULL);
+#elif __riscv
+			// theres no PTRACE_GETREGS implemented for rv64
+			struct iovec iov;
+			iov.iov_base = &regs;
+			iov.iov_len = sizeof (regs);
+			ret = ptrace (PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov);
+#else
+			/* linux -{arm/mips/x86/x86_64} */
+			ret = r_debug_ptrace (dbg, PTRACE_GETREGS, pid, NULL, &regs);
+#endif
+			/*
+			 * if perror here says 'no such process' and the
+			 * process exists still.. is because there's a missing call
+			 * to 'wait'. and the process is not yet available to accept
+			 * more ptrace queries.
+			 */
+			if (ret != 0) {
+				r_sys_perror ("PTRACE_GETREGS");
+				return false;
+			}
+			size = R_MIN (sizeof (regs), size);
+			memcpy (buf, &regs, size);
+			// r_print_hexdump (NULL, 0, buf, size, 16, 16, 0);
+			return size;
+		}
+		break;
 	}
 	return false;
 }
 
-int linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
+bool linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 	int pid = dbg->tid;
 
 	if (type == R_REG_TYPE_DRX) {
@@ -1264,7 +1293,7 @@ int linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 			}
 			if (r_debug_ptrace (dbg, PTRACE_POKEUSER, pid,
 					(void *)r_offsetof (struct user, u_debugreg[i]), (r_ptrace_data_t)val[i])) {
-				eprintf ("ptrace error for dr %d\n", i);
+				R_LOG_ERROR ("ptrace failed for dr %d", i);
 				r_sys_perror ("ptrace POKEUSER");
 			}
 		}
@@ -1274,7 +1303,7 @@ int linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 #endif
 	}
 	if (type == R_REG_TYPE_GPR) {
-#if __arm64__ || __aarch64__ || __s390x__
+#if __arm64__ || __aarch64__ || __s390x__ || __riscv
 		struct iovec io = {
 			.iov_base = (void*)buf,
 			.iov_len = sizeof (R_DEBUG_REG_T)

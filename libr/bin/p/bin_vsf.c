@@ -6,9 +6,11 @@
 #include "vsf/vsf_specs.h"
 
 static const char VICE_MAGIC[] = "VICE Snapshot File\032";
+static const char VICE_VERSION[] = "VICE Version\032";
 #define VICE_MAGIC_LEN sizeof (VICE_MAGIC) - 1
 static const char VICE_MAINCPU[] = "MAINCPU";
 static const char VICE_C64MEM[] = "C64MEM";
+static const char VICE_C64MEMHACKS[] = "C64MEMHACKS";
 static const char VICE_C64ROM[] = "C64ROM";
 static const char VICE_C128MEM[] = "C128MEM";
 static const char VICE_C128ROM[] = "C128ROM";
@@ -19,18 +21,18 @@ static const struct {
 	const int offset_mem;
 	const int ram_size;
 } _machines[] = {
-	{"C64", "Commodore 64", r_offsetof(struct vsf_c64mem, ram), 64 * 1024},
-	{"C128", "Commodore 128", r_offsetof(struct vsf_c128mem, ram), 128 * 1024},
+	{ "C64", "Commodore 64", r_offsetof(struct vsf_c64mem, ram), 64 * 1024},
+	{ "C128", "Commodore 128", r_offsetof(struct vsf_c128mem, ram), 128 * 1024},
 };
-static const int MACHINES_MAX = sizeof(_machines) / sizeof(_machines[0]);
+static const int MACHINES_MAX = sizeof (_machines) / sizeof (_machines[0]);
 
 static Sdb* get_sdb(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, NULL);
-	struct r_bin_vsf_obj* bin = (struct r_bin_vsf_obj*) bf->o->bin_obj;
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
+	struct r_bin_vsf_obj* bin = (struct r_bin_vsf_obj*) bf->bo->bin_obj;
 	return bin->kv;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 magic[VICE_MAGIC_LEN];
 	if (r_buf_read_at (b, 0, magic, VICE_MAGIC_LEN) == VICE_MAGIC_LEN) {
 		return !memcmp (magic, VICE_MAGIC, VICE_MAGIC_LEN);
@@ -39,15 +41,15 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 }
 
 // XXX b vs bf->buf
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb) {
+static bool load(RBinFile *bf, RBuffer *b, ut64 loadaddr) {
 	ut64 offset = 0;
 	struct r_bin_vsf_obj* res = NULL;
-	if (check_buffer (bf, bf->buf)) {
+	if (check (bf, bf->buf)) {
 		int i = 0;
 		if (!(res = R_NEW0 (struct r_bin_vsf_obj))) {
 		    return false;
 		}
-		offset = r_offsetof(struct vsf_hdr, machine);
+		offset = r_offsetof (struct vsf_hdr, machine);
 		if (offset > bf->size) {
 			free (res);
 			return false;
@@ -63,29 +65,35 @@ static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr,
 				free (res);
 				return false;
 			}
-			if (!strncmp (machine, _machines[i].name, strlen (_machines[i].name))) {
+			if (r_str_startswith (machine, _machines[i].name)) {
 				res->machine_idx = i;
 				break;
 			}
 		}
 		if (i >= MACHINES_MAX) {
-			eprintf ("Unsupported machine type\n");
+			R_LOG_WARN ("Unsupported machine type");
 			free (res);
 			return false;
 		}
 		// read all VSF modules
 		offset = sizeof (struct vsf_hdr);
+		ut8 vice_version[sizeof (VICE_VERSION)];
+		if (r_buf_read_at (bf->buf, offset, vice_version, sizeof (VICE_VERSION)) == sizeof (VICE_VERSION)) {
+			if (!memcmp (vice_version, VICE_VERSION, sizeof (VICE_VERSION) - 1)) {
+				offset += sizeof (VICE_VERSION) + 7;
+			}
+		}
 		ut64 sz = r_buf_size (bf->buf);
 		while (offset < sz) {
 			struct vsf_module module;
 			int read = r_buf_fread_at (bf->buf, offset, (ut8*)&module, "16ccci", 1);
-			if (read != sizeof(module)) {
+			if (read != sizeof (module)) {
 				R_LOG_ERROR ("Truncated Header");
 				free (res);
 				return false;
 			}
 #define CMP_MODULE(x) memcmp (module.module_name, x, sizeof (x) - 1)
-			if (!CMP_MODULE (VICE_C64MEM) && !module.major) {
+			if (!CMP_MODULE (VICE_C64MEM) && CMP_MODULE (VICE_C64MEMHACKS) && !module.major) {
 				res->mem = offset + read;
 			} else if (!CMP_MODULE (VICE_C64ROM) && !module.major) {
 				res->rom = offset + read;
@@ -96,26 +104,30 @@ static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr,
 			} else if (!CMP_MODULE (VICE_MAINCPU) && module.major == 1) {
 				res->maincpu = R_NEW (struct vsf_maincpu);
 				r_buf_read_at (bf->buf, offset + read, (ut8 *)res->maincpu, sizeof (*res->maincpu));
+			} else {
+				char safe_name[sizeof (module.module_name) + 1];
+				r_str_ncpy (safe_name, module.module_name, sizeof (safe_name));
+				R_LOG_TODO ("Ignoring unsupported module: %s", safe_name);
 			}
 #undef CMP_MODULE
 			offset += module.length;
 			if (module.length == 0) {
-				eprintf ("Malformed VSF module with length 0\n");
+				R_LOG_ERROR ("Malformed VSF module with length 0");
 				break;
 			}
 		}
 	}
 	if (res) {
 		res->kv = sdb_new0 ();
-		sdb_ns_set (sdb, "info", res->kv);
+		sdb_ns_set (bf->sdb, "info", res->kv);
 	}
-	*bin_obj = res;
+	bf->bo->bin_obj = res;
 	return true;
 }
 
 static RList *mem(RBinFile *bf) {
 	// FIXME: What does Mem do? Should I remove it ?
-	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->o->bin_obj;
+	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->bo->bin_obj;
 	if (!vsf_obj) {
 		return NULL;
 	}
@@ -138,7 +150,7 @@ static RList *mem(RBinFile *bf) {
 }
 
 static RList* sections(RBinFile* bf) {
-	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->o->bin_obj;
+	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->bo->bin_obj;
 	if (!vsf_obj) {
 		return NULL;
 	}
@@ -295,7 +307,7 @@ static RList* sections(RBinFile* bf) {
 
 static RBinInfo* info(RBinFile *bf) {
 
-	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->o->bin_obj;
+	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->bo->bin_obj;
 	if (!vsf_obj) {
 		return NULL;
 	}
@@ -304,9 +316,9 @@ static RBinInfo* info(RBinFile *bf) {
 
 	RBinInfo *ret = NULL;
 	struct vsf_hdr hdr;
-	memset (&hdr, 0, sizeof(hdr));
-	int read = r_buf_read_at (bf->buf, 0, (ut8*)&hdr, sizeof(hdr));
-	if (read != sizeof(hdr)) {
+	memset (&hdr, 0, sizeof (hdr));
+	int read = r_buf_read_at (bf->buf, 0, (ut8*)&hdr, sizeof (hdr));
+	if (read != sizeof (hdr)) {
 		R_LOG_ERROR ("Truncated Header");
 		return NULL;
 	}
@@ -343,136 +355,136 @@ static RList* symbols(RBinFile *bf) {
 		const ut16 address;
 		const char* symbol_name;
 	} _symbols[] = {
-//		{0xfffa, "NMI_VECTOR_LSB"},
-//		{0xfffb, "NMI_VECTOR_MSB"},
-//		{0xfffe, "IRQ_VECTOR_LSB"},
-//		{0xffff, "IRQ_VECTOR_MSB"},
+//		{0xfffa, "NMI_VECTOR_LSB" },
+//		{0xfffb, "NMI_VECTOR_MSB" },
+//		{0xfffe, "IRQ_VECTOR_LSB" },
+//		{0xffff, "IRQ_VECTOR_MSB" },
 
 		// Defines taken from c64.inc from cc65
 		// I/O: VIC
-		{0xd000, "VIC_SPR0_X"},
-		{0xd001, "VIC_SPR0_Y"},
-		{0xd002, "VIC_SPR1_X"},
-		{0xd003, "VIC_SPR1_Y"},
-		{0xd004, "VIC_SPR2_X"},
-		{0xd005, "VIC_SPR2_Y"},
-		{0xd006, "VIC_SPR3_X"},
-		{0xd007, "VIC_SPR3_Y"},
-		{0xd008, "VIC_SPR4_X"},
-		{0xd009, "VIC_SPR4_Y"},
-		{0xd00a, "VIC_SPR5_X"},
-		{0xd00b, "VIC_SPR5_Y"},
-		{0xd00c, "VIC_SPR6_X"},
-		{0xd00d, "VIC_SPR6_Y"},
-		{0xd00e, "VIC_SPR7_X"},
-		{0xd00f, "VIC_SPR7_Y"},
-		{0xd010, "VIC_SPR_HI_X"},
-		{0xd015, "VIC_SPR_ENA"},
-		{0xd017, "VIC_SPR_EXP_Y"},
-		{0xd01d, "VIC_SPR_EXP_X"},
-		{0xd01c, "VIC_SPR_MCOLOR"},
-		{0xd01b, "VIC_SPR_BG_PRIO"},
+		{0xd000, "VIC_SPR0_X" },
+		{0xd001, "VIC_SPR0_Y" },
+		{0xd002, "VIC_SPR1_X" },
+		{0xd003, "VIC_SPR1_Y" },
+		{0xd004, "VIC_SPR2_X" },
+		{0xd005, "VIC_SPR2_Y" },
+		{0xd006, "VIC_SPR3_X" },
+		{0xd007, "VIC_SPR3_Y" },
+		{0xd008, "VIC_SPR4_X" },
+		{0xd009, "VIC_SPR4_Y" },
+		{0xd00a, "VIC_SPR5_X" },
+		{0xd00b, "VIC_SPR5_Y" },
+		{0xd00c, "VIC_SPR6_X" },
+		{0xd00d, "VIC_SPR6_Y" },
+		{0xd00e, "VIC_SPR7_X" },
+		{0xd00f, "VIC_SPR7_Y" },
+		{0xd010, "VIC_SPR_HI_X" },
+		{0xd015, "VIC_SPR_ENA" },
+		{0xd017, "VIC_SPR_EXP_Y" },
+		{0xd01d, "VIC_SPR_EXP_X" },
+		{0xd01c, "VIC_SPR_MCOLOR" },
+		{0xd01b, "VIC_SPR_BG_PRIO" },
 
-		{0xd025, "VIC_SPR_MCOLOR0"},
-		{0xd026, "VIC_SPR_MCOLOR1"},
+		{0xd025, "VIC_SPR_MCOLOR0" },
+		{0xd026, "VIC_SPR_MCOLOR1" },
 
-		{0xd027, "VIC_SPR0_COLOR"},
-		{0xd028, "VIC_SPR1_COLOR"},
-		{0xd029, "VIC_SPR2_COLOR"},
-		{0xd02A, "VIC_SPR3_COLOR"},
-		{0xd02B, "VIC_SPR4_COLOR"},
-		{0xd02C, "VIC_SPR5_COLOR"},
-		{0xd02D, "VIC_SPR6_COLOR"},
-		{0xd02E, "VIC_SPR7_COLOR"},
+		{0xd027, "VIC_SPR0_COLOR" },
+		{0xd028, "VIC_SPR1_COLOR" },
+		{0xd029, "VIC_SPR2_COLOR" },
+		{0xd02A, "VIC_SPR3_COLOR" },
+		{0xd02B, "VIC_SPR4_COLOR" },
+		{0xd02C, "VIC_SPR5_COLOR" },
+		{0xd02D, "VIC_SPR6_COLOR" },
+		{0xd02E, "VIC_SPR7_COLOR" },
 
-		{0xd011, "VIC_CTRL1"},
-		{0xd016, "VIC_CTRL2"},
+		{0xd011, "VIC_CTRL1" },
+		{0xd016, "VIC_CTRL2" },
 
-		{0xd012, "VIC_HLINE"},
+		{0xd012, "VIC_HLINE" },
 
-		{0xd013, "VIC_LPEN_X"},
-		{0xd014, "VIC_LPEN_Y"},
+		{0xd013, "VIC_LPEN_X" },
+		{0xd014, "VIC_LPEN_Y" },
 
-		{0xd018, "VIC_VIDEO_ADR"},
+		{0xd018, "VIC_VIDEO_ADR" },
 
-		{0xd019, "VIC_IRR"},
-		{0xd01a, "VIC_IMR"},
+		{0xd019, "VIC_IRR" },
+		{0xd01a, "VIC_IMR" },
 
-		{0xd020, "VIC_BORDERCOLOR"},
-		{0xd021, "VIC_BG_COLOR0"},
-		{0xd022, "VIC_BG_COLOR1"},
-		{0xd023, "VIC_BG_COLOR2"},
-		{0xd024, "VIC_BG_COLOR3"},
+		{0xd020, "VIC_BORDERCOLOR" },
+		{0xd021, "VIC_BG_COLOR0" },
+		{0xd022, "VIC_BG_COLOR1" },
+		{0xd023, "VIC_BG_COLOR2" },
+		{0xd024, "VIC_BG_COLOR3" },
 
 		// 128 stuff
-		{0xd02F, "VIC_KBD_128"},
-		{0xd030, "VIC_CLK_128"},
+		{0xd02F, "VIC_KBD_128" },
+		{0xd030, "VIC_CLK_128" },
 
 		// I/O: SID
-		{0xD400, "SID_S1Lo"},
-		{0xD401, "SID_S1Hi"},
-		{0xD402, "SID_PB1Lo"},
-		{0xD403, "SID_PB1Hi"},
-		{0xD404, "SID_Ctl1"},
-		{0xD405, "SID_AD1"},
-		{0xD406, "SID_SUR1"},
+		{0xD400, "SID_S1Lo" },
+		{0xD401, "SID_S1Hi" },
+		{0xD402, "SID_PB1Lo" },
+		{0xD403, "SID_PB1Hi" },
+		{0xD404, "SID_Ctl1" },
+		{0xD405, "SID_AD1" },
+		{0xD406, "SID_SUR1" },
 
-		{0xD407, "SID_S2Lo"},
-		{0xD408, "SID_S2Hi"},
-		{0xD409, "SID_PB2Lo"},
-		{0xD40A, "SID_PB2Hi"},
-		{0xD40B, "SID_Ctl2"},
-		{0xD40C, "SID_AD2"},
-		{0xD40D, "SID_SUR2"},
+		{0xD407, "SID_S2Lo" },
+		{0xD408, "SID_S2Hi" },
+		{0xD409, "SID_PB2Lo" },
+		{0xD40A, "SID_PB2Hi" },
+		{0xD40B, "SID_Ctl2" },
+		{0xD40C, "SID_AD2" },
+		{0xD40D, "SID_SUR2" },
 
-		{0xD40E, "SID_S3Lo"},
-		{0xD40F, "SID_S3Hi"},
-		{0xD410, "SID_PB3Lo"},
-		{0xD411, "SID_PB3Hi"},
-		{0xD412, "SID_Ctl3"},
-		{0xD413, "SID_AD3"},
-		{0xD414, "SID_SUR3"},
+		{0xD40E, "SID_S3Lo" },
+		{0xD40F, "SID_S3Hi" },
+		{0xD410, "SID_PB3Lo" },
+		{0xD411, "SID_PB3Hi" },
+		{0xD412, "SID_Ctl3" },
+		{0xD413, "SID_AD3" },
+		{0xD414, "SID_SUR3" },
 
-		{0xD415, "SID_FltLo"},
-		{0xD416, "SID_FltHi"},
-		{0xD417, "SID_FltCtl"},
-		{0xD418, "SID_Amp"},
-		{0xD419, "SID_ADConv1"},
-		{0xD41A, "SID_ADConv2"},
-		{0xD41B, "SID_Noise"},
-		{0xD41C, "SID_Read3"},
+		{0xD415, "SID_FltLo" },
+		{0xD416, "SID_FltHi" },
+		{0xD417, "SID_FltCtl" },
+		{0xD418, "SID_Amp" },
+		{0xD419, "SID_ADConv1" },
+		{0xD41A, "SID_ADConv2" },
+		{0xD41B, "SID_Noise" },
+		{0xD41C, "SID_Read3" },
 
 		// I/O: VDC (128 only)
-		{0xd600, "VDC_INDEX"},
-		{0xd601, "VDC_DATA"},
+		{0xd600, "VDC_INDEX" },
+		{0xd601, "VDC_DATA" },
 
 		// I/O: CIAs
-		{0xDC00, "CIA1_PRA"},
-		{0xDC01, "CIA1_PRB"},
-		{0xDC02, "CIA1_DDRA"},
-		{0xDC03, "CIA1_DDRB"},
-		{0xDC08, "CIA1_TOD10"},
-		{0xDC09, "CIA1_TODSEC"},
-		{0xDC0A, "CIA1_TODMIN"},
-		{0xDC0B, "CIA1_TODHR"},
-		{0xDC0D, "CIA1_ICR"},
-		{0xDC0E, "CIA1_CRA"},
-		{0xDC0F, "CIA1_CRB"},
+		{0xDC00, "CIA1_PRA" },
+		{0xDC01, "CIA1_PRB" },
+		{0xDC02, "CIA1_DDRA" },
+		{0xDC03, "CIA1_DDRB" },
+		{0xDC08, "CIA1_TOD10" },
+		{0xDC09, "CIA1_TODSEC" },
+		{0xDC0A, "CIA1_TODMIN" },
+		{0xDC0B, "CIA1_TODHR" },
+		{0xDC0D, "CIA1_ICR" },
+		{0xDC0E, "CIA1_CRA" },
+		{0xDC0F, "CIA1_CRB" },
 
-		{0xDD00, "CIA2_PRA"},
-		{0xDD01, "CIA2_PRB"},
-		{0xDD02, "CIA2_DDRA"},
-		{0xDD03, "CIA2_DDRB"},
-		{0xDD08, "CIA2_TOD10"},
-		{0xDD09, "CIA2_TODSEC"},
-		{0xDD0A, "CIA2_TODMIN"},
-		{0xDD0B, "CIA2_TODHR"},
-		{0xDD0D, "CIA2_ICR"},
-		{0xDD0E, "CIA2_CRA"},
-		{0xDD0F, "CIA2_CRB"},
+		{0xDD00, "CIA2_PRA" },
+		{0xDD01, "CIA2_PRB" },
+		{0xDD02, "CIA2_DDRA" },
+		{0xDD03, "CIA2_DDRB" },
+		{0xDD08, "CIA2_TOD10" },
+		{0xDD09, "CIA2_TODSEC" },
+		{0xDD0A, "CIA2_TODMIN" },
+		{0xDD0B, "CIA2_TODHR" },
+		{0xDD0D, "CIA2_ICR" },
+		{0xDD0E, "CIA2_CRA" },
+		{0xDD0F, "CIA2_CRB" },
 	};
-	static const int SYMBOLS_MAX = sizeof(_symbols) / sizeof(_symbols[0]);
-	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->o->bin_obj;
+	static const int SYMBOLS_MAX = sizeof (_symbols) / sizeof (_symbols[0]);
+	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->bo->bin_obj;
 	if (!vsf_obj) {
 		return NULL;
 	}
@@ -494,7 +506,8 @@ static RList* symbols(RBinFile *bf) {
 		if (!ptr->name) {
 			ptr->name = calloc(1, R_BIN_SIZEOF_STRINGS);
 		}
-		strncpy (ptr->name, _symbols[i].symbol_name, R_BIN_SIZEOF_STRINGS);
+		char *name = r_str_ndup (_symbols[i].symbol_name, R_BIN_SIZEOF_STRINGS);
+		ptr->name = r_bin_name_new_from (name);
 		ptr->vaddr = _symbols[i].address;
 		ptr->size = 2;
 		ptr->paddr = vsf_obj->mem + offset + _symbols[i].address;
@@ -506,13 +519,13 @@ static RList* symbols(RBinFile *bf) {
 }
 
 static void destroy(RBinFile *bf) {
-	struct r_bin_vsf_obj *obj = (struct r_bin_vsf_obj *)bf->o->bin_obj;
+	struct r_bin_vsf_obj *obj = (struct r_bin_vsf_obj *)bf->bo->bin_obj;
 	free (obj->maincpu);
 	free (obj);
 }
 
 static RList* entries(RBinFile *bf) {
-	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->o->bin_obj;
+	struct r_bin_vsf_obj* vsf_obj = (struct r_bin_vsf_obj*) bf->bo->bin_obj;
 	if (!vsf_obj) {
 		return NULL;
 	}
@@ -543,12 +556,15 @@ static RList* entries(RBinFile *bf) {
 }
 
 RBinPlugin r_bin_plugin_vsf = {
-	.name = "vsf",
-	.desc = "VICE Snapshot File",
-	.license = "LGPL3",
+	.meta = {
+		.name = "vsf",
+		.author = "riq",
+		.desc = "VICE Snapshot File",
+		.license = "LGPL-3.0-only",
+	},
 	.get_sdb = &get_sdb,
-	.load_buffer = &load_buffer,
-	.check_buffer = &check_buffer,
+	.load = &load,
+	.check = &check,
 	.entries = &entries,
 	.sections = sections,
 	.symbols = &symbols,

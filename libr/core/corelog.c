@@ -1,10 +1,11 @@
-/* radare - LGPL - Copyright 2009-2020 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
 #include <r_core.h>
 
 R_API int r_core_log_list(RCore *core, int n, int nth, char fmt) {
+	R_RETURN_VAL_IF_FAIL (core && core->log, 0);
 	int printed = 0;
-	int count = 0, i, idx, id = core->log->first;
+	int count = 0, idx, id = core->log->first;
 	RStrpool *sp = core->log->sp;
 	char *str = sp->str;
 	PJ *pj = NULL;
@@ -13,7 +14,7 @@ R_API int r_core_log_list(RCore *core, int n, int nth, char fmt) {
 		pj = r_core_pj_new (core);
 		pj_a (pj);
 	}
-	for (i = idx = 0; str && *str; i++, id++) {
+	for (idx = 0; str && *str; id++) {
 		if ((n && n <= id) || !n) {
 			switch (fmt) {
 			case 'j':
@@ -22,11 +23,27 @@ R_API int r_core_log_list(RCore *core, int n, int nth, char fmt) {
 				pj_ks (pj, "msg", str);
 				pj_end (pj);
 				break;
+			case 'J':
+				pj_o (pj);
+				pj_kn (pj, "id", id);
+				if (*str == '{') {
+					pj_k (pj, "obj");
+					pj_raw (pj, str);
+				} else {
+					pj_ks (pj, "msg", str);
+				}
+				pj_end (pj);
+				break;
 			case 't':
 				r_cons_println (str);
 				break;
 			case '*':
-				r_cons_printf ("\"T %s\"\n", str);
+				{
+					char *b = r_base64_encode_dyn ((const ut8*)str, -1);
+					r_cons_printf ("T base64:%s\n", b);
+					free (b);
+				}
+				// r_cons_printf ("\"T %s\"\n", str);
 				break;
 			default:
 				r_cons_printf ("%d %s\n", id, str);
@@ -55,25 +72,26 @@ R_API int r_core_log_list(RCore *core, int n, int nth, char fmt) {
 
 R_API RCoreLog *r_core_log_new(void) {
 	RCoreLog *log = R_NEW0 (RCoreLog);
-	if (!log) {
-		return NULL;
-	}
 	r_core_log_init (log);
 	return log;
 }
 
 R_API void r_core_log_init(RCoreLog *log) {
+	R_RETURN_IF_FAIL (log);
 	log->first = 1;
 	log->last = 1;
-	log->sp = r_strpool_new (0);
+	log->sp = r_strpool_new ();
 }
 
 R_API void r_core_log_free(RCoreLog *log) {
-	r_strpool_free (log->sp);
-	free (log);
+	if (log) {
+		r_log_fini ();
+		r_strpool_free (log->sp);
+		free (log);
+	}
 }
 
-R_API bool r_core_log_run(RCore *core, const char *_buf, RCoreLogCallback runLine) {
+R_API bool r_core_log_run(RCore *core, const char *_buf, RCoreLogCallback cb_runline) {
 	char *obuf = strdup (_buf);
 	char *buf = obuf;
 	while (buf) {
@@ -83,7 +101,7 @@ R_API bool r_core_log_run(RCore *core, const char *_buf, RCoreLogCallback runLin
 		}
 		char *sp = strchr (buf, ' ');
 		if (sp) {
-			runLine (core, atoi (buf), sp + 1);
+			cb_runline (core, atoi (buf), sp + 1);
 		}
 		if (nl) {
 			buf = nl + 1;
@@ -96,30 +114,34 @@ R_API bool r_core_log_run(RCore *core, const char *_buf, RCoreLogCallback runLin
 }
 
 R_API char *r_core_log_get(RCore *core, int index) {
+	R_RETURN_VAL_IF_FAIL (core && core->config, NULL);
 	const char *host = r_config_get (core->config, "http.sync");
-	if (host && *host) {
+	if (R_STR_ISNOTEMPTY (host)) {
 		char *url = index > 0
 			? r_str_newf ("%s/cmd/T%%20%d", host, index)
 			: r_str_newf ("%s/cmd/T", host);
-		char *res = r_socket_http_get (url, NULL, NULL);
+		char *res = r_socket_http_get (url, NULL, NULL, NULL);
 		free (url);
 		return res? res: strdup ("");
 	}
 	return NULL;
 }
 
-static R_TH_LOCAL bool inProcess = false;
 R_API void r_core_log_add(RCore *core, const char *msg) {
+	// NOTE we cant use r_return here because it can create a recursive loop
+	if (!core || !core->log) {
+		return;
+	}
 	r_strpool_append (core->log->sp, msg);
 	core->log->last++;
-	if (core->cmdlog && *core->cmdlog) {
-		if (inProcess) {
+	if (R_STR_ISNOTEMPTY (core->cmdlog)) {
+		if (core->in_log_process) {
 			// avoid infinite recursive calls
 			return;
 		}
-		inProcess = true;
+		core->in_log_process = true;
 		r_core_cmd0 (core, core->cmdlog);
-		inProcess = false;
+		core->in_log_process = false;
 	}
 }
 
@@ -140,8 +162,7 @@ R_API void r_core_log_del(RCore *core, int n) {
 		}
 		core->log->first += idx + 1;
 		char *msg = r_strpool_get_i (core->log->sp, idx);
-		// if (idx >= core->log->last) {
-		if (!msg || !*msg) {
+		if (R_STR_ISEMPTY (msg)) {
 			core->log->first = core->log->last;
 			r_strpool_empty (core->log->sp);
 		} else {

@@ -11,29 +11,30 @@ typedef struct gen_hdr {
 	ut8 RegionRomSize; //Low 4 bits RomSize, Top 4 bits Region
 } SMS_Header;
 
-static R_TH_LOCAL ut32 cb = 0;
-
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static ut32 get_buffer(RBinFile *bf, RBuffer *b) {
 	ut32 *off, offs[] = { 0x2000, 0x4000, 0x8000, 0x9000, 0 };
 	ut8 signature[8];
 	for (off = (ut32*)&offs; *off; off++) {
 		r_buf_read_at (b, *off - 16, (ut8*)&signature, 8);
 		if (!strncmp ((const char *)signature, "TMR SEGA", 8)) {
-			cb = *off - 16;
-			return true; // int)(*off - 16);
+			return *off - 16;
 		}
 		if (*off == 0x8000) {
 			if (!strncmp ((const char *)signature, "SDSC", 4)) {
-				cb = *off - 16;
-				return true; // (int)(*off - 16);
+				return *off - 16;
 			}
 		}
 	}
-	return false;
+	return UT32_MAX;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	return check_buffer (bf, buf);
+static bool check(RBinFile *bf, RBuffer *b) {
+	ut32 res = get_buffer (bf, b);
+	return res != UT32_MAX;
+}
+
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	return check (bf, buf);
 }
 
 static RBinInfo *info(RBinFile *bf) {
@@ -49,7 +50,8 @@ static RBinInfo *info(RBinFile *bf) {
 	ret->arch = strdup ("z80");
 	ret->has_va = 1;
 	ret->bits = 8;
-	if (!check_buffer (bf, bf->buf)) {
+	ut32 cb = get_buffer (bf, bf->buf);
+	if (cb == UT32_MAX) {
 		R_LOG_ERROR ("Cannot find magic SEGA copyright");
 		free (ret);
 		return NULL;
@@ -100,11 +102,14 @@ static RBinInfo *info(RBinFile *bf) {
 }
 
 RBinPlugin r_bin_plugin_sms = {
-	.name = "sms",
-	.desc = "SEGA MasterSystem/GameGear",
-	.license = "LGPL3",
-	.load_buffer = &load_buffer,
-	.check_buffer = &check_buffer,
+	.meta = {
+		.name = "sms",
+		.author = "pancake",
+		.desc = "SEGA MasterSystem/GameGear",
+		.license = "LGPL-3.0-only",
+	},
+	.load = &load,
+	.check = &check,
 	.info = &info,
 	.minstrlen = 10,
 	.strfilter = 'U'

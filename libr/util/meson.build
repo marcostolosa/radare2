@@ -1,33 +1,39 @@
 subdir('d')
 
 r_util_sources = [
-  'ascii_table.c',
+  'chartable.c',
   'assert.c',
-  'arch.c',
+  'bloom.c',
   'w32.c',
+  'rlz4.c',
   'w32dw.c',
   'alloc.c',
+  'rxml.c',
+  'rvc.c',
+  'rvc_git.c',
+  'rvc_rvc.c',
   'charset.c',
   'donut.c',
   'token.c',
   'table.c',
   'bplist.c',
+  'rstr.c',
   'sstext.c',
   'getopt.c',
   'print_code.c',
+  'base32.c',
+  'base36.c',
   'base85.c',
   'base91.c',
   'bdiff.c',
   'bitmap.c',
+  'xdg.c',
   'buf.c',
-  'cache.c',
-  'calc.c',
   'chmod.c',
   'debruijn.c',
   'udiff.c',
   'event.c',
   'file.c',
-  'flist.c',
   'graph.c',
   'graph_drawable.c',
   'hex.c',
@@ -37,10 +43,13 @@ r_util_sources = [
   'lib.c',
   'list.c',
   'log.c',
+  'bscanf.c',
+  'rprintf.c',
   'mem.c',
   'name.c',
   'new_rbtree.c',
   'format.c',
+  'format2.c',
   'pie.c',
   'seven.c',
   'print.c',
@@ -49,7 +58,7 @@ r_util_sources = [
   'qrcode.c',
   'queue.c',
   'asn1.c',
-  'astr.c',
+  'asn1_str.c',
   'axml.c',
   'pkcs7.c',
   'x509.c',
@@ -68,6 +77,7 @@ r_util_sources = [
   'str_trim.c',
   'strbuf.c',
   'strpool.c',
+  'ustrpool.c',
   'sys.c',
   'sys_sh.c',
   'syscmd.c',
@@ -83,11 +93,11 @@ r_util_sources = [
   'ubase64.c',
   'uleb128.c',
   'unum.c',
+  'math.c',
   'utf8.c',
   'utf16.c',
   'utf32.c',
   'vector.c',
-  'skyline.c',
   'sys_w32.c',
   'zip.c',
   'protobuf.c',
@@ -100,8 +110,12 @@ if get_option('sdb_cgen')
   r_util_sources += r_util_d_sources
 endif
 
-r_util_deps = [ldl, mth, spp_dep, pth, utl, sdb_dep, lz4_dep, zlib_dep, platform_deps]
+lz4_dep = dependency('liblz4', required: false)
+if not get_option('use_sys_lz4')
+  library_cflags += ['-DUSE_RLZ4']
+endif
 
+r_util_deps = [ldl, mth, spp_dep, pth, utl, sdb_dep, lz4_dep, zlib_dep, platform_deps]
 
 if host_machine.system().startswith('freebsd') or host_machine.system().startswith('netbsd') or host_machine.system().startswith('haiku')
   # backtrace_symbols_fd requires -lexecinfo
@@ -114,6 +128,7 @@ if use_sys_openssl
 else
   r_util_sources += ['big.c']
 endif
+
 
 r_util = library('r_util', r_util_sources,
   include_directories: platform_inc,

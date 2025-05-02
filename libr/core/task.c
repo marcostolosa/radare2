@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2014-2022 - pancake, thestr4ng3r */
+/* radare - LGPL - Copyright 2014-2025 - pancake, thestr4ng3r */
 
 #include <r_core.h>
 
@@ -139,15 +139,14 @@ R_API int r_core_task_running_tasks_count(RCoreTaskScheduler *scheduler) {
 
 static void task_join(RCoreTask *task) {
 	RThreadSemaphore *sem = task->running_sem;
-	if (!sem) {
-		return;
+	if (sem) {
+		r_th_sem_wait (sem);
+		r_th_sem_post (sem);
 	}
-
-	r_th_sem_wait (sem);
-	r_th_sem_post (sem);
 }
 
 R_API void r_core_task_join(RCoreTaskScheduler *scheduler, RCoreTask *current, int id) {
+//	return;
 	if (current && id == current->id) {
 		return;
 	}
@@ -167,7 +166,7 @@ R_API void r_core_task_join(RCoreTaskScheduler *scheduler, RCoreTask *current, i
 	} else {
 		TASK_SIGSET_T old_sigset;
 		tasks_lock_enter (scheduler, &old_sigset);
-		RList *tasks = r_list_clone (scheduler->tasks);
+		RList *tasks = r_list_clone (scheduler->tasks, NULL);
 		RListIter *iter;
 		RCoreTask *task;
 		r_list_foreach (tasks, iter, task) {
@@ -219,9 +218,6 @@ static void task_free(RCoreTask *task) {
 
 R_API RCoreTask *r_core_task_new(RCore *core, bool create_cons, const char *cmd, RCoreTaskCallback cb, void *user) {
 	RCoreTask *task = R_NEW0 (RCoreTask);
-	if (!task) {
-		goto hell;
-	}
 	task->thread = NULL;
 	task->cmd = cmd ? strdup (cmd) : NULL;
 	task->cmd_log = false;
@@ -235,11 +231,11 @@ R_API RCoreTask *r_core_task_new(RCore *core, bool create_cons, const char *cmd,
 	}
 
 	if (create_cons) {
-		task->cons_context = r_cons_context_new (r_cons_singleton ()->context);
+		task->cons_context = r_cons_context_clone (core->cons->context);
 		if (!task->cons_context) {
 			goto hell;
 		}
-		task->cons_context->cmd_depth = core->max_cmd_depth;
+		core->cur_cmd_depth = core->max_cmd_depth;
 	}
 
 	task->id = core->tasks.task_id_next++;
@@ -258,6 +254,7 @@ hell:
 }
 
 R_API void r_core_task_incref(RCoreTask *task) {
+	return;
 	if (!task) {
 		return;
 	}
@@ -268,6 +265,7 @@ R_API void r_core_task_incref(RCoreTask *task) {
 }
 
 R_API void r_core_task_decref(RCoreTask *task) {
+	return;
 	if (!task) {
 		return;
 	}
@@ -289,10 +287,12 @@ R_API void r_core_task_schedule(RCoreTask *current, RTaskState next_state) {
 	RCoreTaskScheduler *scheduler = &core->tasks;
 	bool stop = next_state != R_CORE_TASK_STATE_RUNNING;
 
+	R_CRITICAL_ENTER (core);
 	TASK_SIGSET_T old_sigset;
 	tasks_lock_enter (scheduler, &old_sigset);
 	if (scheduler->oneshot_running || (!stop && scheduler->tasks_running == 1 && scheduler->oneshots_enqueued == 0)) {
 		tasks_lock_leave (scheduler, &old_sigset);
+		R_CRITICAL_LEAVE (core);
 		return;
 	}
 
@@ -347,13 +347,16 @@ R_API void r_core_task_schedule(RCoreTask *current, RTaskState next_state) {
 			r_cons_context_reset ();
 		}
 	}
+	R_CRITICAL_LEAVE (core);
 }
 
 static void task_wakeup(RCoreTask *current) {
+	return;
 	if (!current) {
 		return;
 	}
 	RCore *core = current->core;
+	R_CRITICAL_ENTER (core);
 	RCoreTaskScheduler *scheduler = &core->tasks;
 
 	TASK_SIGSET_T old_sigset;
@@ -386,11 +389,14 @@ static void task_wakeup(RCoreTask *current) {
 
 	scheduler->current_task = current;
 
+	eprintf ("JAPUTA\n");
 	if (current->cons_context) {
+		// core->cons->context = current->cons_context;
 		r_cons_context_load (current->cons_context);
 	} else {
 		r_cons_context_reset ();
 	}
+	R_CRITICAL_LEAVE (core);
 }
 
 R_API void r_core_task_yield(RCoreTaskScheduler *scheduler) {
@@ -494,6 +500,7 @@ R_API void r_core_task_enqueue(RCoreTaskScheduler *scheduler, RCoreTask *task) {
 	}
 	r_list_append (scheduler->tasks, task);
 	task->thread = r_th_new (task_run_thread, task, 0);
+	r_th_start (task->thread);
 
 	tasks_lock_leave (scheduler, &old_sigset);
 }
@@ -523,7 +530,7 @@ R_API void r_core_task_enqueue_oneshot(RCoreTaskScheduler *scheduler, RCoreTaskO
 }
 
 R_API int r_core_task_run_sync(RCoreTaskScheduler *scheduler, RCoreTask *task) {
-	r_return_val_if_fail (scheduler && task, -1);
+	R_RETURN_VAL_IF_FAIL (scheduler && task, -1);
 	task->thread = NULL;
 	return task_run (task);
 }
@@ -549,19 +556,19 @@ R_API void r_core_task_sync_begin(RCoreTaskScheduler *scheduler) {
 
 /* end running stuff synchronously, initially started with r_core_task_sync_begin() */
 R_API void r_core_task_sync_end(RCoreTaskScheduler *scheduler) {
-	r_return_if_fail (scheduler);
+	R_RETURN_IF_FAIL (scheduler);
 	task_end (scheduler->main_task);
 }
 
 /* To be called from within a task.
  * Begin sleeping and schedule other tasks until r_core_task_sleep_end() is called. */
 R_API void r_core_task_sleep_begin(RCoreTask *task) {
-	r_return_if_fail (task);
+	R_RETURN_IF_FAIL (task);
 	r_core_task_schedule (task, R_CORE_TASK_STATE_SLEEPING);
 }
 
 R_API void r_core_task_sleep_end(RCoreTask *task) {
-	r_return_if_fail (task);
+	R_RETURN_IF_FAIL (task);
 	task_wakeup (task);
 }
 
@@ -587,7 +594,8 @@ R_API RCoreTask *r_core_task_self(RCoreTaskScheduler *scheduler) {
 	if (!scheduler) {
 		return NULL;
 	}
-	return scheduler->current_task ? scheduler->current_task : scheduler->main_task;
+	RCoreTask *res = scheduler->current_task ? scheduler->current_task : scheduler->main_task;
+	return res;
 }
 
 static RCoreTask *task_get(RCoreTaskScheduler *scheduler, int id) {

@@ -1,8 +1,6 @@
-/* radare - LGPL - Copyright 2022 - pancake */
+/* radare - LGPL - Copyright 2022-2024 - pancake */
 
-#include "r_lib.h"
-#include <stdio.h>
-#include <stdlib.h>
+#include <r_lib.h>
 #include "../io_memory.h"
 
 static bool __check(RIO *io, const char *pathname, bool many) {
@@ -22,7 +20,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 		int consumed;
 		if (data) {
 			ut32 osz = r_read_le32 (data + 8);
-			// create buffer 
+			// create buffer
 			ut8 *obuf = r_inflate_lz4 ((const ut8*)data + 0xc, (uint32_t) sz - 0xc, &consumed, &outsize);
 			if (obuf) {
 				if (osz != outsize) {
@@ -30,7 +28,8 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 				}
 				mal->buf = obuf;
 				mal->size = osz;
-				return r_io_desc_new (io, &r_io_plugin_xalz, diskpath, R_PERM_RW | rw, mode, mal);
+				return r_io_desc_new (io, &r_io_plugin_xalz, diskpath,
+					R_PERM_RW | (rw & R_PERM_X), mode, mal);
 			}
 			free (data);
 		}
@@ -40,10 +39,13 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 }
 
 RIOPlugin r_io_plugin_xalz = {
-	.name = "xalz",
-	.desc = "XAmarin LZ4 assemblies",
+	.meta = {
+		.name = "xalz",
+		.desc = "XAmarin LZ4 assemblies",
+		.author = "pancake",
+		.license = "MIT",
+	},
 	.uris = "xalz://",
-	.license = "MIT",
 	.open = __open,
 	.close = io_memory_close,
 	.read = io_memory_read,

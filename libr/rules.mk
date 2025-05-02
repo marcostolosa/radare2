@@ -13,7 +13,6 @@ LINK+=-g
 endif
 
 LIBR:=$(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-# /libr
 
 ALL?=
 CFLAGS:=-I$(LIBR) -I$(LIBR)/include $(CFLAGS)
@@ -39,6 +38,7 @@ endif
 LINK+=-Wl,-rpath,"${LIBDIR}"
 endif
 
+ifeq (,$(findstring emcc,$(CC)))
 ifeq (${OSTYPE},gnulinux)
 ifeq (${HAVE_LIBVERSION},1)
 LIBNAME=${LDFLAGS_SONAME}${LIBSO}.${LIBVERSION}
@@ -48,12 +48,13 @@ endif
 else
 ifeq (${OSTYPE},darwin)
 ifeq (${HAVE_LIBVERSION},1)
-LIBNAME=${LDFLAGS_SONAME}${LIB}.${LIBVERSION}.${EXT_SO}
+LIBNAME=${LDFLAGS_SONAME}${LIB}.${ABIVERSION}.${EXT_SO}
 else
 LIBNAME=${LDFLAGS_SONAME}${LIB}.${EXT_SO}
 endif
 else
 LIBNAME=${LDFLAGS_SONAME}${LIBSO}
+endif
 endif
 endif
 
@@ -89,7 +90,7 @@ ifeq ($(WITH_LIBS),1)
 
 $(LIBSO): prelib-build ${SHARED_OBJ}
 	@for a in ${OBJS} ${SHARED_OBJ} ${SRC}; do \
-	  do=0 ; [ ! -e "${LIBSO}" ] && do=1 ; \
+	  do=0; [ ! -e "${LIBSO}" ] && do=1 ; \
 	  test "$$a" -nt "${LIBSO}" && do=1 ; \
 	  if [ $$do = 1 ]; then \
 	    [ -n "${SILENT}" ] && \

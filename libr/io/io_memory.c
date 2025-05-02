@@ -1,19 +1,15 @@
-/* radare - LGPL - Copyright 2008-2021 - pancake */
+/* radare - LGPL - Copyright 2008-2022 - pancake */
 
 #include "io_memory.h"
 
 static inline ut32 _io_malloc_sz(RIODesc *desc) {
-	if (!desc) {
-		return 0;
-	}
+	R_RETURN_VAL_IF_FAIL (desc, 0);
 	RIOMalloc *mal = (RIOMalloc*)desc->data;
 	return mal? mal->size: 0;
 }
 
 static inline ut8* _io_malloc_buf(RIODesc *desc) {
-	if (!desc) {
-		return NULL;
-	}
+	R_RETURN_VAL_IF_FAIL (desc, NULL);
 	RIOMalloc *mal = (RIOMalloc*)desc->data;
 	return mal->buf;
 }
@@ -29,23 +25,20 @@ static inline ut8* _io_malloc_set_buf(RIODesc *desc, ut8* buf) {
 #endif
 
 static inline ut64 _io_malloc_off(RIODesc *desc) {
-	if (!desc) {
-		return 0;
-	}
+	R_RETURN_VAL_IF_FAIL (desc, 0);
 	RIOMalloc *mal = (RIOMalloc*)desc->data;
 	return mal->offset;
 }
 
 static inline void _io_malloc_set_off(RIODesc *desc, ut64 off) {
-	if (!desc) {
-		return;
-	}
+	R_RETURN_IF_FAIL (desc);
 	RIOMalloc *mal = (RIOMalloc*)desc->data;
 	mal->offset = off;
 }
 
-int io_memory_write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
-	if (!fd || !buf || count < 0 || !fd->data) {
+R_IPI int io_memory_write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
+	R_RETURN_VAL_IF_FAIL (io && fd && buf, -1);
+	if (count < 0 || !fd->data) {
 		return -1;
 	}
 	if (_io_malloc_off (fd) > _io_malloc_sz (fd)) {
@@ -62,8 +55,9 @@ int io_memory_write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 	return -1;
 }
 
-bool io_memory_resize(RIO *io, RIODesc *fd, ut64 count) {
-	if (!fd || !fd->data || count == 0) {
+R_IPI bool io_memory_resize(RIO *io, RIODesc *fd, ut64 count) {
+	R_RETURN_VAL_IF_FAIL (io && fd, false);
+	if (count == 0) { // TODO: why cant truncate to 0 bytes
 		return false;
 	}
 	ut32 mallocsz = _io_malloc_sz (fd);
@@ -83,9 +77,10 @@ bool io_memory_resize(RIO *io, RIODesc *fd, ut64 count) {
 	return true;
 }
 
-int io_memory_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
-	memset (buf, 0xff, count);
-	if (!fd || !fd->data) {
+R_IPI int io_memory_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
+	R_RETURN_VAL_IF_FAIL (io && fd && buf, -1);
+	memset (buf, io->Oxff, count);
+	if (!fd->data) {
 		return -1;
 	}
 	ut32 mallocsz = _io_malloc_sz (fd);
@@ -100,18 +95,18 @@ int io_memory_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	return count;
 }
 
-bool io_memory_close(RIODesc *fd) {
-	RIOMalloc *riom;
+R_IPI bool io_memory_close(RIODesc *fd) {
 	if (!fd || !fd->data) {
 		return false;
 	}
-	riom = fd->data;
+	RIOMalloc *riom = fd->data;
 	R_FREE (riom->buf);
 	R_FREE (fd->data);
 	return true;
 }
 
-ut64 io_memory_lseek(RIO* io, RIODesc *fd, ut64 offset, int whence) {
+R_IPI ut64 io_memory_lseek(RIO* io, RIODesc *fd, ut64 offset, int whence) {
+	R_RETURN_VAL_IF_FAIL (io && fd, offset);
 	ut64 r_offset = offset;
 	if (!fd || !fd->data) {
 		return offset;

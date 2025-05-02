@@ -1,18 +1,13 @@
-/* radare - LGPL - Copyright 2009-2022 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
-#include <stdio.h>
-#include <stdlib.h>
+#define R_LOG_ORIGIN "rafind2"
 
 #include <r_main.h>
-#include <r_types.h>
 #include <r_search.h>
-#include <r_util.h>
 #include <r_util/r_print.h>
-#include <r_cons.h>
-#include <r_lib.h>
-#include <r_io.h>
 
 typedef struct {
+	RCons *cons;
 	RIO *io;
 	bool showstr;
 	bool rad;
@@ -23,6 +18,7 @@ typedef struct {
 	bool widestr;
 	bool nonstop;
 	bool pluglist;
+	bool bigendian;
 	bool json;
 	int mode;
 	int align;
@@ -45,6 +41,9 @@ static void rafind_options_fini(RafindOptions *ro) {
 		ro->io = NULL;
 		free (ro->buf);
 		ro->cur = 0;
+		r_list_free (ro->keywords);
+		ro->keywords = NULL;
+		r_kons_free (ro->cons);
 	}
 }
 
@@ -56,7 +55,7 @@ static void rafind_options_init(RafindOptions *ro) {
 	ro->color = true;
 	ro->keywords = r_list_newf (NULL);
 	ro->pj = NULL;
-	r_cons_new ();
+	ro->cons = r_cons_new ();
 }
 
 static int rafind_open(RafindOptions *ro, const char *file);
@@ -70,7 +69,7 @@ static int hit(RSearchKeyword *kw, void *user, ut64 addr) {
 		delta = ro->cur - addr;
 	}
 	if (delta > 0 && delta >= ro->bsize) {
-		eprintf ("Invalid delta %d from 0x%08"PFMT64x"\n", delta, addr);
+		R_LOG_ERROR ("Invalid delta %d from 0x%08"PFMT64x, delta, addr);
 		return 0;
 	}
 	if (delta != 0) {
@@ -165,15 +164,17 @@ static int hit(RSearchKeyword *kw, void *user, ut64 addr) {
 }
 
 static int show_help(const char *argv0, int line) {
-	printf ("Usage: %s [-mXnzZhqv] [-a align] [-b sz] [-f/t from/to] [-[e|s|S] str] [-x hex] -|file|dir ..\n", argv0);
+	printf ("Usage: %s [-mBXnzZhqv] [-a align] [-b sz] [-f/t from/to] [-[e|s|S] str] [-x hex] -|file|dir ..\n", argv0);
 	if (line) {
 		return 0;
 	}
 	printf (
 	" -a [align] only accept aligned hits\n"
 	" -b [size]  set block size\n"
+	" -B         use big endian instead of the little one (See -V)\n"
 	" -c         disable colourful output (mainly for for -X)\n"
 	" -e [regex] search for regex matches (can be used multiple times)\n"
+	" -E         perform a search using an esil expression\n"
 	" -f [from]  start searching from address 'from'\n"
 	" -F [file]  read the contents of the file and use it as keyword\n"
 	" -h         show this help\n"
@@ -184,12 +185,13 @@ static int show_help(const char *argv0, int line) {
 	" -M [str]   set a binary mask to be applied on keywords\n"
 	" -n         do not stop on read errors\n"
 	" -r         print using radare commands\n"
+	// " -R         replace in place every search hit with the given argument\n"
 	" -s [str]   search for a string (more than one string can be passed)\n"
 	" -S [str]   search for a wide string (more than one string can be passed).\n"
 	" -t [to]    stop search at address 'to'\n"
 	" -q         quiet: fewer output do not show headings or filenames.\n"
 	" -v         print version and exit\n"
-	" -V [s:num] search for given value (-V 4:123) // assume local endian\n"
+	" -V [s:num | s:num1,num2] search for a value or range in the specified endian (-V 4:123 or -V 4:100,200)\n"
 	" -x [hex]   search for hexpair string (909090) (can be used multiple times)\n"
 	" -X         show hexdump of search results\n"
 	" -z         search for zero-terminated strings\n"
@@ -219,7 +221,7 @@ static int rafind_open_file(RafindOptions *ro, const char *file, const ut8 *data
 	RIO *io = r_io_new ();
 	ro->io = io;
 	if (!r_io_open_nomap (io, file, R_PERM_R, 0)) {
-		eprintf ("Cannot open file '%s'\n", file);
+		R_LOG_ERROR ("Cannot open file '%s'", file);
 		result = 1;
 		goto err;
 	}
@@ -236,7 +238,7 @@ static int rafind_open_file(RafindOptions *ro, const char *file, const ut8 *data
 
 	ro->buf = calloc (1, ro->bsize);
 	if (!ro->buf) {
-		eprintf ("Cannot allocate %"PFMT64d" bytes\n", ro->bsize);
+		R_LOG_ERROR ("Cannot allocate %"PFMT64d" bytes", ro->bsize);
 		result = 1;
 		goto err;
 	}
@@ -288,14 +290,14 @@ static int rafind_open_file(RafindOptions *ro, const char *file, const ut8 *data
 					k = r_search_keyword_new_hexmask (kw, NULL);
 				}
 			} else if (ro->widestr) {
-				k = r_search_keyword_new_wide (kw, ro->mask, NULL, 0);
+				k = r_search_keyword_new_wide (kw, ro->mask, NULL, 0, ro->bigendian);
 			} else {
 				k = r_search_keyword_new_str (kw, ro->mask, NULL, 0);
 			}
 			if (k) {
 				r_search_kw_add (rs, k);
 			} else {
-				eprintf ("Invalid keyword\n");
+				R_LOG_ERROR ("Invalid keyword");
 			}
 		}
 	}
@@ -327,17 +329,16 @@ static int rafind_open_file(RafindOptions *ro, const char *file, const ut8 *data
 			bsize = ret;
 		}
 		if (r_search_update (rs, ro->cur, ro->buf, ret) == -1) {
-			eprintf ("search: update read error at 0x%08"PFMT64x"\n", ro->cur);
+			R_LOG_ERROR ("search.update read error at 0x%08"PFMT64x, ro->cur);
 			break;
 		}
 	}
 done:
-	r_cons_free ();
+//	r_kons_free (ro);
 err:
 	free (efile);
 	r_io_free (io);
 	r_search_free (rs);
-	rafind_options_fini (ro);
 	return result;
 }
 
@@ -384,18 +385,34 @@ static int rafind_open(RafindOptions *ro, const char *file) {
 R_API int r_main_rafind2(int argc, const char **argv) {
 	int c;
 	const char *file = NULL;
-	RafindOptions ro;
-	rafind_options_init (&ro);
 
 	if (argc < 1) {
 		return show_help (argv[0], 0);
 	}
+
+	RafindOptions ro;
+	rafind_options_init (&ro);
+
 	RGetopt opt;
-	r_getopt_init (&opt, argc, argv, "a:ie:b:cjmM:s:S:x:Xzf:F:t:E:rqnhvZLV:");
+	r_getopt_init (&opt, argc, argv, "a:ie:Eb:BcjmM:s:S:x:Xzf:F:t:E:rqnhvZLV:");
 	while ((c = r_getopt_next (&opt)) != -1) {
 		switch (c) {
 		case 'a':
 			ro.align = r_num_math (NULL, opt.arg);
+			break;
+		case 'b':
+			{
+			int bs = (int)r_num_math (NULL, opt.arg);
+			if (bs < 2) {
+				rafind_options_fini (&ro);
+				R_LOG_ERROR ("Invalid blocksize <= 1");
+				return 1;
+			}
+			ro.bsize = bs;
+			}
+			break;
+		case 'B':
+			ro.bigendian = true;
 			break;
 		case 'c':
 			ro.color = false;
@@ -439,16 +456,6 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 			ro.widestr = true;
 			r_list_append (ro.keywords, (void*)opt.arg);
 			break;
-		case 'b':
-			{
-			int bs = (int)r_num_math (NULL, opt.arg);
-			if (bs < 2) {
-				eprintf ("Invalid blocksize <= 1\n");
-				return 1;
-			}
-			ro.bsize = bs;
-			}
-			break;
 		case 'M':
 			// XXX should be from hexbin
 			ro.mask = opt.arg;
@@ -461,7 +468,7 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 				size_t data_size;
 				char *data = r_file_slurp (opt.arg, &data_size);
 				if (!data) {
-					eprintf ("Cannot slurp '%s'\n", opt.arg);
+					R_LOG_ERROR ("Cannot slurp '%s'", opt.arg);
 					return 1;
 				}
 				char *hexdata = r_hex_bin2strdup ((ut8*)data, data_size);
@@ -493,49 +500,68 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 			{
 				char *arg = strdup (opt.arg);
 				char *colon = strchr (arg, ':');
+				char *comma = NULL;
 				ut8 buf[8] = {0};
-				int size = (R_SYS_BITS & R_SYS_BITS_64)? 8: 4;
-				ut64 value = 0;
-				// TODO: const int endian = R_SYS_ENDIAN;
+				int size = R_SYS_BITS_CHECK (R_SYS_BITS, 64)? 8: 4;
+				ut64 value, min_value = 0, max_value = 0;
+
 				if (colon) {
 					*colon++ = 0;
 					size = atoi (arg);
 					size = R_MIN (8, size);
 					size = R_MAX (1, size);
-					value = r_num_math (NULL, colon);
+					comma = strchr (colon, ',');
+
+					if (comma) {
+						*comma++ = 0;
+						min_value = r_num_math (NULL, colon);
+						max_value = r_num_math (NULL, comma);
+					} else {
+						min_value = r_num_math (NULL, colon);
+						max_value = min_value;
+					}
 				} else {
-					value = r_num_math (NULL, arg);
+					min_value = r_num_math (NULL, arg);
+					max_value = min_value;
 				}
-				switch (size) {
-				case 1:
-					buf[0] = value;
-					break;
-				case 2:
-					r_write_le16 (buf, value);
-					break;
-				case 4:
-					r_write_le32 (buf, value);
-					break;
-				case 8:
-					r_write_le64 (buf, value);
-					break;
-				default:
-					R_LOG_ERROR ("Invalid value size. Must be 1, 2, 4 or 8");
-					return 1;
+				for (value = min_value; value <= max_value; value++) {
+					switch (size) {
+					case 1:
+						buf[0] = value;
+						break;
+					case 2:
+						r_write_ble16 (buf, value, ro.bigendian);
+						break;
+					case 4:
+						r_write_ble32 (buf, value, ro.bigendian);
+						break;
+					case 8:
+						r_write_ble64 (buf, value, ro.bigendian);
+						break;
+					default:
+						R_LOG_ERROR ("Invalid value size. Must be 1, 2, 4 or 8");
+						rafind_options_fini (&ro);
+						free (arg);
+						return 1;
+					}
+					char *hexdata = r_hex_bin2strdup ((ut8*)buf, size);
+					if (hexdata) {
+						ro.align = size;
+						ro.mode = R_SEARCH_KEYWORD;
+						ro.hexstr = true;
+						ro.widestr = false;
+						r_list_append (ro.keywords, (void*)hexdata);
+					}
 				}
-				char *hexdata = r_hex_bin2strdup ((ut8*)buf, size);
-				if (hexdata) {
-					ro.align = size;
-					ro.mode = R_SEARCH_KEYWORD;
-					ro.hexstr = true;
-					ro.widestr = false;
-					r_list_append (ro.keywords, (void*)hexdata);
-				}
+				free (arg);
 			}
 			break;
 		case 'v':
-			return r_main_version_print ("rafind2");
+			rafind_options_fini (&ro);
+			int mode = ro.json? 'j': ro.quiet? 'q': 0;
+			return r_main_version_print ("rafind2", mode);
 		case 'h':
+			rafind_options_fini (&ro);
 			return show_help (argv[0], 0);
 		case 'z':
 			ro.mode = R_SEARCH_STRING;
@@ -555,11 +581,14 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 		}
 	}
 	if (ro.pluglist) {
+		// list search plugins when implemented
+#if 0
 		if (ro.json) {
 			r_io_plugin_list_json (ro.io);
 		} else {
 			r_io_plugin_list (ro.io);
 		}
+#endif
 		r_cons_flush ();
 		return 0;
 	}
@@ -578,7 +607,7 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 	for (; opt.ind < argc; opt.ind++) {
 		file = argv[opt.ind];
 		if (file && !*file) {
-			eprintf ("Cannot open empty path\n");
+			R_LOG_ERROR ("Cannot open empty path");
 			return 1;
 		}
 		rafind_open (&ro, file);

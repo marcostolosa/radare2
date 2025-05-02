@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2014-2021 - pancake */
+/* radare - LGPL - Copyright 2014-2023 - pancake */
 
 #include "r_util/r_str.h"
 #include <r_util.h>
@@ -10,6 +10,9 @@ R_API const ut8 *r_uleb128(const ut8 *data, int datalen, ut64 *v, const char **e
 	ut64 s, sum = 0;
 	const ut8 *data_end;
 	bool malformed_uleb = true;
+	if (!data) {
+		return NULL;
+	}
 	if (v) {
 		*v = 0LL;
 	}
@@ -72,7 +75,9 @@ R_API const ut8 *r_uleb128_decode(const ut8 *data, int *datalen, ut64 *v) {
 	ut64 s = 0, sum = 0, l = 0;
 	do {
 		c = *(data++) & 0xff;
-		sum |= ((ut64) (c&0x7f) << s);
+		if (s < 64) {
+			sum |= ((ut64) (c&0x7f) << s);
+		}
 		s += 7;
 		l++;
 	} while (c & 0x80);
@@ -158,13 +163,15 @@ R_API st64 r_sleb128(const ut8 **data, const ut8 *end) {
 		st64 chunk;
 		value = *p;
 		chunk = value & 0x7f;
-		if (offset < 64) {
+		// result is signed. so max safe shift is 62
+		if (offset < 63) {
 			result |= (chunk << offset);
 		}
 		offset += 7;
 	} while (cond = *p & 0x80 && p + 1 < end, p++, cond);
 
 	if ((value & 0x40) != 0 && offset < 64) {
+		// ULL is unsigned. so max safe shift is 63
 		result |= ~0ULL << offset;
 	}
 	*data = p;
@@ -186,7 +193,7 @@ R_API st64 r_sleb128(const ut8 **data, const ut8 *end) {
 #define LEB128_9(type) (BYTE_AT (type, 8, 56) | LEB128_8 (type))
 #define LEB128_10(type) (BYTE_AT (type, 9, 63) | LEB128_9 (type))
 
-#define SHIFT_AMOUNT(type, sign_bit) (sizeof(type) * 8 - 1 - (sign_bit))
+#define SHIFT_AMOUNT(type, sign_bit) (sizeof (type) * 8 - 1 - (sign_bit))
 #define SIGN_EXTEND(type, value, sign_bit) \
 	((type)((value) << SHIFT_AMOUNT (type, sign_bit)) >> \
 		SHIFT_AMOUNT (type, sign_bit))

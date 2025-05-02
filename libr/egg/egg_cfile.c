@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2011-2018 - pancake */
+/* radare - LGPL - Copyright 2011-2023 - pancake */
 
 #include <r_egg.h>
 
@@ -16,22 +16,44 @@ struct cEnv_t {
 	const char *TEXT;
 };
 
-static char* r_egg_cfile_getCompiler(void) {
-	size_t i;
-	const char *compilers[] = {"llvm-gcc", "clang", "gcc"};
-	char *output = r_sys_getenv ("CC");
+static char *r_egg_cfile_getCompiler(const char *arch, int bits) {
+	const char *compilers[] = { "llvm-gcc", "gcc", "clang", NULL };
+	const char *compiler = compilers[0];
+  	char *compiler_path;
+  	char *env_cc = r_sys_getenv ("CC");
+	int i;
 
-	if (output) {
-		return output;
+	if (env_cc) {
+		return env_cc;
 	}
 
-	for (i = 0; i < 3; i++) {
-		output = r_file_path (compilers[i]);
-		if (strcmp (output, compilers[i])) {
-			free (output);
-			return strdup (compilers[i]);
+  	// Override gcc compilers for arm64 and arm32
+  	// TODO: I don't seem to be able to make clang work with -target
+  	if (!strcmp (arch, "arm") && bits == 64) {
+		compiler = "aarch64-linux-gnu-gcc";
+		compiler_path = r_file_path (compiler);
+		if (compiler_path) {
+			free (compiler_path);
+			return strdup (compiler);
 		}
-		free (output);
+  	}
+
+  	if (!strcmp (arch, "arm") && bits == 32) {
+		compiler = "arm-linux-gnueabihf-gcc";
+		compiler_path = r_file_path (compiler);
+		if (compiler_path) {
+			free (compiler_path);
+			return strdup (compiler);
+		}
+  	}
+
+	for (i = 0; (compiler = compilers[i]); i++) {
+		compiler_path = r_file_path (compiler);
+		if (compiler_path) {
+			free (compiler_path);
+			return strdup (compiler);
+		}
+		free (compiler_path);
 	}
 
 	R_LOG_ERROR ("Couldn't find a compiler! Please set CC");
@@ -76,7 +98,7 @@ static struct cEnv_t* r_egg_cfile_set_cEnv(const char *arch, const char *os, int
 		return NULL;
 	}
 
-	if (!(cEnv->CC = r_egg_cfile_getCompiler())) {
+	if (!(cEnv->CC = r_egg_cfile_getCompiler(arch, bits))) {
 		goto fail;
 	}
 
@@ -85,7 +107,6 @@ static struct cEnv_t* r_egg_cfile_set_cEnv(const char *arch, const char *os, int
 		output = r_sys_cmd_strf ("r2 -hh | grep INCDIR | awk '{print $2}'");
 		if (!output || (output[0] == '\0')) {
 			R_LOG_ERROR ("Cannot find SFLIBPATH env var");
-			eprintf ("Please define $SFLIBPATH, or fix r2 installation\n");
 			goto fail;
 		}
 
@@ -148,12 +169,12 @@ static struct cEnv_t* r_egg_cfile_set_cEnv(const char *arch, const char *os, int
 	use_clang = false;
 	if (!strcmp (cEnv->TRIPLET, "darwin-arm-64")) {
 		free (cEnv->CC);
-		cEnv->CC = strdup ("xcrun --sdk iphoneos gcc -arch arm64 -miphoneos-version-min=0.0");
+		cEnv->CC = strdup ("xcrun --sdk iphoneos gcc -arch arm64 -miphoneos-version-min=10.0");
 		use_clang = true;
 		cEnv->TEXT = "0.__TEXT.__text";
 	} else if (!strcmp (cEnv->TRIPLET, "darwin-arm-32")) {
 		free (cEnv->CC);
-		cEnv->CC = strdup ("xcrun --sdk iphoneos gcc -arch armv7 -miphoneos-version-min=0.0");
+		cEnv->CC = strdup ("xcrun --sdk iphoneos gcc -arch armv7 -miphoneos-version-min=10.0");
 		use_clang = true;
 		cEnv->TEXT = "0.__TEXT.__text";
 	}
@@ -196,7 +217,6 @@ static struct cEnv_t* r_egg_cfile_set_cEnv(const char *arch, const char *os, int
 		free (cEnv->LDFLAGS);
 		cEnv->LDFLAGS = strdup (buffer);
 	}
-    
 	if (r_egg_cfile_check_cEnv (cEnv)) {
 		R_LOG_ERROR ("invalid cEnv allocation");
 		goto fail;
@@ -225,7 +245,7 @@ static bool r_egg_cfile_parseCompiled(const char *file) {
 	buffer = r_str_replace (buffer, "rodata", "text", false);
 	buffer = r_str_replace (buffer, "get_pc_thunk.bx", "__getesp__", true);
 
-	const char *words[] = {".cstring", "size", "___main", "section", "__alloca", "zero", "cfi"};
+	const char *words[] = { ".cstring", "size", "___main", "section", "__alloca", "zero", "cfi" };
 	size_t i;
 	for (i = 0; i < 7; i++) {
 		r_str_stripLine (buffer, words[i]);
@@ -260,7 +280,7 @@ R_API char* r_egg_cfile_parser(const char *file, const char *arch, const char *o
 	r_str_sanitize (cEnv->CC);
 
 	// Compile
-	char *cmd = r_str_newf ("'%s' %s -o '%s.tmp' -S '%s'\n", cEnv->CC, cEnv->CFLAGS, file, file);
+	char *cmd = r_str_newf ("%s %s -o '%s.tmp' -S '%s'\n", cEnv->CC, cEnv->CFLAGS, file, file);
 	eprintf ("%s\n", cmd);
 	int rc = r_sys_cmd (cmd);
 	free (cmd);
@@ -280,7 +300,7 @@ R_API char* r_egg_cfile_parser(const char *file, const char *arch, const char *o
 		goto fail;
 	}
 	// Assemble
-	cmd = r_str_newf ("'%s' %s -o '%s.o' '%s.s'", cEnv->CC, cEnv->LDFLAGS, file, file);
+	cmd = r_str_newf ("%s %s -o '%s.o' '%s.s'", cEnv->CC, cEnv->LDFLAGS, file, file);
 	eprintf ("%s\n", cmd);
 	rc = r_sys_cmd (cmd);
 	free (cmd);
@@ -311,7 +331,7 @@ R_API char* r_egg_cfile_parser(const char *file, const char *arch, const char *o
 		goto fail;
 	}
 	if (r_file_size (fileExt) == 0) {
-		eprintf ("FALLBACK: Using objcopy instead of rabin2\n");
+		R_LOG_INFO ("FALLBACK: Using objcopy instead of rabin2");
 		free (output);
 		if (isXNU (os)) {
 			output = r_sys_cmd_strf ("'%s' -j 0.__TEXT.__text -O binary '%s.o' '%s.text'",
@@ -321,13 +341,13 @@ R_API char* r_egg_cfile_parser(const char *file, const char *arch, const char *o
 					cEnv->OBJCOPY, file, file);
 		}
 		if (!output) {
-			eprintf ("objcopy failed!\n");
+			R_LOG_ERROR ("objcopy failed!");
 			goto fail;
 		}
 	}
 
 	size_t i;
-	const char *extArray[] = {"bin", "tmp", "s", "o"};
+	const char *extArray[] = { "bin", "tmp", "s", "o" };
 	for (i = 0; i < 4; i++) {
 		free (fileExt);
 		if (!(fileExt = r_str_newf ("%s.%s", file, extArray[i]))) {

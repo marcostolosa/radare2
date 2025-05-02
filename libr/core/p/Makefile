@@ -7,7 +7,7 @@ CFLAGS+=${PIC_CFLAGS} ${LDFLAGS_LIB} ${LDFLAGS_LINKPATH}..
 CFLAGS+=-L../../util -lr_util -L../../reg -lr_reg -L.. -lr_core
 CFLAGS+=-L../../cons -lr_cons -L../../bin -lr_bin
 CFLAGS+=-L../../parse -lr_parse -L../../io -lr_io -L../../fs -lr_fs
-CFLAGS+=-L../../magic -lr_magic -L../../hash -lr_hash
+CFLAGS+=-L../../magic -lr_magic -L../../crypto -lr_crypto
 CFLAGS+=-L../../config -lr_config
 CFLAGS+=-L../../anal -lr_anal -L../../egg -lr_egg -L../../flag -lr_flag
 CFLAGS+=-L../../syscall -lr_syscall -L../../socket -lr_socket -L../../search -lr_search
@@ -26,7 +26,7 @@ ifeq ($(WITHPIC),1)
 all: ${ALL_TARGETS}
 
 ALL_TARGETS=
-PLUGS=java.mk a2f.mk sixref.mk
+PLUGS=java.mk a2f.mk sixref.mk agD.mk
 include $(PLUGS)
 
 clean:

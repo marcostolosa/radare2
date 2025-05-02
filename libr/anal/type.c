@@ -1,8 +1,8 @@
-/* radare - LGPL - Copyright 2019-2022 - pancake, oddcoder, Anton Kochkov */
+/* radare - LGPL - Copyright 2019-2023 - pancake, oddcoder, Anton Kochkov */
 
 #include <r_anal.h>
 #include <string.h>
-#include <sdb.h>
+#include <sdb/sdb.h>
 #include "base_types.h"
 
 #define KSZ 256
@@ -32,7 +32,7 @@ static char *get_type_data(Sdb *sdb_types, const char *type, const char *sname) 
 }
 
 R_API void r_anal_remove_parsed_type(RAnal *anal, const char *name) {
-	r_return_if_fail (anal && name);
+	R_RETURN_IF_FAIL (anal && name);
 	Sdb *TDB = anal->sdb_types;
 	SdbKv *kv;
 	SdbListIter *iter;
@@ -40,25 +40,27 @@ R_API void r_anal_remove_parsed_type(RAnal *anal, const char *name) {
 	if (!type) {
 		return;
 	}
-	int tmp_len = strlen (name) + strlen (type);
-	char *tmp = malloc (tmp_len + 1);
+
+	// Create a subkey before the call to r_type_del (which leaves the type string invalid)
+	char *subkey = r_str_newf ("%s.%s.", type, name);
 	r_type_del (TDB, name);
-	if (tmp) {
-		snprintf (tmp, tmp_len + 1, "%s.%s.", type, name);
-		SdbList *l = sdb_foreach_list (TDB, true);
-		ls_foreach (l, iter, kv) {
-			if (!strncmp (sdbkv_key (kv), tmp, tmp_len)) {
-				r_type_del (TDB, sdbkv_key (kv));
-			}
+
+	// TODO: This loop should be optimized
+	SdbList *l = sdb_foreach_list (TDB, true);
+	size_t subkey_len = strlen (subkey);
+	ls_foreach (l, iter, kv) {
+		const char *key = sdbkv_key (kv);
+		if (!strncmp (key, subkey, subkey_len)) {
+			r_type_del (TDB, key);
 		}
-		ls_free (l);
-		free (tmp);
 	}
+	ls_free (l);
+	free (subkey);
 }
 
 // RENAME TO r_anal_types_save(); // parses the string and imports the types
 R_API void r_anal_save_parsed_type(RAnal *anal, const char *parsed) {
-	r_return_if_fail (anal && parsed);
+	R_RETURN_IF_FAIL (anal && parsed);
 
 	// First, if any parsed types exist, let's remove them.
 	char *type = strdup (parsed);
@@ -102,25 +104,25 @@ R_API RList *r_anal_types_from_fcn(RAnal *anal, RAnalFunction *fcn) {
 R_IPI void enum_type_case_free(void *e, void *user) {
 	(void)user;
 	RAnalEnumCase *cas = e;
-	free ((char *)cas->name);
+	free (cas->name);
 }
 
 R_IPI void struct_type_member_free(void *e, void *user) {
 	(void)user;
 	RAnalStructMember *member = e;
-	free ((char *)member->name);
-	free ((char *)member->type);
+	free (member->name);
+	free (member->type);
 }
 
 R_IPI void union_type_member_free(void *e, void *user) {
 	(void)user;
 	RAnalUnionMember *member = e;
-	free ((char *)member->name);
-	free ((char *)member->type);
+	free (member->name);
+	free (member->type);
 }
 
 static RAnalBaseType *get_enum_type(RAnal *anal, const char *sname) {
-	r_return_val_if_fail (anal && sname, NULL);
+	R_RETURN_VAL_IF_FAIL (anal && sname, NULL);
 
 	RAnalBaseType *base_type = r_anal_base_type_new (R_ANAL_BASE_TYPE_KIND_ENUM);
 	if (!base_type) {
@@ -170,7 +172,7 @@ error:
 }
 
 static RAnalBaseType *get_struct_type(RAnal *anal, const char *sname) {
-	r_return_val_if_fail (anal && sname, NULL);
+	R_RETURN_VAL_IF_FAIL (anal && sname, NULL);
 
 	RAnalBaseType *base_type = r_anal_base_type_new (R_ANAL_BASE_TYPE_KIND_STRUCT);
 	if (!base_type) {
@@ -232,7 +234,7 @@ error:
 }
 
 static RAnalBaseType *get_union_type(RAnal *anal, const char *sname) {
-	r_return_val_if_fail (anal && sname, NULL);
+	R_RETURN_VAL_IF_FAIL (anal && sname, NULL);
 
 	RAnalBaseType *base_type = r_anal_base_type_new (R_ANAL_BASE_TYPE_KIND_UNION);
 	if (!base_type) {
@@ -283,7 +285,7 @@ error:
 }
 
 static RAnalBaseType *get_typedef_type(RAnal *anal, const char *sname) {
-	r_return_val_if_fail (anal && R_STR_ISNOTEMPTY (sname), NULL);
+	R_RETURN_VAL_IF_FAIL (anal && R_STR_ISNOTEMPTY (sname), NULL);
 
 	RAnalBaseType *base_type = r_anal_base_type_new (R_ANAL_BASE_TYPE_KIND_TYPEDEF);
 	if (!base_type) {
@@ -302,7 +304,7 @@ error:
 }
 
 static RAnalBaseType *get_atomic_type(RAnal *anal, const char *sname) {
-	r_return_val_if_fail (anal && R_STR_ISNOTEMPTY (sname), NULL);
+	R_RETURN_VAL_IF_FAIL (anal && R_STR_ISNOTEMPTY (sname), NULL);
 	r_strf_buffer (KSZ);
 	RAnalBaseType *base_type = r_anal_base_type_new (R_ANAL_BASE_TYPE_KIND_ATOMIC);
 	if (base_type) {
@@ -318,7 +320,7 @@ static RAnalBaseType *get_atomic_type(RAnal *anal, const char *sname) {
 
 // returns NULL if name is not found or any failure happened
 R_API RAnalBaseType *r_anal_get_base_type(RAnal *anal, const char *name) {
-	r_return_val_if_fail (anal && name, NULL);
+	R_RETURN_VAL_IF_FAIL (anal && name, NULL);
 
 	char *sname = r_str_sanitize_sdb_key (name);
 	const char *type = sdb_const_get (anal->sdb_types, sname, NULL);
@@ -350,7 +352,7 @@ R_API RAnalBaseType *r_anal_get_base_type(RAnal *anal, const char *name) {
 }
 
 static void save_struct(const RAnal *anal, const RAnalBaseType *type) {
-	r_return_if_fail (anal && type && type->name
+	R_RETURN_IF_FAIL (anal && type && type->name
 		&& type->kind == R_ANAL_BASE_TYPE_KIND_STRUCT);
 	char *kind = "struct";
 	/*
@@ -383,15 +385,21 @@ static void save_struct(const RAnal *anal, const RAnalBaseType *type) {
 	}
 	// struct.name=param1,param2,paramN
 	char *key = r_str_newf ("%s.%s", kind, sname);
-	sdb_set_owned (anal->sdb_types, key, r_strbuf_drain (arglist), 0);
+	if (sdb_exists (anal->sdb_types, key)) {
+		R_LOG_DEBUG ("Ignoring overwrite of type '%s' in sdb_types", key);
+		r_strbuf_free (arglist);
+	} else {
+		sdb_set_owned (anal->sdb_types, key, r_strbuf_drain (arglist), 0);
+	}
+
 	free (key);
 	free (sname);
 }
 
 static void save_union(const RAnal *anal, const RAnalBaseType *type) {
 	r_strf_buffer (KSZ);
-	r_return_if_fail (anal && type && type->name);
-	r_return_if_fail (type->kind == R_ANAL_BASE_TYPE_KIND_UNION);
+	R_RETURN_IF_FAIL (anal && type && type->name);
+	R_RETURN_IF_FAIL (type->kind == R_ANAL_BASE_TYPE_KIND_UNION);
 	const char *kind = "union";
 	/*
 	C:
@@ -425,8 +433,8 @@ static void save_union(const RAnal *anal, const RAnalBaseType *type) {
 }
 
 static void save_enum(const RAnal *anal, const RAnalBaseType *type) {
-	r_return_if_fail (anal && type && type->name);
-	r_return_if_fail (type->kind == R_ANAL_BASE_TYPE_KIND_ENUM);
+	R_RETURN_IF_FAIL (anal && type && type->name);
+	R_RETURN_IF_FAIL (type->kind == R_ANAL_BASE_TYPE_KIND_ENUM);
 	/*
 		C:
 			enum name {case1 = 1, case2 = 2, caseN = 3};
@@ -443,7 +451,7 @@ static void save_enum(const RAnal *anal, const RAnalBaseType *type) {
 	char *sname = r_str_sanitize_sdb_key (type->name);
 	sdb_set (anal->sdb_types, sname, "enum", 0);
 
-	RStrBuf *arglist = r_strbuf_new ("");;
+	RStrBuf *arglist = r_strbuf_new ("");
 	int i = 0;
 	RAnalEnumCase *cas;
 	r_vector_foreach (&type->enum_data.cases, cas) {
@@ -467,8 +475,8 @@ static void save_enum(const RAnal *anal, const RAnalBaseType *type) {
 
 static void save_atomic_type(const RAnal *anal, const RAnalBaseType *type) {
 	r_strf_buffer (KSZ);
-	r_return_if_fail (anal && type && type->name);
-	r_return_if_fail (type->kind == R_ANAL_BASE_TYPE_KIND_ATOMIC);
+	R_RETURN_IF_FAIL (anal && type && type->name);
+	R_RETURN_IF_FAIL (type->kind == R_ANAL_BASE_TYPE_KIND_ATOMIC);
 	/*
 		C: (cannot define a custom atomic type)
 		Sdb:
@@ -490,7 +498,7 @@ static void save_atomic_type(const RAnal *anal, const RAnalBaseType *type) {
 
 static void save_typedef(const RAnal *anal, const RAnalBaseType *type) {
 	r_strf_buffer (KSZ);
-	r_return_if_fail (anal && type && type->name && type->kind == R_ANAL_BASE_TYPE_KIND_TYPEDEF);
+	R_RETURN_IF_FAIL (anal && type && type->name && type->kind == R_ANAL_BASE_TYPE_KIND_TYPEDEF);
 	/*
 		C:
 		typedef char byte;
@@ -509,7 +517,7 @@ static void save_typedef(const RAnal *anal, const RAnalBaseType *type) {
 }
 
 R_API void r_anal_base_type_free(RAnalBaseType *type) {
-	r_return_if_fail (type);
+	R_RETURN_IF_FAIL (type);
 	free (type->name);
 	free (type->type);
 
@@ -561,7 +569,7 @@ R_API RAnalBaseType *r_anal_base_type_new(RAnalBaseTypeKind kind) {
  * @param name Name of the type
  */
 R_API void r_anal_save_base_type(const RAnal *anal, const RAnalBaseType *type) {
-	r_return_if_fail (anal && type && type->name);
+	R_RETURN_IF_FAIL (anal && type && type->name);
 
 	// TODO, solve collisions, if there are 2 types with the same name and kind
 

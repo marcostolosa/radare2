@@ -8,7 +8,6 @@ radare2 contributes to the One Byte Per Child foundation.
 3nl4r9e y0\/r r4d4r3
 I did it for the pwnz.
 If you send the program you are debugging to 15 friends in 143 minutes and then step three times on the same opcode you will get the name of the person who loves you.
-To remove this message, put `dbxenv suppress_startup_message 7.5' in your .dbxrc
 Heisenbug: A bug that disappears or alters its behavior when one attempts to probe or isolate it.
 radare2 is for lulzhats
 Microloft Visual Radare.NET 2008. Now OOXML Powered!
@@ -85,7 +84,7 @@ This is an unacceptable million year dungeon.
 The Hard ROP Cafe
 Wait a minute! I found a bug, self-fixing ... OK
 Hold on, this should never happen!
-Well this is embarrasing ...
+Well this is embarrassing ...
 THIS IS NOT FUNNY
 ♥  --
 Can you stand on your head?
@@ -140,7 +139,7 @@ When you sold that exploit, what they really bought, was your silence.
 Greetings, human.
 nothing personal, just bitness
 Too old to crash
-Finnished a beer
+Finished a beer
 ESIL ruined my life
 ESIL: The Aftersleep
 Insert coin to continue ...
@@ -198,7 +197,7 @@ r2 talks to you. tries to make you feel well.
 Now i'm like an evil engineer. MUAHAHAH
 We only have bugs, features are an unintended side-effect
 There are 5 minutes from WTF to FIX in r2land
-Quantum dissasemble: it's there as long as you don't observe it
+Quantum disassemble: it's there as long as you don't observe it
 Ceci n'est pas une r2pipe
 Buy a mac
 (gdb) ^D
@@ -310,3 +309,52 @@ You can't sleep now there are monsters nearby
 Every journey begins with a choice
 Do 'r2pm -i r2premium; echo "e cfg.fortunes.type = nsfw" >> ~/.radare2rc' for a even more fun with r2
 pneumonic
+Click below to prove you are not a bot
+Sorry, not sorry.
+fix it or set the machine on fire
+burn it before the bug spreads to other installations
+The signals are strong tonight
+It's dangerous to go alone, take this.
+"If you gotta burn it all to the ground; Then let it burn"
+Watch until the end!
+Don't forget to subscribe!
+Ah shit, here we go again.
+Checking whether this software can be played...
+Will it blend?
+Are you still watching?
+Starting application, this might take some time...
+Do you want to restart to install these updates now or try tonight?
+Updates available
+This binary has not been analyzed. Would you like to analyze it now?
+The software is up to date. Just kidding, git pull again
+Caps lock is on.
+$10 or mistery box?
+INSERT COIN
+This program is not compatible with your device.
+Hey hey hey everyone! welcome to infoflash
+Rise and shine beyond the Black wall
+Relic malfunction detected
+It's now safe to turn off your computer.
+No newline at end of file
+Display output is not active.
+The Quick Brown Fox Jumped Over The Lazy Dog!
+gcc: error: no input files
+Now you're thinking with portals
+The bug you've just found it's fixed in git
+Plug me in, and I'll take you up.
+Plug me in, we're running out of time.
+Corrupted cores! We're in luck.
+You think I'll betray you. And on any other day, you'd be right
+I can't believe you came back.
+You don't have permission to access this resource.
+Sign in or head back to home.
+I'd love to help you solve the tests. But I can't.
+Did anything happen while I was out?
+You look great, by the way. Very healthy
+Press the button again.
+It's been a long time.
+Relic malfunction detected.
+You are offline. Some functionality may be unavailable.
+Patching instructions should be illegal
+Are you still watching?
+Downloading update 1 of 1 ...

@@ -1,7 +1,8 @@
-/* radare - LGPL - Copyright 2010-2021 - nibble, pancake */
+/* radare - LGPL - Copyright 2010-2024 - nibble, pancake */
+
+#define R_LOG_ORIGIN "anal.diff"
 
 #include <r_anal.h>
-#include <r_util.h>
 
 R_API RAnalDiff *r_anal_diff_new(void) {
 	RAnalDiff *diff = R_NEW0 (RAnalDiff);
@@ -22,42 +23,36 @@ R_API void r_anal_diff_free(RAnalDiff *diff) {
 	}
 }
 
-/* 0-1 */
-R_API void r_anal_diff_setup(RAnal *anal, int doops, double thbb, double thfcn) {
-	if (doops >= 0) {
-		anal->diff_ops = doops;
-	}
-	anal->diff_thbb = (thbb>=0)? thbb: R_ANAL_THRESHOLDBB;
-	anal->diff_thfcn = (thfcn>=0)? thfcn: R_ANAL_THRESHOLDFCN;
+R_API void r_anal_diff_setup(RAnal *anal, bool doops, double thbb, double thfcn) {
+	R_RETURN_IF_FAIL (anal);
+	anal->diff_ops = doops;
+	anal->diff_thbb = (thbb >= 0)? thbb: R_ANAL_THRESHOLDBB;
+	anal->diff_thfcn = (thfcn >= 0)? thfcn: R_ANAL_THRESHOLDFCN;
 }
 
-/* 0-100 */
-R_API void r_anal_diff_setup_i(RAnal *anal, int doops, int thbb, int thfcn) {
-	if (doops >= 0) {
-		anal->diff_ops = doops;
-	}
-	anal->diff_thbb = (thbb>=0)? ((double)thbb) / 100: R_ANAL_THRESHOLDBB;
-	anal->diff_thfcn = (thfcn>=0)? ((double)thfcn) / 100: R_ANAL_THRESHOLDFCN;
+R_API void r_anal_diff_setup_i(RAnal *anal, bool doops, int thbb, int thfcn) {
+	R_RETURN_IF_FAIL (anal);
+	anal->diff_ops = doops;
+	anal->diff_thbb = (thbb >= 0)? ((double)thbb) / 100: R_ANAL_THRESHOLDBB;
+	anal->diff_thfcn = (thfcn >= 0)? ((double)thfcn) / 100: R_ANAL_THRESHOLDFCN;
 }
 
 // Fingerprint function basic block
 R_API int r_anal_diff_fingerprint_bb(RAnal *anal, RAnalBlock *bb) {
+	R_RETURN_VAL_IF_FAIL (anal && bb, 0);
 	RAnalOp *op;
 	ut8 *buf;
 	int oplen, idx = 0;
 
-	if (!anal) {
-		return false;
-	}
 	if (anal->cur && anal->cur->fingerprint_bb) {
 		return (anal->cur->fingerprint_bb (anal, bb));
 	}
 	if (!(bb->fingerprint = malloc (1 + bb->size))) {
-		return false;
+		return 0;
 	}
 	if (!(buf = malloc (bb->size + 1))) {
 		free (bb->fingerprint);
-		return false;
+		return 0;
 	}
 	if (anal->iob.read_at (anal->iob.io, bb->addr, buf, bb->size)) {
 		memcpy (bb->fingerprint, buf, bb->size);
@@ -65,10 +60,10 @@ R_API int r_anal_diff_fingerprint_bb(RAnal *anal, RAnalBlock *bb) {
 			if (!(op = r_anal_op_new ())) {
 				free (bb->fingerprint);
 				free (buf);
-				return false;
+				return 0;
 			}
 			while (idx < bb->size) {
-				if ((oplen = r_anal_op (anal, op, 0, buf+idx, bb->size-idx, R_ANAL_OP_MASK_BASIC)) < 1) {
+				if ((oplen = r_anal_op (anal, op, 0, buf+idx, bb->size-idx, R_ARCH_OP_MASK_BASIC)) < 1) {
 					break;
 				}
 				if (op->nopcode != 0) {
@@ -84,22 +79,23 @@ R_API int r_anal_diff_fingerprint_bb(RAnal *anal, RAnalBlock *bb) {
 }
 
 static int bb_sort_by_addr(const void *x, const void *y) {
-	RAnalBlock *a = (RAnalBlock *)x;
-	RAnalBlock *b = (RAnalBlock *)y;
-	if (a->addr > b->addr) {
+	ut64 a_addr = ((RAnalBlock *)x)->addr;
+	ut64 b_addr = ((RAnalBlock *)y)->addr;
+	if (a_addr > b_addr) {
 		return 1;
 	}
-	if (a->addr < b->addr) {
+	if (a_addr < b_addr) {
 		return -1;
 	}
 	return 0;
 }
 
 R_API size_t r_anal_diff_fingerprint_fcn(RAnal *anal, RAnalFunction *fcn) {
+	R_RETURN_VAL_IF_FAIL (anal && fcn, 0);
 	RAnalBlock *bb;
 	RListIter *iter;
 
-	if (anal && anal->cur && anal->cur->fingerprint_fcn) {
+	if (anal->cur && anal->cur->fingerprint_fcn) {
 		return (anal->cur->fingerprint_fcn (anal, fcn));
 	}
 
@@ -118,13 +114,11 @@ R_API size_t r_anal_diff_fingerprint_fcn(RAnal *anal, RAnalFunction *fcn) {
 }
 
 R_API bool r_anal_diff_bb(RAnal *anal, RAnalFunction *fcn, RAnalFunction *fcn2) {
+	R_RETURN_VAL_IF_FAIL (anal && fcn && fcn2, false);
 	RAnalBlock *bb, *bb2, *mbb, *mbb2;
 	RListIter *iter, *iter2;
 	double t, ot;
 
-	if (!anal || !fcn || !fcn2) {
-		return false;
-	}
 	if (anal->cur && anal->cur->diff_bb) {
 		return (anal->cur->diff_bb (anal, fcn, fcn2));
 	}
@@ -153,10 +147,10 @@ R_API bool r_anal_diff_bb(RAnal *anal, RAnalFunction *fcn, RAnalFunction *fcn2) 
 		}
 		if (mbb && mbb2) {
 			if (!mbb->diff) {
-				mbb->diff = r_anal_diff_new();
+				mbb->diff = r_anal_diff_new ();
 			}
 			if (!mbb2->diff) {
-				mbb2->diff = r_anal_diff_new();
+				mbb2->diff = r_anal_diff_new ();
 			}
 			if (!mbb->diff || !mbb2->diff) {
 				return false;
@@ -184,34 +178,97 @@ R_API bool r_anal_diff_bb(RAnal *anal, RAnalFunction *fcn, RAnalFunction *fcn2) 
 }
 
 R_API int r_anal_diff_fcn(RAnal *anal, RList *fcns, RList *fcns2) {
+	R_RETURN_VAL_IF_FAIL (anal && fcns, false);
 	RAnalFunction *fcn, *fcn2, *mfcn, *mfcn2;
 	RListIter *iter, *iter2;
 	ut64 maxsize, minsize;
-	double t, ot;
-
-	if (!anal) {
-		return false;
+	double t = 0, ot = 0;
+	if (!fcns2) {
+		fcns2 = fcns;
 	}
+
 	if (anal->cur && anal->cur->diff_fcn) {
-		return (anal->cur->diff_fcn (anal, fcns, fcns2));
+		return anal->cur->diff_fcn (anal, fcns, fcns2);
+	}
+	if (fcns == fcns2 || (r_list_length (fcns) == 1 && 1 == r_list_length (fcns2))) {
+		double threshold = 0.8; // XXX make this configurable by the user
+		// inplace diffing
+		r_list_foreach (fcns, iter, fcn) {
+			if (!fcn->fingerprint) {
+				r_anal_diff_fingerprint_fcn (anal, fcn);
+			}
+			r_list_foreach (fcns2, iter2, fcn2) {
+				if (fcn == fcn2 || fcn->addr == fcn2->addr) {
+					continue;
+				}
+				if (!fcn->name || !fcn2->name || !strcmp (fcn->name, fcn2->name)) {
+					continue;
+				}
+				if (!fcn2->fingerprint) {
+					r_anal_diff_fingerprint_fcn (anal, fcn2);
+				}
+				if (fcn->fingerprint && fcn2->fingerprint) {
+					r_diff_buffers_distance (NULL, fcn->fingerprint, fcn->fingerprint_size,
+							fcn2->fingerprint, fcn2->fingerprint_size,
+							NULL, &t);
+					/* Set flag in matched functions */
+					fcn->diff->type = fcn2->diff->type = (t >= threshold)
+						? R_ANAL_DIFF_TYPE_MATCH
+						: R_ANAL_DIFF_TYPE_UNMATCH;
+					fcn->diff->dist = fcn2->diff->dist = t;
+					if (fcn->diff->type == R_ANAL_DIFF_TYPE_MATCH) {
+						// R_LOG_INFO ("match %lf %s", t, fcn2->name);
+						r_cons_printf ("match %lf %s\n", t, fcn2->name);
+					}
+					R_FREE (fcn->fingerprint);
+					R_FREE (fcn2->fingerprint);
+				}
+				fcn->diff->addr = fcn2->addr;
+				fcn2->diff->addr = fcn->addr;
+				fcn->diff->size = r_anal_function_linear_size (fcn2);
+				fcn2->diff->size = r_anal_function_linear_size (fcn);
+				R_FREE (fcn->diff->name);
+				if (fcn2->name) {
+					fcn->diff->name = strdup (fcn2->name);
+				}
+				R_FREE (fcn2->diff->name);
+				if (fcn->name) {
+					fcn2->diff->name = strdup (fcn->name);
+				}
+				r_anal_diff_bb (anal, fcn, fcn2);
+				break;
+			}
+		}
+		return false;
 	}
 	/* Compare functions with the same name */
 	if (fcns) {
 		r_list_foreach (fcns, iter, fcn) {
+			if (!fcn->fingerprint) {
+				r_anal_diff_fingerprint_fcn (anal, fcn);
+			}
 			r_list_foreach (fcns2, iter2, fcn2) {
+				if (fcn == fcn2) {
+					continue;
+				}
 				if (!fcn->name || !fcn2->name || strcmp (fcn->name, fcn2->name)) {
 					continue;
 				}
-				r_diff_buffers_distance (NULL, fcn->fingerprint, fcn->fingerprint_size,
-						fcn2->fingerprint, fcn2->fingerprint_size,
-						NULL, &t);
-				/* Set flag in matched functions */
-				fcn->diff->type = fcn2->diff->type = (t >= 1)
-					? R_ANAL_DIFF_TYPE_MATCH
-					: R_ANAL_DIFF_TYPE_UNMATCH;
-				fcn->diff->dist = fcn2->diff->dist = t;
-				R_FREE (fcn->fingerprint);
-				R_FREE (fcn2->fingerprint);
+				if (!fcn2->fingerprint) {
+					r_anal_diff_fingerprint_fcn (anal, fcn2);
+				}
+				if (fcn->fingerprint && fcn2->fingerprint) {
+					r_diff_buffers_distance (NULL, fcn->fingerprint, fcn->fingerprint_size,
+							fcn2->fingerprint, fcn2->fingerprint_size,
+							NULL, &t);
+					/* Set flag in matched functions */
+					fcn->diff->type = fcn2->diff->type = (t >= 1)
+						? R_ANAL_DIFF_TYPE_MATCH
+						: R_ANAL_DIFF_TYPE_UNMATCH;
+					fcn->diff->dist = fcn2->diff->dist = t;
+					R_FREE (fcn->fingerprint);
+					R_FREE (fcn2->fingerprint);
+				}
 				fcn->diff->addr = fcn2->addr;
 				fcn2->diff->addr = fcn->addr;
 				fcn->diff->size = r_anal_function_linear_size (fcn2);
@@ -254,18 +311,21 @@ R_API int r_anal_diff_fcn(RAnal *anal, RList *fcns, RList *fcns2) {
 				minsize = fcn_size;
 			}
 			if (maxsize * anal->diff_thfcn > minsize) {
-				eprintf ("Exceeded anal threshold while diffing %s and %s\n", fcn->name, fcn2->name);
+				R_LOG_DEBUG ("Exceeded anal threshold while diffing %s and %s", fcn->name, fcn2->name);
 				continue;
 			}
 			if (fcn2->diff->type != R_ANAL_DIFF_TYPE_NULL) {
-				eprintf ("Function %s already diffed\n", fcn2->name);
+				R_LOG_DEBUG ("Function %s already diffed", fcn2->name);
 				continue;
 			}
 			if ((fcn2->type != R_ANAL_FCN_TYPE_FCN && fcn2->type != R_ANAL_FCN_TYPE_SYM)) {
-				eprintf ("Function %s type not supported\n", fcn2->name);
+				R_LOG_DEBUG ("Function %s type not supported", fcn2->name);
 				continue;
 			}
-			r_diff_buffers_distance (NULL, fcn->fingerprint, fcn->fingerprint_size, fcn2->fingerprint, fcn2->fingerprint_size, NULL, &t);
+			if (fcn->fingerprint && fcn2->fingerprint) {
+				r_diff_buffers_distance (NULL, fcn->fingerprint, fcn->fingerprint_size,
+						fcn2->fingerprint, fcn2->fingerprint_size, NULL, &t);
+			}
 			fcn->diff->dist = fcn2->diff->dist = t;
 			if (t > anal->diff_thfcn && t > ot) {
 				ot = t;
@@ -299,11 +359,4 @@ R_API int r_anal_diff_fcn(RAnal *anal, RList *fcns, RList *fcns2) {
 		}
 	}
 	return true;
-}
-
-R_API int r_anal_diff_eval(RAnal *anal) {
-	if (anal && anal->cur && anal->cur->diff_eval) {
-		return (anal->cur->diff_eval (anal));
-	}
-	return true; // XXX: shouldn't this be false?
 }

@@ -2,8 +2,19 @@
 # SANITIZE="address leak memory undefined"
 # SANITIZE="address signed-integer-overflow"  # Faster build
 # default:
-SANITIZE=${SANITIZE:="address undefined signed-integer-overflow"}
+if [ -n "$(echo $SANITIZE | grep memory)" ]; then
+	# This is linux (and CLANG) Specific
+	SANITIZE=${SANITIZE:="memory"}
+#	SANITIZE=${SANITIZE:="memory undefined signed-integer-overflow"}
+	export CFLAGS="-fsanitize-memory-track-origins=2"
+	export CC=clang
+else
+	SANITIZE=${SANITIZE:="address undefined signed-integer-overflow"}
+
+fi
 # SANITIZE=${SANITIZE:="thread"}
+# export CFLAGS="-mno-omit-leaf-frame-pointer -fno-omit-frame-pointer -fno-optimize-sibling-calls -O0"
+export CFLAGS="-mno-omit-leaf-frame-pointer -fno-omit-frame-pointer -fno-optimize-sibling-calls"
 
 printf "\033[32m"
 echo "========================================================================="
@@ -44,6 +55,8 @@ if [ "`uname`" != Darwin ]; then
 	done
 fi
 
+export CFLAGS="${CFLAGS} -fno-omit-frame-pointer"
+
 echo 'int main(){return 0;}' > .a.c
 [ -z "${CC}" ] && CC=gcc
 ${CC} ${CFLAGS} ${LDFLAGS} -o .a.out .a.c
@@ -59,4 +72,4 @@ if [ "$1" = "-u" ]; then
 	shift
 	SCRIPT=user.sh
 fi
-exec sys/${SCRIPT} --with-check-level=0 $*
+exec sys/${SCRIPT} $* --with-check-level=0 --without-syscapstone

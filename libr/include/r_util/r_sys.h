@@ -3,7 +3,7 @@
 
 #include <r_list.h>
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 #define R_SYS_DEVNULL "nul"
 #else
 #include <errno.h>
@@ -14,12 +14,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define R_SYS_BITS_8 1
-#define R_SYS_BITS_16 2
-#define R_SYS_BITS_32 4
-#define R_SYS_BITS_64 8
-#define R_SYS_BITS_27 16
 
 typedef struct {
 	char *sysname;
@@ -47,13 +41,13 @@ R_API char *r_sys_pid_to_path(int pid);
 R_API int r_sys_run(const ut8 *buf, int len);
 R_API int r_sys_run_rop(const ut8 *buf, int len);
 R_API int r_sys_getpid(void);
-R_API int r_sys_crash_handler(const char *cmd);
+R_API bool r_sys_crash_handler(const char *cmd);
 R_API const char *r_sys_arch_str(int arch);
 R_API int r_sys_arch_id(const char *arch);
 R_API bool r_sys_arch_match(const char *archstr, const char *arch);
 R_API RList *r_sys_dir(const char *path);
 R_API void r_sys_perror_str(const char *fun);
-#if __WINDOWS__
+#if R2__WINDOWS__
 #define r_sys_mkdir_failed() (GetLastError () != ERROR_ALREADY_EXISTS)
 #else
 #define r_sys_mkdir_failed() (errno != EEXIST)
@@ -67,8 +61,13 @@ R_API int r_sys_sleep(int secs);
 R_API int r_sys_usleep(int usecs);
 R_API char *r_sys_getenv(const char *key);
 R_API bool r_sys_getenv_asbool(const char *key);
+R_API int r_sys_getenv_asint(const char *key);
+R_API ut64 r_sys_getenv_asut64(const char *key);
 R_API int r_sys_setenv(const char *key, const char *value);
-R_API int r_sys_clearenv(void);
+R_API int r_sys_setenv_sep(const char *key, const char *value, bool prefix);
+R_API void r_sys_setenv_asbool(const char *key, bool v);
+R_API void r_sys_setenv_asut64(const char *key, ut64 n);
+R_API bool r_sys_clearenv(void);
 R_API char *r_sys_whoami(void);
 R_API int r_sys_uid(void);
 R_API char *r_sys_getdir(void);
@@ -76,8 +75,8 @@ R_API bool r_sys_chdir(const char *s);
 R_API bool r_sys_aslr(int val);
 R_API int r_sys_thp_mode(void);
 R_API int r_sys_cmd_str_full(const char *cmd, const char *input, int ilen, char **output, int *len, char **sterr);
-#if __WINDOWS__
-#if UNICODE
+#if R2__WINDOWS__
+#ifdef UNICODE
 #define W32_TCHAR_FSTR "%S"
 #define W32_TCALL(name) name"W"
 #define r_sys_conv_utf8_to_win(buf) r_utf8_to_utf16 (buf)
@@ -106,16 +105,18 @@ R_API char *r_sys_cmd_strf(const char *cmd, ...) R_PRINTF_CHECK(1, 2);
 R_API void r_sys_backtrace(void);
 R_API bool r_sys_tts(const char *txt, bool bg);
 
-#if __WINDOWS__
+#define R_DUMP(x) __builtin_dump_struct(x, &printf)
+
+#if R2__WINDOWS__
 #  define r_sys_breakpoint() { __debugbreak  (); }
 #else
-#if __GNUC__ && !defined(__TINYC__)
-#  define r_sys_breakpoint() __builtin_trap()
-#elif __i386__ || __x86_64__
+#if __i386__ || __x86_64__
 #   define r_sys_breakpoint() __asm__ volatile ("int3");
-#elif __arm64__ || __aarch64__
+#elif __arm64__ || __aarch64__ || __arm64e__
 #  define r_sys_breakpoint() __asm__ volatile ("brk 0");
 // #define r_sys_breakpoint() __asm__ volatile ("brk #1");
+#elif __GNUC__ && !defined(__TINYC__)
+#  define r_sys_breakpoint() __builtin_trap()
 #elif (__arm__ || __thumb__)
 #  if __ARM_ARCH > 5
 #    define r_sys_breakpoint() __asm__ volatile ("bkpt $0");

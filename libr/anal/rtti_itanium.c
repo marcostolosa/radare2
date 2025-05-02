@@ -291,7 +291,7 @@ static si_class_type_info *rtti_itanium_si_class_type_info_new(RVTableContext *c
 	return result;
 }
 
-static const char *type_to_string(RTypeInfoType type) {
+static const char *type_tostring(RTypeInfoType type) {
 	switch (type) {
 	case R_TYPEINFO_TYPE_CLASS:
 		return CLASS_TYPE_INFO_NAME;
@@ -300,7 +300,7 @@ static const char *type_to_string(RTypeInfoType type) {
 	case R_TYPEINFO_TYPE_VMI_CLASS:
 		return VMI_CLASS_TYPE_INFO_NAME;
 	default:
-		r_return_val_if_reached (CLASS_TYPE_INFO_NAME);
+		R_RETURN_VAL_IF_REACHED (CLASS_TYPE_INFO_NAME);
 	}
 	return NULL;
 }
@@ -313,7 +313,7 @@ static void rtti_itanium_print_class_type_info(class_type_info *cti, const char 
 			"%s  Type Name: %s\n"
 			"%s  Name unique: %s\n",
 			prefix, cti->typeinfo_addr,
-			prefix, type_to_string (cti->type),
+			prefix, type_tostring (cti->type),
 			prefix, cti->class_vtable_addr,
 			prefix, cti->vtable_addr,
 			prefix, cti->name_addr,
@@ -328,7 +328,7 @@ static void rtti_itanium_print_class_type_info_json(class_type_info *cti) {
 	}
 
 	pj_o (pj);
-	pj_ks (pj, "type", type_to_string (cti->type));
+	pj_ks (pj, "type", type_tostring (cti->type));
 	pj_kn (pj, "found_at", cti->typeinfo_addr);
 	pj_kn (pj, "class_vtable", cti->class_vtable_addr);
 	pj_kn (pj, "ref_to_type_class", cti->vtable_addr);
@@ -353,7 +353,7 @@ static void rtti_itanium_print_vmi_class_type_info(vmi_class_type_info *vmi_cti,
 			"%s  Count of base classes: 0x%x"
 			"\n",
 			prefix, vmi_cti->typeinfo_addr,
-			prefix, type_to_string (vmi_cti->type),
+			prefix, type_tostring (vmi_cti->type),
 			prefix, vmi_cti->class_vtable_addr,
 			prefix, vmi_cti->vtable_addr,
 			prefix, vmi_cti->name_addr,
@@ -379,7 +379,7 @@ static void rtti_itanium_print_vmi_class_type_info_json(vmi_class_type_info *vmi
 	}
 
 	pj_o (pj);
-	pj_ks (pj, "type", type_to_string (vmi_cti->type));
+	pj_ks (pj, "type", type_tostring (vmi_cti->type));
 	pj_kn (pj, "found_at", vmi_cti->typeinfo_addr);
 	pj_kn (pj, "class_vtable", vmi_cti->class_vtable_addr);
 	pj_kn (pj, "ref_to_type_class", vmi_cti->vtable_addr);
@@ -413,7 +413,7 @@ static void rtti_itanium_print_si_class_type_info(si_class_type_info *si_cti, co
 			"%s  Name unique: %s\n"
 			"%s  Reference to parent's type info: 0x%08" PFMT64x "\n",
 			prefix, si_cti->typeinfo_addr,
-			prefix, type_to_string (si_cti->type),
+			prefix, type_tostring (si_cti->type),
 			prefix, si_cti->class_vtable_addr,
 			prefix, si_cti->vtable_addr,
 			prefix, si_cti->name_addr,
@@ -429,7 +429,7 @@ static void rtti_itanium_print_si_class_type_info_json(si_class_type_info *si_ct
 	}
 
 	pj_o (pj);
-	pj_ks (pj, "type", type_to_string (si_cti->type));
+	pj_ks (pj, "type", type_tostring (si_cti->type));
 	pj_kn (pj, "found_at", si_cti->typeinfo_addr);
 	pj_kn (pj, "class_vtable", si_cti->class_vtable_addr);
 	pj_kn (pj, "ref_to_type_class", si_cti->vtable_addr);
@@ -445,7 +445,7 @@ static void rtti_itanium_print_si_class_type_info_json(si_class_type_info *si_ct
 
 static RTypeInfoType rtti_itanium_type_info_type_from_flag(RVTableContext *context, ut64 atAddress) {
 	RCore *core = context->anal->coreb.core;
-	r_return_val_if_fail (core, R_TYPEINFO_TYPE_CLASS);
+	R_RETURN_VAL_IF_FAIL (core, R_TYPEINFO_TYPE_CLASS);
 
 	// get the reloc flags
 	const RList *flags = context->anal->flb.get_list (core->flags, atAddress);
@@ -668,7 +668,7 @@ static class_type_info *rtti_itanium_type_info_new(RVTableContext *context, ut64
 	case R_TYPEINFO_TYPE_CLASS:
 		return rtti_itanium_class_type_info_new (context, rtti_addr, vtable_addr);
 	default:
-		r_return_val_if_reached (NULL);
+		R_RETURN_VAL_IF_REACHED (NULL);
 	}
 	return false;
 }
@@ -690,7 +690,7 @@ static void rtti_itanium_type_info_free(void *info) {
 		rtti_itanium_class_type_info_free (cti);
 		return;
 	default:
-		r_return_if_reached ();
+		R_RETURN_IF_REACHED ();
 	}
 }
 
@@ -733,7 +733,7 @@ R_API bool r_anal_rtti_itanium_print_at_vtable(RVTableContext *context, ut64 add
 		return true;
 	default:
 		rtti_itanium_class_type_info_free (cti);
-		r_return_val_if_reached (false);
+		R_RETURN_VAL_IF_REACHED (false);
 	}
 	return false;
 }

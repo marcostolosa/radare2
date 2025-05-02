@@ -8,7 +8,8 @@ if [ "$1" = "--help" ]; then
 fi
 
 if [ "$1" = "--meson" ]; then
-        CFLAGS="-static" LDFLAGS="-static" meson --prefix=${HOME}/.local --buildtype release --default-library static build
+	[ "`uname`" != Darwin ] && export CFLAGS="-static" LDFLAGS="-static" 
+	meson --prefix=${HOME}/.local --buildtype release --default-library static build
         ninja -C build && ninja -C build install
 	exit $?
 fi
@@ -60,7 +61,7 @@ else
 	PREFIX=/usr
 fi
 # CFGARGS=--disable-loadlibs
-CFGARGS=--without-openssl
+# CFGARGS=--without-openssl
 DOCFG=1
 if [ 1 = "${DOCFG}" ]; then
 	# build
@@ -68,9 +69,10 @@ if [ 1 = "${DOCFG}" ]; then
 		${MAKE} mrproper > /dev/null 2>&1
 	fi
 	export CFLAGS="${CFLAGS} -fPIC"
+	export CFGARGS="$CFGARGS --with-static-themes"
 	cp -f dist/plugins-cfg/plugins.static.nogpl.cfg plugins.cfg
 	./configure-plugins || exit 1
-	./configure --prefix="$PREFIX" --without-gpl --with-libr --without-libuv $CFGARGS || exit 1
+	./configure --prefix="$PREFIX" --without-gpl --with-libr $CFGARGS || exit 1
 fi
 ${MAKE} -j 8 || exit 1
 BINS="rarun2 r2pm rasm2 radare2 ragg2 rabin2 rax2 rahash2 rafind2 r2agent radiff2 r2r"

@@ -1,6 +1,8 @@
 
+#define R_LOG_ORIGIN "r2r"
 #define main not_main
 #include "../../binr/r2r/r2r.c"
+#undef R_LOG_ORIGIN
 #include "../../binr/r2r/load.c"
 #include "../../binr/r2r/run.c"
 #undef main
@@ -13,7 +15,7 @@ bool test_r2r_database_load_cmd(void) {
 	R2RTestDatabase *db = r2r_test_database_new ();
 	database_load (db, FILENAME, 1);
 
-	mu_assert_eq (r_pvector_len (&db->tests), 4, "tests count");
+	mu_assert_eq (r_pvector_length (&db->tests), 4, "tests count");
 
 	R2RTest *test = r_pvector_at (&db->tests, 0);
 	mu_assert_eq (test->type, R2R_TEST_TYPE_CMD, "test type");
@@ -61,6 +63,10 @@ bool test_r2r_fix(void) {
 
 	R2RTestResultInfo *result0 = R_NEW0 (R2RTestResultInfo);
 	r_pvector_push (results, result0);
+	if (r_pvector_length (&db->tests) == 0) {
+		eprintf ("Empty tests database. Please run this binary from the test/ directory.\n");
+		return false;
+	}
 	result0->test = r_pvector_at (&db->tests, 0);
 	result0->result = R2R_TEST_RESULT_FAILED;
 	result0->proc_out = R_NEW0 (R2RProcessOutput);
@@ -179,7 +185,7 @@ bool test_r2r_fix(void) {
 	mu_end;
 }
 
-int all_tests() {
+int all_tests(void) {
 	mu_run_test (test_r2r_database_load_cmd);
 	mu_run_test (test_r2r_fix);
 	return tests_passed != tests_run;

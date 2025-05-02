@@ -106,7 +106,7 @@ bool winkd_lock_leave(WindCtx *ctx) {
 }
 
 int winkd_get_bits(WindCtx *ctx) {
-	return ctx->is_x64 ? R_SYS_BITS_64 : R_SYS_BITS_32;
+	return ctx->is_x64 ? R_SYS_BITS_PACK (64): R_SYS_BITS_PACK (32);
 }
 
 int winkd_get_cpus(WindCtx *ctx) {
@@ -968,16 +968,15 @@ bool winkd_write_reg(WindCtx *ctx, const uint8_t *buf, int size) {
 	winkd_lock_leave (ctx);
 
 	kd_req_t *rr = PKT_REQ (pkt);
-
-	if (rr->ret) {
-		WIND_DBG eprintf("%s: req returned %08x\n", __FUNCTION__, rr->ret);
+	if (rr && rr->ret) {
+		WIND_DBG eprintf ("%s: req returned %08x\n", __FUNCTION__, rr->ret);
 		free (pkt);
-		return 0;
+		return false;
 	}
 
 	free (pkt);
-
-	return size;
+	return true;
+	// return size;
 error:
 	winkd_lock_leave (ctx);
 	return 0;
@@ -1383,7 +1382,7 @@ void winkd_break(void *arg) {
 }
 
 int winkd_break_read(WindCtx *ctx) {
-#if __WINDOWS__ && !defined(_MSC_VER)
+#if R2__WINDOWS__ && !defined(_MSC_VER)
 	static BOOL WINAPI (*w32_CancelIoEx)(HANDLE, LPOVERLAPPED) = NULL;
 	if (!w32_CancelIoEx) {
 		w32_CancelIoEx = (BOOL WINAPI (*)(HANDLE, LPOVERLAPPED))

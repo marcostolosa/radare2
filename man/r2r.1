@@ -1,4 +1,4 @@
-.Dd Jun 31, 2022
+.Dd Dec 20, 2024
 .Dt R2R 1
 .Sh NAME
 .Nm r2r
@@ -6,8 +6,10 @@
 .Sh SYNOPSIS
 .Nm r2r
 .Op Fl h
+.Op Fl H
 .Op Fl i
 .Op Fl n
+.Op Fl L
 .Op Fl q
 .Op Fl v
 .Op Fl V
@@ -15,19 +17,27 @@
 .Op Fl f Ar bin-for-json-tests
 .Op Fl F Ar fuzzbindir
 .Op Fl C Ar chdir
+.Op Fl o Ar file
+.Op Fl s Ar ignore
+.Op Fl S Ar shallow
+.Op Fl t Ar seconds
 .Op [test-(dir|file) ...]
 .Sh DESCRIPTION
-Run all the radare2-regressions tests matching a specific word in the name.
+Run all the radare2 regression tests matching a specific word in the name.
 .Pp
 You need radare2 to be available in $PATH.
 .Sh OPTIONS
 .Bl -tag -width Fl
 .It Fl h
 Show the help/usage message
+.It Fl H
+Display the list of environment variables and their default values
 .It Fl i
 Interactive mode
 .It Fl n
 Do not run any test, just load/parse them
+.It Fl L
+Log mode (better printing for CI, logfiles, etc.)
 .It Fl q
 Quiet mode (use like this: r2r -qv)
 .It Fl v
@@ -44,14 +54,25 @@ Load the given binary when running the JSON tests
 Early chdir before running any test
 .It Fl F Ar directory
 Specify the path where the fuzzed binaries are
+.It Fl o Ar file
+Output test run information in JSON format to file
+.It Fl s Ar test
+Set R2R_SKIP_(TEST)=1 to skip running that test type
+.It Fl S Ar shallow
+Set R2R_SHALLOW=N to skip a random N percentage of the tests
+.It Fl t Ar seconds
+Timeout per test (default is (30*60))
 .El
 .Sh USAGE
 .Pp
-Use the -n flag to dont run any test. Just load them.
+Use the -n flag to not run any test. Just load them.
 .Pp
   $ r2r -n
   [r2r] Loading tests...
 .Pp
+Run the tests contained in a directory interactively, if any of those tests fail to run, prompt the user to autofix, edit the commands, etc.
+.Pp
+  $ r2r -i test/db/cmd/cmd_pdf
 .Sh SEE ALSO
 .Pp
 .Xr radare2(1)

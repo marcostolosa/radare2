@@ -40,6 +40,7 @@ extern "C" {
 
 #define R_IGNORE_RETURN(x) if ((x)) {;}
 
+// unaligned word access
 typedef R_ALIGNED(1) ut16 uut16;
 typedef R_ALIGNED(1) ut32 uut32;
 typedef R_ALIGNED(1) ut64 uut64;
@@ -116,6 +117,11 @@ typedef struct _utX {
 #define UT8_MIN  0x00U
 #define ASCII_MIN 32
 #define ASCII_MAX 127
+
+#define UT24_MAX 0xFFFFFF
+#define UT40_MAX 0xFFFFFFFFFFULL
+#define UT48_MAX 0xFFFFFFFFFFFFULL
+#define UT56_MAX 0xFFFFFFFFFFFFFFULL
 
 #if SSIZE_MAX == ST32_MAX
 #define SZT_MAX  UT32_MAX
@@ -204,6 +210,16 @@ typedef struct _utX {
 #define NAN (0.0f/0.0f)
 #endif
 
+#define F32_NAN   (strtof("NAN", NULL))
+#define F32_PINF  (strtof("INF", NULL))
+#define F32_NINF  (-strtof("INF", NULL))
+#define F64_NAN   (strtod("NAN", NULL))
+#define F64_PINF  (strtod("INF", NULL))
+#define F64_NINF  (-strtod("INF", NULL))
+#define F128_NAN  (strtold("NAN", NULL))
+#define F128_PINF (strtold("INF", NULL))
+#define F128_NINF (-strtold("INF", NULL))
+
 /* A workaround against libc headers redefinition of __attribute__:
  * Standard include has lines like
  * #if (GCC_VERSION < 2007)
@@ -221,6 +237,12 @@ typedef struct _utX {
 #define R_PACKED( __Declaration__ ) __Declaration__ __attribute__((__packed__))
 #endif
 
+#define R_UNWRAP2(a,b) ((a)? a->b: NULL)
+#define R_UNWRAP3(a,b,c) ((a)? a->b? a->b->c: NULL: NULL)
+#define R_UNWRAP4(a,b,c,d) ((a)? a->b? a->b->c? a->b->c->d: NULL: NULL: NULL)
+#define R_UNWRAP5(a,b,c,d,e) ((a)? a->b? a->b->c? a->b->c->d? a->b->c->d->e: NULL: NULL: NULL: NULL)
+#define R_UNWRAP6(a,b,c,d,e,f) ((a)? a->b? a->b->c? a->b->c->d? a->b->c->d->e? a->b->c->d->e: NULL: NULL: NULL: NULL: NULL)
+
 #ifdef __GNUC__
 #define R_UNUSED __attribute__((__unused__))
 #define R_WEAK __attribute__ ((weak))
@@ -236,15 +258,69 @@ typedef struct _utX {
 #define DEBUGGER 0
 #endif
 
+typedef ut64 RSysBits;
+typedef ut8 RSysBitValue;
+
+#define R_SYS_BITS_SIZE 8
+#define R_SYS_BITS_MASK 0xff
+#define R_SYS_BITS_PACK(x) (x)
+#define R_SYS_BITS_PACK1(x) (x)
+#define R_SYS_BITS_PACK2(x,y) ((x) | ((y)<<R_SYS_BITS_SIZE))
+#define R_SYS_BITS_PACK3(x,y,z) ((x) | ((y)<<R_SYS_BITS_SIZE) | ((z) << (R_SYS_BITS_SIZE*2)))
+#define R_SYS_BITS_PACK4(x,y,z,q) (RSysBits)((x) | ((y)<<R_SYS_BITS_SIZE) | ((z) << (R_SYS_BITS_SIZE*2)) | ((q) << (R_SYS_BITS_SIZE*3)) )
+#define R_SYS_BITS_CHECK(x, y) (bool)( \
+	(((x) & R_SYS_BITS_MASK) == (y)) || \
+	((((x) >> R_SYS_BITS_SIZE) & R_SYS_BITS_MASK) == (y)) || \
+	((((x) >> (R_SYS_BITS_SIZE*2)) & R_SYS_BITS_MASK) == (y)) || \
+	((((x) >> (R_SYS_BITS_SIZE*3)) & R_SYS_BITS_MASK) == (y)) \
+)
+#define R_SYS_BITS_CHECK3(x, a, b, c) (bool)( \
+	(((x) & R_SYS_BITS_MASK) == (a)) || \
+	(((x) & R_SYS_BITS_MASK) == (b)) || \
+	(((x) & R_SYS_BITS_MASK) == (c)) || \
+	((((x) >> R_SYS_BITS_SIZE) & R_SYS_BITS_MASK) == (a)) || \
+	((((x) >> R_SYS_BITS_SIZE) & R_SYS_BITS_MASK) == (b)) || \
+	((((x) >> R_SYS_BITS_SIZE) & R_SYS_BITS_MASK) == (c)) || \
+	((((x) >> (R_SYS_BITS_SIZE*2)) & R_SYS_BITS_MASK) == (a)) || \
+	((((x) >> (R_SYS_BITS_SIZE*2)) & R_SYS_BITS_MASK) == (b)) || \
+	((((x) >> (R_SYS_BITS_SIZE*2)) & R_SYS_BITS_MASK) == (c)) || \
+	((((x) >> (R_SYS_BITS_SIZE*3)) & R_SYS_BITS_MASK) == (a)) || \
+	((((x) >> (R_SYS_BITS_SIZE*3)) & R_SYS_BITS_MASK) == (b)) || \
+	((((x) >> (R_SYS_BITS_SIZE*3)) & R_SYS_BITS_MASK) == (c)) \
+)
+
+
 #define HEAPTYPE(x) \
 	static x* x##_new(x n) {\
 		x *m = malloc(sizeof (x));\
 		return m? *m = n, m: m; \
 	}
 
-#define R_DIRTY(x) (x)->is_dirty = true
-#define R_IS_DIRTY(x) (x)->is_dirty
+#define R_DIRTY_SET(x) (x)->is_dirty = true
+#define R_DIRTY_UNSET(x) (x)->is_dirty = false
+#define R_DIRTY_CHECK(x) (x)->is_dirty
 #define R_DIRTY_VAR bool is_dirty
+
+#define R_TAG(x) (void*)((size_t)(x)|1)
+#define R_UNTAG(x) (void*)((((size_t)(x))&(size_t)-2))
+#define R_TAG_FREE(x) do { if (!((size_t)(x)&1)) { R_FREE(x); }} while(0)
+#define R_TAG_NOP(x) untagged_pointer_check(x)
+#define R_IS_TAGGED(x) ((size_t)(x)&1)
+#define R_TAGGED
+#if R_CHECKS_LEVEL == 0
+static inline void *untagged_pointer_check(void *x) {
+	return x;
+}
+#else
+static inline void *untagged_pointer_check(void *x) {
+	if (R_IS_TAGGED(x)) {
+		int *p = (int*)0; *p = 0;
+	}
+	return x;
+}
+#endif
+
+#define ALLOC_SIZE_LIMIT 0xffffff
 
 #ifdef __cplusplus
 }

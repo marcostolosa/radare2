@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2008-2022 - pancake */
+/* radare - LGPL - Copyright 2008-2024 - pancake, condret */
 
 #include <r_io.h>
 #include <r_lib.h>
@@ -57,35 +57,89 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 			}
 		} else {
 			mal->size = r_num_math (NULL, pathname + 9);
-			if (((int)mal->size) <= 0) {
+			if (((int)mal->size) < 1) {
 				free (mal);
-				eprintf ("Cannot allocate (%s) 0 bytes\n", pathname + 9);
+				R_LOG_ERROR ("Cannot allocate (%s) 0 bytes", pathname + 9);
 				return NULL;
 			}
 			mal->buf = calloc (1, mal->size + 1);
 		}
 		mal->offset = 0;
 		if (mal->buf) {
-			return r_io_desc_new (io, &r_io_plugin_malloc, pathname, R_PERM_RW | rw, mode, mal);
+			return r_io_desc_new (io, &r_io_plugin_malloc, pathname,
+				R_PERM_RW | (rw & R_PERM_X), mode, mal);
 		}
-		eprintf ("Cannot allocate (%s) %d byte(s)\n", pathname + 9, mal->size);
+		R_LOG_ERROR ("Cannot allocate (%s) %d byte(s)", pathname + 9, mal->size);
 		free (mal);
 	}
 	return NULL;
 }
 
+static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
+	const int ret = io_memory_write (io, fd, buf, count);
+	if (ret == -1 || !r_str_startswith (fd->uri, "hex://")) {
+		return ret;
+	}
+	RIOMalloc *mal = (RIOMalloc *)fd->data;
+	char *hex = r_hex_bin2strdup (mal->buf, mal->size);
+	if (!hex) {
+		return ret;
+	}
+	char *uri = r_str_newf ("hex://%s", hex);
+	free (hex);
+	if (uri) {
+		free (fd->uri);
+		fd->uri = uri;
+	}
+	return ret;
+}
+
+static bool __resize(RIO *io, RIODesc *fd, ut64 count) {
+	if (!io_memory_resize (io, fd, count)) {
+		return false;
+	}
+	if (!fd->uri) {
+		return true;
+	}
+	if (r_str_startswith (fd->uri, "malloc://")) {
+		char *uri = r_str_newf ("malloc://%"PFMT64u, count);
+		if (uri) {
+			free (fd->uri);
+			fd->uri = uri;
+		}
+		return true;
+	}
+	if (r_str_startswith (fd->uri, "hex://")) {
+		RIOMalloc *mal = (RIOMalloc *)fd->data;
+		char *hex = r_hex_bin2strdup (mal->buf, mal->size);
+		if (!hex) {
+			return true;
+		}
+		char *uri = r_str_newf ("hex://%s", hex);
+		free (hex);
+		if (uri) {
+			free (fd->uri);
+			fd->uri = uri;
+		}
+	}
+	return true;
+}
+
 RIOPlugin r_io_plugin_malloc = {
-	.name = "malloc",
-	.desc = "Memory allocation plugin",
+	.meta = {
+		.name = "malloc",
+		.desc = "Memory allocation plugin",
+		.author = "condret",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "malloc://,hex://,slurp://,stdin://",
-	.license = "LGPL3",
 	.open = __open,
 	.close = io_memory_close,
 	.read = io_memory_read,
 	.check = __check,
 	.seek = io_memory_lseek,
-	.write = io_memory_write,
-	.resize = io_memory_resize,
+	.write = __write,
+	.resize = __resize,
 };
 
 #ifndef R2_PLUGIN_INCORE

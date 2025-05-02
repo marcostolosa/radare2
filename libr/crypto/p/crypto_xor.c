@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2017 - pancake */
+/* radare - LGPL - Copyright 2009-2024 - pancake */
 
 #include <r_lib.h>
 #include <r_crypto.h>
@@ -18,6 +18,9 @@ static bool xor_init(struct xor_state *const state, const ut8 *key, int keylen) 
 	}
 	state->key_size = keylen;
 	state->key = malloc (keylen);
+	if (state->key == NULL) {
+		return false;
+	}
 	memcpy (state->key, key, keylen);
 	return true;
 }
@@ -27,45 +30,43 @@ static bool xor_init(struct xor_state *const state, const ut8 *key, int keylen) 
  */
 
 static void xor_crypt(struct xor_state *const state, const ut8 *inbuf, ut8 *outbuf, int buflen) {
-	int i;//index for input
+	int i;
 	for (i = 0; i < buflen; i++) {
 		outbuf[i] = inbuf[i] ^ state->key[(i%state->key_size)];
 	}
 }
-static bool xor_set_key(RCrypto *cry, const ut8 *key, int keylen, int mode, int direction) {
+static bool xor_set_key(RCryptoJob *cj, const ut8 *key, int keylen, int mode, int direction) {
 	return xor_init (&st, key, keylen);
 }
 
-static int xor_get_key_size(RCrypto *cry) {
+static int xor_get_key_size(RCryptoJob *cj) {
 	return st.key_size;
 }
 
-static bool xor_use(const char *algo) {
-	return !strcmp (algo, "xor");
-}
-
-static bool update(RCrypto *cry, const ut8 *buf, int len) {
+static bool update(RCryptoJob *cj, const ut8 *buf, int len) {
 	ut8 *obuf = calloc (1, len);
 	if (!obuf) {
 		return false;
 	}
 	xor_crypt (&st, buf, obuf, len);
-	r_crypto_append (cry, obuf, len);
+	r_crypto_job_append (cj, obuf, len);
 	free (obuf);
 	return true;
 }
 
-static bool final(RCrypto *cry, const ut8 *buf, int len) {
-	return update (cry, buf, len);
-}
-
 RCryptoPlugin r_crypto_plugin_xor = {
-	.name = "xor",
+	.type = R_CRYPTO_TYPE_ENCRYPT,
+	.meta = {
+		.name = "xor",
+		.desc = "Byte level Exclusive Or",
+		.author = "pancake",
+		.license = "MIT",
+	},
+	.implements = "xor",
 	.set_key = xor_set_key,
 	.get_key_size = xor_get_key_size,
-	.use = xor_use,
 	.update = update,
-	.final = final
+	.end = update
 };
 
 #ifndef R2_PLUGIN_INCORE

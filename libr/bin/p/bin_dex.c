@@ -1,77 +1,84 @@
-/* radare - LGPL - Copyright 2011-2021 - pancake, h4ng3r */
+/* radare - LGPL - Copyright 2011-2025 - pancake, h4ng3r */
 
-#include <r_cons.h>
-#include <r_types.h>
-#include <r_util.h>
-#include <r_lib.h>
 #include <r_bin.h>
 #include "../i/private.h"
 #include "dex/dex.h"
+// XXX use rhash/crytpo/trans api instead
 #define r_hash_adler32 __adler32
-#include "../../hash/adler32.c"
+#include "../../crypto/hash/adler32.c"
 
-// globals to kill
+#define DBG_END_SEQUENCE          0x00
+#define DBG_ADVANCE_PC            0x01
+#define DBG_ADVANCE_LINE          0x02
+#define DBG_START_LOCAL           0x03
+#define DBG_START_LOCAL_EXTENDED  0x04
+#define DBG_END_LOCAL             0x05
+#define DBG_RESTART_LOCAL         0x06
+#define DBG_SET_PROLOGUE_END      0x07
+#define DBG_SET_EPILOGUE_BEGIN    0x08
+#define DBG_SET_FILE              0x09
+#define DBG_FIRST_SPECIAL         0x0A
+
+#define DBG_LINE_BASE             -4
+#define DBG_LINE_RANGE            15
+
 extern struct r_bin_dbginfo_t r_bin_dbginfo_dex;
-static R_TH_LOCAL bool dexdump = false;
-static R_TH_LOCAL Sdb *mdb = NULL;
-static R_TH_LOCAL const char *dexSubsystem = NULL;
-static R_TH_LOCAL bool simplifiedDemangling = false; // depends on asm.pseudo
 
-static ut64 get_method_flags(ut64 MA) {
+static ut64 get_method_attr(ut64 MA) {
 	ut64 flags = 0;
 	if (MA & R_DEX_METH_PUBLIC) {
-		flags |= R_BIN_METH_PUBLIC;
+		flags |= R_BIN_ATTR_PUBLIC;
 	}
 	if (MA & R_DEX_METH_PRIVATE) {
-		flags |= R_BIN_METH_PRIVATE;
+		flags |= R_BIN_ATTR_PRIVATE;
 	}
 	if (MA & R_DEX_METH_PROTECTED) {
-		flags |= R_BIN_METH_PROTECTED;
+		flags |= R_BIN_ATTR_PROTECTED;
 	}
 	if (MA & R_DEX_METH_STATIC) {
-		flags |= R_BIN_METH_STATIC;
+		flags |= R_BIN_ATTR_STATIC;
 	}
 	if (MA & R_DEX_METH_FINAL) {
-		flags |= R_BIN_METH_FINAL;
+		flags |= R_BIN_ATTR_FINAL;
 	}
 	if (MA & R_DEX_METH_SYNCHRONIZED) {
-		flags |= R_BIN_METH_SYNCHRONIZED;
+		flags |= R_BIN_ATTR_SYNCHRONIZED;
 	}
 	if (MA & R_DEX_METH_BRIDGE) {
-		flags |= R_BIN_METH_BRIDGE;
+		flags |= R_BIN_ATTR_BRIDGE;
 	}
 	if (MA & R_DEX_METH_VARARGS) {
-		flags |= R_BIN_METH_VARARGS;
+		flags |= R_BIN_ATTR_VARARGS;
 	}
 	if (MA & R_DEX_METH_NATIVE) {
-		flags |= R_BIN_METH_NATIVE;
+		flags |= R_BIN_ATTR_NATIVE;
 	}
 	if (MA & R_DEX_METH_ABSTRACT) {
-		flags |= R_BIN_METH_ABSTRACT;
+		flags |= R_BIN_ATTR_ABSTRACT;
 	}
 	if (MA & R_DEX_METH_STRICT) {
-		flags |= R_BIN_METH_STRICT;
+		flags |= R_BIN_ATTR_STRICT;
 	}
 	if (MA & R_DEX_METH_SYNTHETIC) {
-		flags |= R_BIN_METH_SYNTHETIC;
+		flags |= R_BIN_ATTR_SYNTHETIC;
 	}
 	if (MA & R_DEX_METH_MIRANDA) {
-		flags |= R_BIN_METH_MIRANDA;
+		flags |= R_BIN_ATTR_MIRANDA;
 	}
 	if (MA & R_DEX_METH_CONSTRUCTOR) {
-		flags |= R_BIN_METH_CONSTRUCTOR;
+		flags |= R_BIN_ATTR_CONSTRUCTOR;
 	}
 	if (MA & R_DEX_METH_DECLARED_SYNCHRONIZED) {
-		flags |= R_BIN_METH_DECLARED_SYNCHRONIZED;
+		flags |= R_BIN_ATTR_SYNCHRONIZED;
 	}
 	return flags;
 }
 
 static ut64 offset_of_method_idx(RBinFile *bf, int idx) {
-	// RBinDexObj *dex = bf->o->bin_obj;
+	RBinDexObj *dex = bf->bo->bin_obj;
 	// ut64 off = dex->header.method_offset + idx;
 	r_strf_var (key, 64, "method.%d", idx);
-	return sdb_num_get (mdb, key, 0);
+	return sdb_num_get (dex->mdb, key, 0);
 }
 
 static ut64 dex_field_offset(RBinDexObj *bin, int fid) {
@@ -191,35 +198,22 @@ static char *createAccessFlagStr(ut32 flags, AccessFor forWhat) {
 		},
 	};
 	size_t i, count = r_num_bit_count (flags);
-	const int kLongest = 21;
-	const int maxSize = (count + 1) * (kLongest + 1);
-	char* str, *cp;
 	// produces a huge number????
-	if (count < 1 || (count * (kLongest+1)) < 1) {
+	if (count < 1) {
 		return NULL;
 	}
-	cp = str = (char*) calloc (count + 1, (kLongest + 1));
-	if (!str) {
-		return NULL;
-	}
+	RStrBuf *sb = r_strbuf_new ("");
 	for (i = 0; i < NUM_FLAGS; i++) {
-		if (flags & 0x01) {
+		if (flags & 1) {
 			const char *accessStr = kAccessStrings[forWhat][i];
-			int len = strlen (accessStr);
-			if (cp != str) {
-				*cp++ = ' ';
+			if (!r_strbuf_is_empty (sb)) {
+				r_strbuf_append (sb, " ");
 			}
-			if (((cp - str) + len) >= maxSize) {
-				free (str);
-				return NULL;
-			}
-			memcpy (cp, accessStr, len);
-			cp += len;
+			r_strbuf_append (sb, accessStr);
 		}
 		flags >>= 1;
 	}
-	*cp = '\0';
-	return str;
+	return r_strbuf_drain (sb);
 }
 
 static const char *dex_type_descriptor(RBinDexObj *dex, int type_idx) {
@@ -253,7 +247,7 @@ static char *dex_get_proto(RBinDexObj *bin, int proto_id) {
 		return NULL;
 	}
 	if (!params_off) {
-		return r_str_newf ("()%s", return_type);;
+		return r_str_newf ("()%s", return_type);
 	}
 	ut8 params_buf[sizeof (ut32)];
 	if (!r_buf_read_at (bin->b, params_off, params_buf, sizeof (params_buf))) {
@@ -366,9 +360,9 @@ out_error:
 // XXX. this is using binfile->buf directly :(
 // https://github.com/android/platform_dalvik/blob/0641c2b4836fae3ee8daf6c0af45c316c84d5aeb/libdex/DexDebugInfo.cpp#L312
 // https://github.com/android/platform_dalvik/blob/0641c2b4836fae3ee8daf6c0af45c316c84d5aeb/libdex/DexDebugInfo.cpp#L141
-static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, int paddr, int ins_size, int insns_size, char *class_name, int regsz, int debug_info_off) {
+static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, int paddr, int ins_size, int insns_size, const char *class_name, int regsz, int debug_info_off) {
 	RBin *rbin = bf->rbin;
-	RBinDexObj *dex = bf->o->bin_obj; //  bin .. unnecessary arg
+	RBinDexObj *dex = bf->bo->bin_obj; //  bin .. unnecessary arg
 	// runtime error: pointer index expression with base 0x000000004402 overflowed to 0xffffffffff0043fc
 	if (debug_info_off >= r_buf_size (bf->buf)) {
 		return;
@@ -378,29 +372,27 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 	ut64 param_type_idx;
 	ut16 argReg = regsz - ins_size;
 	ut64 source_file_idx = c->source_file;
-	RList *params, *debug_positions, *emitted_debug_locals = NULL;
 	bool keep = true;
 	if (argReg > regsz) {
 		return; // this return breaks tests
 	}
 	r_buf_seek (bf->buf, debug_info_off, R_BUF_SET);
 	ut64 res;
-	r_buf_uleb128 (bf->buf, &res);
+	if (r_buf_uleb128 (bf->buf, &res) < 1) {
+		return;
+	}
 	line_start = res;
-	r_buf_uleb128 (bf->buf, &res);
+	if (r_buf_uleb128 (bf->buf, &res) < 1) {
+		return;
+	}
 	parameters_size = res;
 
 	// TODO: check when we should use source_file
 	// The state machine consists of five registers
 	ut32 address = 0;
 	ut32 line = line_start;
-	if (!(debug_positions = r_list_newf ((RListFree)free))) {
-		return;
-	}
-	if (!(emitted_debug_locals = r_list_newf ((RListFree)free))) {
-		free (debug_positions);
-		return;
-	}
+	RList *debug_positions = r_list_newf ((RListFree)free);
+	RList *emitted_debug_locals = r_list_newf ((RListFree)free);
 
 	struct dex_debug_local_t *debug_locals = calloc (sizeof (struct dex_debug_local_t), regsz + 1);
 	if (!(MA & 0x0008)) {
@@ -411,9 +403,7 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 		debug_locals[argReg].live = true;
 		argReg++;
 	}
-	if (!(params = dex_method_signature2 (dex, MI))) {
-		goto beach;
-	}
+	RList *params = dex_method_signature2 (dex, MI);
 
 	RListIter *iter;
 	const char *name;
@@ -424,7 +414,9 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 		if ((argReg >= regsz) || !type || parameters_size <= 0) {
 			goto beach;
 		}
-		(void)r_buf_uleb128 (bf->buf, &res);
+		if (r_buf_uleb128 (bf->buf, &res) < 1) {
+			goto beach;
+		}
 		param_type_idx = res - 1;
 		name = getstr (dex, param_type_idx);
 		reg = argReg;
@@ -437,7 +429,7 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 			argReg += 1;
 			break;
 		}
-		if (!name || !*name) {
+		if (R_STR_ISEMPTY (name)) {
 			debug_locals[reg].name = name;
 			debug_locals[reg].descriptor = type;
 			debug_locals[reg].signature = NULL;
@@ -452,24 +444,26 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 	}
 	while (keep) {
 		switch (opcode) {
-		case 0x0: // DBG_END_SEQUENCE
+		case DBG_END_SEQUENCE:
 			keep = false;
 			break;
-		case 0x1: // DBG_ADVANCE_PC
+		case DBG_ADVANCE_PC:
 			{
 			ut64 addr_diff;
-			r_buf_uleb128 (bf->buf, &addr_diff);
+			if (r_buf_uleb128 (bf->buf, &addr_diff) < 1) {
+				goto beach;
+			}
 			address += addr_diff;
 			}
 			break;
-		case 0x2: // DBG_ADVANCE_LINE
+		case DBG_ADVANCE_LINE:
 			{
 			st64 line_diff;
 			r_buf_sleb128 (bf->buf, &line_diff);
 			line += line_diff;
 			}
 			break;
-		case 0x3: // DBG_START_LOCAL
+		case DBG_START_LOCAL:
 			{
 			ut64 register_num, name_idx, type_idx;
 			r_buf_uleb128 (bf->buf, &register_num);
@@ -506,7 +500,7 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 			//eprintf("DBG_START_LOCAL %x %x %x\n", register_num, name_idx, type_idx);
 			}
 			break;
-		case 0x4: //DBG_START_LOCAL_EXTENDED
+		case DBG_START_LOCAL_EXTENDED:
 			{
 			ut64 register_num, name_idx, type_idx, sig_idx;
 			r_buf_uleb128 (bf->buf, &register_num);
@@ -545,10 +539,12 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 			debug_locals[register_num].live = true;
 			}
 			break;
-		case 0x5: // DBG_END_LOCAL
+		case DBG_END_LOCAL:
 			{
 			ut64 register_num;
-			r_buf_uleb128 (bf->buf, &register_num);
+			if (r_buf_uleb128 (bf->buf, &register_num) < 1) {
+				goto beach;
+			}
 			// emitLocalCbIfLive
 			if (register_num >= regsz) {
 				goto beach;
@@ -572,10 +568,12 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 			debug_locals[register_num].live = false;
 			}
 			break;
-		case 0x6: // DBG_RESTART_LOCAL
+		case DBG_RESTART_LOCAL:
 			{
 			ut64 register_num;
-			r_buf_uleb128 (bf->buf, &register_num);
+			if (r_buf_uleb128 (bf->buf, &register_num) < 1) {
+				goto beach;
+			}
 			if (register_num >= regsz) {
 				goto beach;
 			}
@@ -585,32 +583,44 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 			}
 			}
 			break;
-		case 0x7: //DBG_SET_PROLOGUE_END
+		case DBG_SET_PROLOGUE_END:
+			// ignored
 			break;
-		case 0x8: //DBG_SET_PROLOGUE_BEGIN
+		case DBG_SET_EPILOGUE_BEGIN:
+			// ignored
 			break;
-		case 0x9:
+		case DBG_SET_FILE:
 			{
-			ut64 res;
-			r_buf_uleb128 (bf->buf, &res);
-			source_file_idx = res - 1;
+				ut64 res;
+				if (r_buf_uleb128 (bf->buf, &res) < 1) {
+					goto beach;
+				}
+				source_file_idx = res - 1;
 			}
 			break;
 		default:
-			{
-			int adjusted_opcode = opcode - 10;
-			address += (adjusted_opcode / 15);
-			line += -4 + (adjusted_opcode % 15);
-			struct dex_debug_position_t *position =
-				R_NEW0 (struct dex_debug_position_t);
-			if (!position) {
-				keep = false;
-				break;
-			}
-			position->source_file_idx = source_file_idx;
-			position->address = address;
-			position->line = line;
-			r_list_append (debug_positions, position);
+			if (opcode >= DBG_FIRST_SPECIAL) {
+				int adjusted_opcode = opcode - DBG_FIRST_SPECIAL;
+				int addr_delta = adjusted_opcode / DBG_LINE_RANGE;
+				int line_delta = DBG_LINE_BASE + (adjusted_opcode % DBG_LINE_RANGE);
+				address += addr_delta;
+				line += line_delta;
+				if (dex->dexdump) {
+					struct dex_debug_position_t *position =
+						R_NEW0 (struct dex_debug_position_t);
+					position->source_file_idx = source_file_idx;
+					position->address = address;
+					position->line = line;
+					r_list_append (debug_positions, position);
+				}
+				RBinAddrline item = {
+					.addr = address + paddr,
+					.file = getstr (dex, source_file_idx),
+					.line = line,
+				};
+				bf->addrline.al_add (&bf->addrline, item);
+			} else {
+				R_LOG_ERROR ("unknown dex debug opcode: 0x%02x", opcode);
 			}
 			break;
 		}
@@ -619,41 +629,7 @@ static void dex_parse_debug_item(RBinFile *bf, RBinDexClass *c, int MI, int MA, 
 		}
 	}
 
-	if (!bf->sdb_addrinfo) {
-		bf->sdb_addrinfo = sdb_new0 ();
-	}
-
-	RListIter *iter1;
-	struct dex_debug_position_t *pos;
-// Loading the debug info takes too much time and nobody uses this afaik
-// 0.5s of 5s is spent in this loop
-	r_list_foreach (debug_positions, iter1, pos) {
-		const char *line = getstr (dex, pos->source_file_idx);
-		char offset[64] = {0};
-		if (!line || !*line) {
-			continue;
-		}
-		char *fileline = r_str_newf ("%s|%"PFMT64d, line, pos->line);
-		char *offset_ptr = sdb_itoa (pos->address + paddr, offset, 16);
-		sdb_set (bf->sdb_addrinfo, offset_ptr, fileline, 0);
-		sdb_set (bf->sdb_addrinfo, fileline, offset_ptr, 0);
-		free (fileline);
-
-		RBinDwarfRow *rbindwardrow = R_NEW0 (RBinDwarfRow);
-		if (!rbindwardrow) {
-			dexdump = false;
-			break;
-		}
-		if (line) {
-			rbindwardrow->file = strdup (line);
-			rbindwardrow->address = pos->address;
-			rbindwardrow->line = pos->line;
-			r_list_append (dex->lines_list, rbindwardrow);
-		} else {
-			free (rbindwardrow);
-		}
-	}
-	if (!dexdump) {
+	if (!dex->dexdump) {
 		goto beach;
 	}
 
@@ -714,24 +690,19 @@ beach:
 }
 
 static Sdb *get_sdb(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o, NULL);
-	RBinObject *o = bf->o;
-	r_return_val_if_fail (o && o->bin_obj, NULL);
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, NULL);
+	RBinObject *o = bf->bo;
+	R_RETURN_VAL_IF_FAIL (o && o->bin_obj, NULL);
 	struct r_bin_dex_obj_t *bin = (struct r_bin_dex_obj_t *) o->bin_obj;
 	return bin->kv;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	RBinDexObj *o = r_bin_dex_new_buf (buf, bf->rbin->verbose);
-	*bin_obj = o;
-	return o;
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	bf->bo->bin_obj = r_bin_dex_new_buf (buf, bf->rbin->options.verbose);
+	return bf->bo->bin_obj != NULL;
 }
 
-static ut64 baddr(RBinFile *bf) {
-	return 0;
-}
-
-static bool check_buffer(RBinFile *bf, RBuffer *buf) {
+static bool check(RBinFile *bf, RBuffer *buf) {
 	ut8 tmp[8];
 	int r = r_buf_read_at (buf, 0, tmp, sizeof (tmp));
 	if (r < sizeof (tmp)) {
@@ -770,14 +741,15 @@ static RBinInfo *info(RBinFile *bf) {
 	if (!ret) {
 		return NULL;
 	}
+	RBinDexObj *dex = bf->bo->bin_obj;
 	ret->file = bf->file? strdup (bf->file): NULL;
 	ret->type = strdup ("DEX CLASS");
 	ret->has_va = true;
 	ret->has_lit = true;
-	ret->bclass = r_bin_dex_get_version (bf->o->bin_obj);
+	ret->bclass = r_bin_dex_get_version (dex);
 	ret->rclass = strdup ("class");
 	ret->os = strdup ("linux");
-	ret->subsystem = strdup (r_str_get_fail (dexSubsystem, "java"));
+	ret->subsystem = strdup (r_str_get_fail (dex->dexSubsystem, "java"));
 	ret->machine = strdup ("Dalvik VM");
 	h = &ret->sum[0];
 	h->type = "sha1";
@@ -818,14 +790,14 @@ static RBinInfo *info(RBinFile *bf) {
 }
 
 static RList *strings(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o, NULL);
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, NULL);
 	RBinString *ptr = NULL;
 	RList *ret = NULL;
 	int i;
 	ut64 len;
 	ut8 buf[LEB_MAX_SIZE];
 	ut64 off;
-	struct r_bin_dex_obj_t *bin = (struct r_bin_dex_obj_t *)bf->o->bin_obj;
+	struct r_bin_dex_obj_t *bin = (struct r_bin_dex_obj_t *)bf->bo->bin_obj;
 	if (!bin || !bin->strings) {
 		return NULL;
 	}
@@ -863,7 +835,8 @@ static RList *strings(RBinFile *bf) {
 				free (ptr);
 				continue;
 			}
-			ptr->vaddr = ptr->paddr = bin->strings[i];
+			ptr->paddr = bin->strings[i];
+			ptr->vaddr = ptr->paddr + bf->bo->baddr;
 			ptr->size = len;
 			ptr->length = len;
 			ptr->ordinal = i + 1;
@@ -903,16 +876,16 @@ static char *simplify(char *s) {
 	return s;
 }
 
-static char *dex_class_name_byid(RBinDexObj *bin, int cid) {
-	r_return_val_if_fail (bin && bin->types, NULL);
-	if (cid < 0 || cid >= bin->header.types_size) {
+static char *dex_class_name_byid(RBinDexObj *dex, int cid) {
+	R_RETURN_VAL_IF_FAIL (dex && dex->types, NULL);
+	if (cid < 0 || cid >= dex->header.types_size) {
 		return NULL;
 	}
-	int tid = bin->types[cid].descriptor_id;
-	const char *s = getstr (bin, tid);
+	int tid = dex->types[cid].descriptor_id;
+	const char *s = getstr (dex, tid);
 	if (s) {
 		char *r = strdup (s);
-		if (simplifiedDemangling) {
+		if (dex->simplifiedDemangling) {
 			simplify (r);
 		}
 		return r;
@@ -920,9 +893,9 @@ static char *dex_class_name_byid(RBinDexObj *bin, int cid) {
 	return NULL;
 }
 
-static char *dex_class_name(RBinDexObj *bin, RBinDexClass *c) {
-	char *s = dex_class_name_byid (bin, c->class_id);
-	if (simplifiedDemangling) {
+static char *dex_class_name(RBinDexObj *dex, RBinDexClass *c) {
+	char *s = dex_class_name_byid (dex, c->class_id);
+	if (dex->simplifiedDemangling) {
 		simplify (s);
 		if (*s == 'L') {
 			r_str_cpy (s, s + 1);
@@ -931,27 +904,27 @@ static char *dex_class_name(RBinDexObj *bin, RBinDexClass *c) {
 	return s;
 }
 
-static char *dex_field_name(RBinDexObj *bin, int fid) {
+static char *dex_field_name(RBinDexObj *dex, int fid) {
 	int tid;
 	ut16 cid, type_id;
-	r_return_val_if_fail (bin && bin->fields, NULL);
+	R_RETURN_VAL_IF_FAIL (dex&& dex->fields, NULL);
 
-	if (fid < 0 || fid >= bin->header.fields_size) {
+	if (fid < 0 || fid >= dex->header.fields_size) {
 		return NULL;
 	}
-	cid = bin->fields[fid].class_id;
-	if (cid >= bin->header.types_size) {
+	cid = dex->fields[fid].class_id;
+	if (cid >= dex->header.types_size) {
 		return NULL;
 	}
-	type_id = bin->fields[fid].type_id;
-	if (type_id >= bin->header.types_size) {
+	type_id = dex->fields[fid].type_id;
+	if (type_id >= dex->header.types_size) {
 		return NULL;
 	}
-	tid = bin->fields[fid].name_id;
-	const char *a = getstr (bin, bin->types[cid].descriptor_id);
-	const char *b = getstr (bin, tid);
-	const char *c = getstr (bin, bin->types[type_id].descriptor_id);
-	if (simplifiedDemangling) {
+	tid = dex->fields[fid].name_id;
+	const char *a = getstr (dex, dex->types[cid].descriptor_id);
+	const char *b = getstr (dex, tid);
+	const char *c = getstr (dex, dex->types[type_id].descriptor_id);
+	if (dex->simplifiedDemangling) {
 		if (a && b && c) {
 			char *_a = simplify (strdup (a));
 			char *_b = simplify (strdup (b));
@@ -963,36 +936,36 @@ static char *dex_field_name(RBinDexObj *bin, int fid) {
 			return str;
 		}
 		return r_str_newf ("(%d) %d.%d",
-				bin->types[type_id].descriptor_id,
+				dex->types[type_id].descriptor_id,
 				tid,
-				bin->types[cid].descriptor_id);
+				dex->types[cid].descriptor_id);
 	}
 	return (a && b && c)
 		? r_str_newf ("%s->%s %s", a, b, c)
-		: r_str_newf ("%d->%d %d", bin->types[cid].descriptor_id, tid, bin->types[type_id].descriptor_id);
+		: r_str_newf ("%d->%d %d", dex->types[cid].descriptor_id, tid, dex->types[type_id].descriptor_id);
 }
 
-static char *dex_method_fullname(RBinDexObj *bin, int method_idx) {
-	r_return_val_if_fail (bin && bin->types, NULL);
-	if (method_idx < 0 || method_idx >= bin->header.method_size) {
+static char *dex_method_fullname(RBinDexObj *dex, int method_idx) {
+	R_RETURN_VAL_IF_FAIL (dex && dex->types, NULL);
+	if (method_idx < 0 || method_idx >= dex->header.method_size) {
 		return NULL;
 	}
-	ut16 cid = bin->methods[method_idx].class_id;
-	if (cid >= bin->header.types_size) {
+	ut16 cid = dex->methods[method_idx].class_id;
+	if (cid >= dex->header.types_size) {
 		return NULL;
 	}
-	const char *name = dex_method_name (bin, method_idx);
+	const char *name = dex_method_name (dex, method_idx);
 	if (!name) {
 		return NULL;
 	}
 	char *flagname = NULL;
 
-	char *class_name = dex_class_name_byid (bin, cid);
+	char *class_name = dex_class_name_byid (dex, cid);
 	if (!class_name) {
 		class_name = strdup ("???");
 	}
 	r_str_replace_char (class_name, ';', 0);
-	char *signature = dex_method_signature (bin, method_idx);
+	char *signature = dex_method_signature (dex, method_idx);
 	if (signature) {
 		flagname = r_str_newf ("%s.%s%s", class_name, name, signature);
 		free (signature);
@@ -1000,7 +973,7 @@ static char *dex_method_fullname(RBinDexObj *bin, int method_idx) {
 		flagname = r_str_newf ("%s.%s%s", class_name, name, "???");
 	}
 	free (class_name);
-	if (flagname && simplifiedDemangling) {
+	if (flagname && dex->simplifiedDemangling) {
 		char *p = strchr (flagname, '(');
 		if (p) {
 			*p = 0;
@@ -1016,7 +989,7 @@ static char *dex_method_fullname(RBinDexObj *bin, int method_idx) {
 }
 
 static ut64 dex_get_type_offset(RBinFile *bf, int type_idx) {
-	RBinDexObj *bin = (RBinDexObj*) bf->o->bin_obj;
+	RBinDexObj *bin = (RBinDexObj*) bf->bo->bin_obj;
 	if (!bin || !bin->types) {
 		return 0;
 	}
@@ -1027,8 +1000,7 @@ static ut64 dex_get_type_offset(RBinFile *bf, int type_idx) {
 }
 
 static const char *dex_class_super_name(RBinDexObj *bin, RBinDexClass *c) {
-	r_return_val_if_fail (bin && bin->types && c, NULL);
-
+	R_RETURN_VAL_IF_FAIL (bin && bin->types && c, NULL);
 	int cid = c->super_class;
 	if (cid < 0 || cid >= bin->header.types_size) {
 		return NULL;
@@ -1050,9 +1022,8 @@ static ut64 peek_uleb(RBuffer *b, bool *err, size_t *nn) {
 	return n;
 }
 
-static void parse_dex_class_fields(RBinFile *bf, RBinDexClass *c, RBinClass *cls,
-		int *sym_count, ut64 fields_count, bool is_sfield) {
-	RBinDexObj *dex = bf->o->bin_obj;
+static void parse_dex_class_fields(RBinFile *bf, RBinDexClass *c, RBinClass *cls, int *sym_count, ut64 fields_count, bool is_sfield) {
+	RBinDexObj *dex = bf->bo->bin_obj;
 	RBin *bin = bf->rbin;
 	ut64 lastIndex = 0;
 	ut8 ff[sizeof (DexField)] = {0};
@@ -1088,22 +1059,27 @@ static void parse_dex_class_fields(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 		if (!sym) {
 			break;
 		}
+		const char *cls_name = r_bin_name_tostring (cls->name);
+		const char *ftype = is_sfield ? "sfield": "ifield";
+		char *s = r_str_newf ("%s.%s_%s:%s", cls_name, ftype, fieldName, type_str);
+		sym->name = r_bin_name_new (s);
 		if (is_sfield) {
-			sym->name = r_str_newf ("%s.sfield_%s:%s", cls->name, fieldName, type_str);
 			sym->type = "STATIC";
 		} else {
-			sym->name = r_str_newf ("%s.ifield_%s:%s", cls->name, fieldName, type_str);
 			sym->type = "FIELD";
 		}
-		sym->name = r_str_replace (sym->name, "method.", "", 0);
-		r_str_replace_char (sym->name, ';', 0);
-		sym->paddr = sym->vaddr = total;
+		s = r_str_replace (s, "method.", "", 0);
+		r_str_replace_char (s, ';', 0);
+		r_bin_name_filtered (sym->name, s);
+		free (s);
+		sym->paddr = total;
+		sym->vaddr = sym->paddr; //  + baddr;
+		sym->lang = R_BIN_LANG_JAVA;
 		sym->ordinal = (*sym_count)++;
 
-		if (dexdump) {
-			char *accessStr = createAccessFlagStr (
-				accessFlags, kAccessForField);
-			bin->cb_printf ("    #%u              : (in %s;)\n", (unsigned int)i, cls->name);
+		if (dex->dexdump) {
+			char *accessStr = createAccessFlagStr (accessFlags, kAccessForField);
+			bin->cb_printf ("    #%u              : (in %s;)\n", (unsigned int)i, cls_name);
 			bin->cb_printf ("      name          : '%s'\n", fieldName);
 			bin->cb_printf ("      type          : '%s'\n", type_str);
 			bin->cb_printf ("      access        : 0x%04x (%s)\n",
@@ -1113,10 +1089,10 @@ static void parse_dex_class_fields(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 		r_list_append (dex->methods_list, sym);
 
 		RBinField *field = R_NEW0 (RBinField);
-		if (field) {
+		if (R_LIKELY (field)) {
 			field->vaddr = field->paddr = sym->paddr;
-			field->name = strdup (sym->name);
-			field->flags = get_method_flags (accessFlags);
+			field->name = r_bin_name_clone (sym->name);
+			field->attr = get_method_attr (accessFlags);
 			r_list_append (cls->fields, field);
 		}
 		lastIndex = fieldIndex;
@@ -1124,11 +1100,9 @@ static void parse_dex_class_fields(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 }
 
 // TODO: refactor this method
-// XXX it needs a lot of love!!!
-static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls,
-		int *sym_count, ut64 DM, int *methods, bool is_direct) {
+static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls, int *sym_count, ut64 DM, int *methods, bool is_direct) {
 	PrintfCallback cb_printf = bf->rbin->cb_printf;
-	RBinDexObj *dex = bf->o->bin_obj;
+	RBinDexObj *dex = bf->bo->bin_obj;
 	bool bin_dbginfo = bf->rbin->want_dbginfo;
 	ut64 omi = 0;
 	bool catchAll;
@@ -1139,11 +1113,13 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 	if (!dex->trycatch_list) {
 		dex->trycatch_list = r_list_newf ((RListFree)r_bin_trycatch_free);
 	}
+	const ut64 baddr = bf->bo->baddr;
 	size_t skip = 0;
 	ut64 bufsz = r_buf_size (bf->buf);
 	ut64 encoded_method_addr;
 	bool err = false;
 	ut64 MI, MA, MC;
+	const char *cls_name = r_bin_name_tostring (cls->name);
 	ut64 i;
 	for (i = 0; i < DM; i++) {
 		err = false;
@@ -1179,7 +1155,7 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 			continue;
 		}
 		char *signature = dex_method_signature (dex, MI);
-		char *flag_name = r_str_newf ("%s.method.%s%s", cls->name, method_name, signature);
+		char *flag_name = r_str_newf ("%s.method.%s%s", cls_name, method_name, signature);
 		if (!flag_name || !*flag_name) {
 			R_FREE (flag_name);
 			R_FREE (signature);
@@ -1229,9 +1205,9 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 			}
 			t = 16 + 2 * insns_size + padd;
 		}
-		if (dexdump) {
+		if (dex->dexdump) {
 			char* accessStr = createAccessFlagStr (MA, kAccessForMethod);
-			cb_printf ("    #%" PFMT64d "              : (in %s;)\n", i, cls->name);
+			cb_printf ("    #%" PFMT64d "              : (in %s;)\n", i, cls_name);
 			cb_printf ("      name          : '%s'\n", method_name);
 			cb_printf ("      type          : '%s'\n", signature);
 			cb_printf ("      access        : 0x%04x (%s)\n", (ut32)MA, accessStr);
@@ -1239,7 +1215,7 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 		}
 
 		if (MC > 0) {
-			if (dexdump) {
+			if (dex->dexdump) {
 				cb_printf ("      code          -\n");
 				cb_printf ("      registers     : %d\n", regsz);
 				cb_printf ("      ins           : %d\n", ins_size);
@@ -1250,7 +1226,7 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 					insns_size);
 			}
 			if (tries_size > 0) {
-				if (dexdump) {
+				if (dex->dexdump) {
 					cb_printf ("      catches       : %d\n", tries_size);
 				}
 				int j, m = 0;
@@ -1281,7 +1257,7 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 					ut64 try_from = (start_addr * 2) + method_offset;
 					ut64 try_to = (start_addr * 2) + (insn_count * 2) + method_offset + 2;
 					ut64 try_catch = try_to + handler_off - 1;
-					if (dexdump) {
+					if (dex->dexdump) {
 						cb_printf ("        0x%04x - 0x%04x\n", start_addr, (start_addr + insn_count));
 					}
 					RBinTrycatch *tc = r_bin_trycatch_new (method_offset, try_from, try_to, try_catch, 0);
@@ -1321,7 +1297,7 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 						}
 						if (handler_type > 0 && handler_type < dex->header.types_size) {
 							const char *s = getstr (dex, dex->types[handler_type].descriptor_id);
-							if (dexdump) {
+							if (dex->dexdump) {
 								cb_printf (
 									"          %s "
 									"-> 0x%04"PFMT64x"\n",
@@ -1329,7 +1305,7 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 									handler_addr);
 							}
 						} else {
-							if (dexdump) {
+							if (dex->dexdump) {
 								cb_printf ("          (error) -> 0x%04"PFMT64x"\n", handler_addr);
 							}
 						}
@@ -1339,21 +1315,21 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 						if (r <= 0) {
 							break;
 						}
-						if (dexdump) {
+						if (dex->dexdump) {
 							cb_printf ("          <any> -> 0x%04"PFMT64x"\n", v2);
 						}
 					}
 				}
 				r_buf_seek (bf->buf, offorig, R_BUF_SET);
 			} else {
-				if (dexdump) {
+				if (dex->dexdump) {
 					cb_printf (
 						"      catches       : "
 						"(none)\n");
 				}
 			}
 		} else {
-			if (dexdump) {
+			if (dex->dexdump) {
 				cb_printf ("      code          : (none)\n");
 			}
 		}
@@ -1363,22 +1339,24 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 				R_FREE (flag_name);
 				break;
 			}
-			sym->name = flag_name;
+			sym->name = r_bin_name_new (flag_name);
+			R_FREE (flag_name);
 			// is_direct is no longer used
 			// if method has code *addr points to code
 			// otherwise it points to the encoded method
 			if (MC > 0) {
 				sym->type = R_BIN_TYPE_FUNC_STR;
 				sym->paddr = MC;// + 0x10;
-				sym->vaddr = MC;// + 0x10;
 			} else {
 				sym->type = R_BIN_TYPE_METH_STR;
 				sym->paddr = encoded_method_addr;
-				sym->vaddr = encoded_method_addr;
 			}
+			sym->vaddr = sym->paddr + bf->bo->baddr;
+			// sym->vaddr += bf->bo->baddr;
 			dex->code_from = R_MIN (dex->code_from, sym->paddr);
+			sym->lang = R_BIN_LANG_JAVA;
 			sym->bind = ((MA & 1) == 1) ? R_BIN_BIND_GLOBAL_STR : R_BIN_BIND_LOCAL_STR;
-			sym->method_flags = get_method_flags (MA);
+			sym->attr = get_method_attr (MA);
 			sym->ordinal = (*sym_count)++;
 			if (MC > 0) {
 				if (bufsz < MC || bufsz < MC + 16) {
@@ -1394,13 +1372,16 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 				}
 				// TODO: prolog_size
 				sym->paddr = MC + prolog_size;// + 0x10;
-				sym->vaddr = MC + prolog_size;// + 0x10;
+				sym->vaddr = sym->paddr; //  + baddr;
 				//if (is_direct) {
 				sym->size = insns_size * 2;
 				//}
 				//eprintf("%s (0x%x-0x%x) size=%d\nregsz=%d\ninsns_size=%d\nouts_size=%d\ntries_size=%d\ninsns_size=%d\n", flag_name, sym->vaddr, sym->vaddr+sym->size, prolog_size, regsz, ins_size, outs_size, tries_size, insns_size);
 				r_list_append (dex->methods_list, sym);
-				r_list_append (cls->methods, sym);
+				// XXX this is necessary because class methods and symbols obey baddr in a inconsistent way in cbin.c .. so better get this to work and fix later with more tests
+				RBinSymbol *method = r_bin_symbol_clone (sym);
+				method->vaddr += baddr;
+				r_list_append (cls->methods, method);
 
 				if (dex->code_from == UT64_MAX || dex->code_from > sym->paddr) {
 					dex->code_from = sym->paddr;
@@ -1409,11 +1390,11 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 					dex->code_to = sym->paddr + sym->size;
 				}
 
-				if (!mdb) {
-					mdb = sdb_new0 ();
+				if (!dex->mdb) {
+					dex->mdb = sdb_new0 ();
 				}
 				r_strf_var (methvar, 64, "method.%"PFMT64d, MI);
-				sdb_num_set (mdb, methvar, sym->paddr, 0);
+				sdb_num_set (dex->mdb, methvar, sym->paddr, 0);
 				// -----------------
 				// WORK IN PROGRESS
 				// -----------------
@@ -1430,18 +1411,21 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 			} else {
 				sym->size = 0;
 				r_list_append (dex->methods_list, sym);
-				r_list_append (cls->methods, sym);
+				sym->lang = R_BIN_LANG_JAVA;
+				RBinSymbol *method = r_bin_symbol_clone (sym);
+				// method->vaddr += baddr;
+				r_list_append (cls->methods, method);
 			}
 			if (MC > 0 && debug_info_off > 0 && dex->header.data_offset < debug_info_off &&
 				debug_info_off < dex->header.data_offset + dex->header.data_size) {
 				if (bin_dbginfo) {
 					ut64 addr = r_buf_tell (bf->buf);
 					dex_parse_debug_item (bf, c, MI, MA, sym->paddr, ins_size,
-							insns_size, cls->name, regsz, debug_info_off);
+							insns_size, cls_name, regsz, debug_info_off);
 					r_buf_seek (bf->buf, addr, R_BUF_SET);
 				}
 			} else if (MC > 0) {
-				if (dexdump) {
+				if (dex->dexdump) {
 					cb_printf ("      positions     :\n");
 					cb_printf ("      locals        :\n");
 				}
@@ -1454,25 +1438,27 @@ static void parse_dex_class_method(RBinFile *bf, RBinDexClass *c, RBinClass *cls
 }
 
 static void parse_class(RBinFile *bf, RBinDexClass *c, int class_index, int *methods, int *sym_count) {
-	r_return_if_fail (bf && bf->o && c);
+	R_RETURN_IF_FAIL (bf && bf->bo && c);
 
-	RBinDexObj *dex = bf->o->bin_obj;
+	RBinDexObj *dex = bf->bo->bin_obj;
 	RBin *rbin = bf->rbin;
 	int z;
 	RBinClass *cls = R_NEW0 (RBinClass);
-	if (!cls) {
+	cls->lang = R_BIN_LANG_JAVA;
+	char *cls_name = dex_class_name (dex, c);
+	if (!cls_name) {
 		goto beach;
 	}
-	cls->name = dex_class_name (dex, c);
-	if (!cls->name) {
-		goto beach;
-	}
-	r_str_replace_char (cls->name, ';', 0);
+	r_str_replace_char (cls_name, ';', 0);
+	cls->name = r_bin_name_new (cls_name);
 	cls->index = class_index;
 	cls->addr = dex->header.class_offset + (class_index * DEX_CLASS_SIZE);
-	cls->methods = r_list_new ();
+	cls->methods = r_list_newf ((RListFree)r_bin_symbol_free);
 	const char *super = dex_class_super_name (dex, c);
-	cls->super = super? strdup (super): NULL;
+	if (super) {
+		cls->super = r_list_newf ((void*)r_bin_name_free);
+		r_list_append (cls->super, r_bin_name_new (super));
+	}
 	if (!cls->methods) {
 		free (cls);
 		goto beach;
@@ -1485,11 +1471,19 @@ static void parse_class(RBinFile *bf, RBinDexClass *c, int class_index, int *met
 	}
 	cls->visibility_str = createAccessFlagStr (c->access_flags, kAccessForClass);
 	r_list_append (dex->classes_list, cls);
-	if (dexdump) {
-		rbin->cb_printf ("  Class descriptor  : '%s;'\n", cls->name);
+	if (dex->dexdump) {
+		rbin->cb_printf ("  Class descriptor  : '%s;'\n", cls_name);
 		rbin->cb_printf ("  Access flags      : 0x%04x (%s)\n", c->access_flags,
 				r_str_get (cls->visibility_str));
-		rbin->cb_printf ("  Superclass        : '%s'\n", cls->super);
+		if (cls->super) {
+			RBinName *bn;
+			RListIter *iter;
+			rbin->cb_printf ("  Superclass        : '");
+			r_list_foreach (cls->super, iter, bn) {
+				rbin->cb_printf ("%s%s", iter->n? ",": "", r_bin_name_tostring (bn));
+			}
+			rbin->cb_printf ("'\n");
+		}
 		rbin->cb_printf ("  Interfaces        -\n");
 	}
 
@@ -1507,7 +1501,7 @@ static void parse_class(RBinFile *bf, RBinDexClass *c, int class_index, int *met
 			int t = r_read_le16 (&le16);
 			if (t > 0 && t < dex->header.types_size ) {
 				int tid = dex->types[t].descriptor_id;
-				if (dexdump) {
+				if (dex->dexdump) {
 					const char *cn = getstr (dex, tid);
 					rbin->cb_printf ("    #%d              : '%s'\n", z, cn);
 				}
@@ -1516,7 +1510,7 @@ static void parse_class(RBinFile *bf, RBinDexClass *c, int class_index, int *met
 	}
 	// TODO: this is quite ugly
 	if (!c || !c->class_data_offset) {
-		if (dexdump) {
+		if (dex->dexdump) {
 			rbin->cb_printf (
 				"  Static fields     -\n"
 				"  Instance fields   -\n"
@@ -1551,35 +1545,34 @@ static void parse_class(RBinFile *bf, RBinDexClass *c, int class_index, int *met
 		}
 		c->class_data = dc;
 
-		if (dexdump) { rbin->cb_printf ("  Static fields     -\n"); }
+		if (dex->dexdump) { rbin->cb_printf ("  Static fields     -\n"); }
 		parse_dex_class_fields (bf, c, cls, sym_count, dc->static_fields_size, true);
 
-		if (dexdump) { rbin->cb_printf ("  Instance fields   -\n"); }
+		if (dex->dexdump) { rbin->cb_printf ("  Instance fields   -\n"); }
 		parse_dex_class_fields (bf, c, cls, sym_count, dc->instance_fields_size, false);
 
-		if (dexdump) { rbin->cb_printf ("  Direct methods    -\n"); }
+		if (dex->dexdump) { rbin->cb_printf ("  Direct methods    -\n"); }
 		parse_dex_class_method (bf, c, cls, sym_count,
 			c->class_data->direct_methods_size, methods, true);
 
-		if (dexdump) { rbin->cb_printf ("  Virtual methods   -\n"); }
+		if (dex->dexdump) { rbin->cb_printf ("  Virtual methods   -\n"); }
 		parse_dex_class_method (bf, c, cls, sym_count,
 			c->class_data->virtual_methods_size, methods, false);
 	}
 
-	if (dexdump) {
+	if (dex->dexdump) {
 		const char *source_file = getstr (dex, c->source_file);
-		if (!source_file) {
-			rbin->cb_printf (
-				"  source_file_idx   : %d (unknown)\n\n",
-				c->source_file);
-		} else {
+		if (source_file) {
 			rbin->cb_printf ("  source_file_idx   : %d (%s)\n\n",
-					 c->source_file, source_file);
+					c->source_file, source_file);
+		} else {
+			rbin->cb_printf ("  source_file_idx   : %d (unknown)\n\n",
+					c->source_file);
 		}
 	}
 	cls = NULL;
 beach:
-	return;
+	R_FREE (cls_name);
 }
 
 static bool is_class_idx_in_code_classes(RBinDexObj *dex, int class_idx) {
@@ -1593,8 +1586,8 @@ static bool is_class_idx_in_code_classes(RBinDexObj *dex, int class_idx) {
 }
 
 static bool dex_loadcode(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, false);
-	RBinDexObj *dex = bf->o->bin_obj;
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, false);
+	RBinDexObj *dex = (RBinDexObj*)bf->bo->bin_obj;
 	dex->verbose = true;
 	PrintfCallback cb_printf = bf->rbin->cb_printf;
 	size_t i;
@@ -1641,10 +1634,10 @@ static bool dex_loadcode(RBinFile *bf) {
 
 	// TODO: is this posible after R_MIN ??
 	if (dex->header.strings_size > dex->size) {
-		eprintf ("Invalid strings size\n");
+		R_LOG_WARN ("Invalid strings size");
 		return false;
 	}
-	dexSubsystem = NULL;
+	dex->dexSubsystem = NULL;
 
 	if (dex->classes) {
 		ut64 amount = sizeof (int) * dex->header.method_size;
@@ -1655,7 +1648,7 @@ static bool dex_loadcode(RBinFile *bf) {
 		methods = calloc (1, methods_size);
 		for (i = 0; i < dex->header.class_size; i++) {
 			struct dex_class_t *c = &dex->classes[i];
-			if (dexdump) {
+			if (dex->dexdump) {
 				cb_printf ("Class #%u            -\n", (unsigned int)i);
 			}
 			parse_class (bf, c, i, methods, &sym_count);
@@ -1664,7 +1657,7 @@ static bool dex_loadcode(RBinFile *bf) {
 	if (methods) {
 		int import_count = 0;
 		int sym_count = dex->methods_list->length;
-		int last = (methods_size / sizeof(int)); // sym_count
+		int last = (methods_size / sizeof (int)); // sym_count
 		for (i = 0; i < last; i++) {
 			int len = 0;
 			if (methods[i]) {
@@ -1685,11 +1678,11 @@ static bool dex_loadcode(RBinFile *bf) {
 				free (class_name);
 				continue;
 			}
-			if (!dexSubsystem) {
+			if (!dex->dexSubsystem) {
 				if (strstr (class_name, "wearable/view")) {
-					dexSubsystem = "android-wear";
+					dex->dexSubsystem = "android-wear";
 				} else if (strstr (class_name, "android/view/View")) {
-					dexSubsystem = "android";
+					dex->dexSubsystem = "android";
 				}
 			}
 			len = strlen (class_name);
@@ -1708,7 +1701,9 @@ static bool dex_loadcode(RBinFile *bf) {
 					free (class_name);
 					return false;
 				}
-				imp->name  = r_str_newf ("%s.method.%s%s", class_name, method_name, signature);
+				char *s = r_str_newf ("%s.method.%s%s", class_name, method_name, signature);
+				imp->name = r_bin_name_new (s);
+				free (s);
 				imp->type = "FUNC";
 				imp->bind = "NONE";
 				imp->ordinal = import_count++;
@@ -1721,17 +1716,19 @@ static bool dex_loadcode(RBinFile *bf) {
 					free (class_name);
 					return false;
 				}
-				sym->name = strdup (imp->name);
+				sym->name = r_bin_name_clone (imp->name);
 				sym->is_imported = true;
 				sym->type = R_BIN_TYPE_FUNC_STR;
 				sym->bind = "NONE";
 				//XXX so damn unsafe check buffer boundaries!!!!
 				//XXX use r_buf API!!
-				sym->paddr = sym->vaddr = dex->header.method_offset + (sizeof (struct dex_method_t) * i) ;
+				sym->paddr = dex->header.method_offset + (sizeof (struct dex_method_t) * i);
+				sym->vaddr = sym->paddr; //  + bf->bo->baddr;
 				sym->ordinal = sym_count++;
+				sym->lang = R_BIN_LANG_JAVA;
 				r_list_append (dex->methods_list, sym);
 				r_strf_var (mname, 64, "method.%"PFMT64d, (ut64)i);
-				sdb_num_set (mdb, mname, sym->paddr, 0);
+				sdb_num_set (dex->mdb, mname, sym->paddr, 0);
 			}
 			free ((void *)signature);
 			free (class_name);
@@ -1742,8 +1739,8 @@ static bool dex_loadcode(RBinFile *bf) {
 }
 
 static RList* imports(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, NULL);
-	RBinDexObj *dex = (RBinDexObj*) bf->o->bin_obj;
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
+	RBinDexObj *dex = (RBinDexObj*) bf->bo->bin_obj;
 	if (!dex->imports_list) {
 		dex_loadcode (bf);
 	}
@@ -1751,8 +1748,8 @@ static RList* imports(RBinFile *bf) {
 }
 
 static RList *trycatch(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, NULL);
-	RBinDexObj *bin = (RBinDexObj*) bf->o->bin_obj;
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
+	RBinDexObj *bin = (RBinDexObj*) bf->bo->bin_obj;
 	if (!bin->trycatch_list) {
 		dex_loadcode (bf);
 	}
@@ -1760,8 +1757,8 @@ static RList *trycatch(RBinFile *bf) {
 }
 
 static RList *methods(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, NULL);
-	RBinDexObj *bin = (RBinDexObj*) bf->o->bin_obj;
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
+	RBinDexObj *bin = (RBinDexObj*) bf->bo->bin_obj;
 	if (!bin->methods_list) {
 		dex_loadcode (bf);
 	}
@@ -1769,8 +1766,8 @@ static RList *methods(RBinFile *bf) {
 }
 
 static RList *classes(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, NULL);
-	RBinDexObj *bin = (RBinDexObj*) bf->o->bin_obj;
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
+	RBinDexObj *bin = (RBinDexObj*) bf->bo->bin_obj;
 	if (!bin->classes_list) {
 		dex_loadcode (bf);
 	}
@@ -1793,9 +1790,9 @@ static RList *entries(RBinFile *bf) {
 	RBinSymbol *m;
 	RBinAddr *ptr;
 
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, NULL);
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
 
-	RBinDexObj *bin = (RBinDexObj*) bf->o->bin_obj;
+	RBinDexObj *bin = (RBinDexObj*) bf->bo->bin_obj;
 	RList *ret = r_list_newf ((RListFree)free);
 
 	if (!bin->methods_list) {
@@ -1804,10 +1801,10 @@ static RList *entries(RBinFile *bf) {
 
 	// STEP 1. ".onCreate(Landroid/os/Bundle;)V"
 	r_list_foreach (bin->methods_list, iter, m) {
-		if (strlen (m->name) > 30 && m->bind &&
-			(!strcmp (m->bind, R_BIN_BIND_LOCAL_STR) || !strcmp (m->bind, R_BIN_BIND_GLOBAL_STR)) &&
-		    !strcmp (m->name + strlen (m->name) - 31,
-			     ".onCreate(Landroid/os/Bundle;)V")) {
+		const char *oname = r_bin_name_tostring2 (m->name, 'o');
+		if (strlen (oname) > 30 && m->bind \
+				&& (!strcmp (m->bind, R_BIN_BIND_LOCAL_STR) || !strcmp (m->bind, R_BIN_BIND_GLOBAL_STR)) \
+				&& !strcmp (oname + strlen (oname) - 31, ".onCreate(Landroid/os/Bundle;)V")) {
 			if (!already_entry (ret, m->paddr)) {
 				if ((ptr = R_NEW0 (RBinAddr))) {
 					ptr->paddr = ptr->vaddr = m->paddr;
@@ -1820,12 +1817,12 @@ static RList *entries(RBinFile *bf) {
 	// STEP 2. ".main([Ljava/lang/String;)V"
 	if (r_list_empty (ret)) {
 		r_list_foreach (bin->methods_list, iter, m) {
-			if (strlen (m->name) > 26 &&
-			    !strcmp (m->name + strlen (m->name) - 27,
-				     ".main([Ljava/lang/String;)V")) {
+			const char *oname = r_bin_name_tostring2 (m->name, 'o');
+			if (strlen (oname) > 26 && !strcmp (oname + strlen (oname) - 27, ".main([Ljava/lang/String;)V")) {
 				if (!already_entry (ret, m->paddr)) {
 					if ((ptr = R_NEW0 (RBinAddr))) {
-						ptr->paddr = ptr->vaddr = m->paddr;
+						ptr->paddr = m->paddr;
+						ptr->vaddr = ptr->paddr + bf->bo->baddr;
 						r_list_append (ret, ptr);
 					}
 				}
@@ -1848,8 +1845,8 @@ static RList *entries(RBinFile *bf) {
 	return ret;
 }
 
-static int getoffset(RBinFile *bf, int type, int idx) {
-	struct r_bin_dex_obj_t *dex = bf->o->bin_obj;
+static ut64 getoffset(RBinFile *bf, int type, int idx) {
+	struct r_bin_dex_obj_t *dex = bf->bo->bin_obj;
 	switch (type) {
 	case 'm': // methods
 		// TODO: ADD CHECK
@@ -1857,7 +1854,7 @@ static int getoffset(RBinFile *bf, int type, int idx) {
 	case 'f':
 		return dex_field_offset (dex, idx);
 	case 'o': // objects
-		eprintf ("TODO: getoffset object\n");
+		R_LOG_TODO ("getoffset object");
 		return 0; // //chdex_object_offset (dex, idx);
 	case 's': // strings
 		if (dex->header.strings_size > idx) {
@@ -1871,12 +1868,12 @@ static int getoffset(RBinFile *bf, int type, int idx) {
 	case 'c': // class
 		return dex_get_type_offset (bf, idx);
 	}
-	return -1;
+	return UT64_MAX;
 }
 
 static const char *getname(RBinFile *bf, int type, int idx, bool sd) {
-	simplifiedDemangling = sd; // XXX kill globals
-	RBinDexObj *dex = bf->o->bin_obj;
+	RBinDexObj *dex = bf->bo->bin_obj;
+	dex->simplifiedDemangling = sd; // XXX kill globals
 	switch (type) {
 	case 'm': // methods
 		return dex_method_fullname (dex, idx);
@@ -1895,15 +1892,16 @@ typedef struct {
 	ut64 size;
 } Section;
 
-static RBinSection *add_section(RList *ret, const char *name, Section s, int perm, char *format) {
-	r_return_val_if_fail (ret && name, NULL);
-	r_return_val_if_fail (s.addr < UT32_MAX, NULL);
-	r_return_val_if_fail (s.size > 0 && s.size < UT32_MAX, NULL);
+static RBinSection *add_section(RList *ret, ut64 baddr, const char *name, Section s, int perm, char *format) {
+	R_RETURN_VAL_IF_FAIL (ret && name, NULL);
+	R_RETURN_VAL_IF_FAIL (s.addr < UT32_MAX, NULL);
+	R_RETURN_VAL_IF_FAIL (s.size > 0 && s.size < UT32_MAX, NULL);
 	RBinSection *ptr = R_NEW0 (RBinSection);
 	if (ptr) {
 		ptr->name = strdup (name);
-		ptr->paddr = ptr->vaddr = s.addr;
 		ptr->size = ptr->vsize = s.size;
+		ptr->paddr = s.addr;
+		ptr->vaddr = s.addr;
 		ptr->perm = perm;
 		ptr->add = false;
 		if (format) {
@@ -1914,8 +1912,8 @@ static RBinSection *add_section(RList *ret, const char *name, Section s, int per
 	return ptr;
 }
 
-static void add_segment(RList *ret, const char *name, Section s, int perm) {
-	RBinSection *bs = add_section (ret, name, s, perm, NULL);
+static void add_segment(RList *ret, ut64 baddr, const char *name, Section s, int perm) {
+	RBinSection *bs = add_section (ret, baddr, name, s, perm, NULL);
 	if (bs) {
 		bs->is_segment = true;
 		bs->add = true;
@@ -1923,7 +1921,7 @@ static void add_segment(RList *ret, const char *name, Section s, int perm) {
 }
 
 static bool validate_section(const char *name, Section *pre, Section *cur, Section *nex, Section *all) {
-	r_return_val_if_fail (cur && all, false);
+	R_RETURN_VAL_IF_FAIL (cur && all, false);
 	if (pre && cur->addr < (pre->addr + pre->size)) {
 		R_LOG_WARN ("%s Section starts before the previous", name);
 	}
@@ -1972,13 +1970,13 @@ static void fast_code_size(RBinFile *bf) {
 			fsymsz = ns;
 		}
 	}
-	struct r_bin_dex_obj_t *bin = bf->o->bin_obj;
+	struct r_bin_dex_obj_t *bin = bf->bo->bin_obj;
 	bin->code_from = fsym;
 	bin->code_to = fsymsz;
 }
 
 static RList *sections(RBinFile *bf) {
-	struct r_bin_dex_obj_t *bin = bf->o->bin_obj;
+	struct r_bin_dex_obj_t *bin = bf->bo->bin_obj;
 	RList *ret = NULL;
 
 	/* find the last method */
@@ -1997,33 +1995,34 @@ static RList *sections(RBinFile *bf) {
 	Section s_data = { bin->code_to, bs - bin->code_to};
 	Section s_file = { 0, bs };
 
+	const ut64 baddr = bf->bo->baddr;
 	/* sanity bound checks and section registrations */
 	if (validate_section ("header", NULL, &s_head, NULL, &s_file)) {
-		add_section (ret, "header", s_head, R_PERM_R, NULL);
+		add_section (ret, baddr, "header", s_head, R_PERM_R, NULL);
 	}
 	if (validate_section ("constpool", &s_head, &s_pool, &s_code, &s_file)) {
 		char *s_pool_format = r_str_newf ("Cd %d[%"PFMT64d"]", 4, (ut64) s_pool.size / 4);
-		add_section (ret, "constpool", s_pool, R_PERM_R, s_pool_format);
+		add_section (ret, baddr, "constpool", s_pool, R_PERM_R, s_pool_format);
 	}
 	if (validate_section ("code", &s_pool, &s_code, &s_data, &s_file)) {
-		add_section (ret, "code", s_code, R_PERM_RX, NULL);
+		add_section (ret, baddr, "code", s_code, R_PERM_RX, NULL);
 	}
 	if (validate_section ("data", &s_code, &s_data, NULL, &s_file)) {
-		add_section (ret, "data", s_data, R_PERM_RX, NULL);
+		add_section (ret, baddr, "data", s_data, R_PERM_RX, NULL);
 	}
-	add_section (ret, "file", s_file, R_PERM_R, NULL);
+	add_section (ret, baddr, "file", s_file, R_PERM_R, NULL);
 
 	/* add segments */
 	if (s_code.size > 0) {
-		add_segment (ret, "code", s_code, R_PERM_RX);
+		add_segment (ret, baddr, "code", s_code, R_PERM_RX);
 	}
-	add_segment (ret, "file", s_file, R_PERM_R);
+	add_segment (ret, baddr, "file", s_file, R_PERM_R);
 	return ret;
 }
 
 // iH
 static void dex_header(RBinFile *bf) {
-	RBinDexObj *dex = bf->o->bin_obj;
+	RBinDexObj *dex = bf->bo->bin_obj;
 	DexHeader *hdr = &dex->header;
 	PrintfCallback cb_printf = bf->rbin->cb_printf;
 
@@ -2053,9 +2052,9 @@ static void dex_header(RBinFile *bf) {
 
 	// TODO: print information stored in the RBIN not this ugly fix
 	dex->methods_list = NULL;
-	dexdump = true; /// XXX convert this global into an argument or field in RBinFile or so
+	dex->dexdump = true; /// XXX convert this global into an argument or field in RBinFile or so
 	dex_loadcode (bf);
-	dexdump = false;
+	dex->dexdump = false;
 }
 
 static ut64 size(RBinFile *bf) {
@@ -2073,10 +2072,12 @@ static ut64 size(RBinFile *bf) {
 	return off + r_read_le32 (u32s);
 }
 
+#if 0
 static R_BORROW RList *lines(RBinFile *bf) {
-	struct r_bin_dex_obj_t *dex = bf->o->bin_obj;
+	struct r_bin_dex_obj_t *dex = bf->bo->bin_obj;
 	return dex->lines_list;
 }
+#endif
 
 // iH*
 static RList *dex_fields(RBinFile *bf) {
@@ -2087,9 +2088,8 @@ static RList *dex_fields(RBinFile *bf) {
 	ret->free = free;
 	ut64 addr = 0;
 
-	r_strf_buffer (32);
 #define ROW(nam,siz,val,fmt) \
-	r_list_append (ret, r_bin_field_new (addr, addr, siz, nam, r_strf ("0x%08"PFMT64x, (ut64)val), fmt, false)); \
+	r_list_append (ret, r_bin_field_new (addr, addr, val, siz, nam, NULL, fmt, false)); \
 	addr += siz;
 
 	r_buf_seek (bf->buf, 0, R_BUF_SET);
@@ -2128,7 +2128,7 @@ static bool is_classes_dex(const char *filename) {
 }
 
 static RList* libs(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, NULL);
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
 	char *path = r_file_dirname (bf->file);
 	if (r_str_startswith (path, "./")) {
 		// avoids stuff like .//.//.//.//.//
@@ -2166,24 +2166,30 @@ static RList* libs(RBinFile *bf) {
 }
 
 static void destroy(RBinFile *bf) {
-	r_return_if_fail (bf && bf->o);
-	RBinDexObj *obj = bf->o->bin_obj;
+	R_RETURN_IF_FAIL (bf && bf->bo);
+	RBinDexObj *obj = bf->bo->bin_obj;
 	r_bin_dex_free (obj);
 }
 
+static ut64 baddr(RBinFile *bf) {
+	return 0;
+}
+
 RBinPlugin r_bin_plugin_dex = {
-	.name = "dex",
-	.desc = "dex format bin plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "dex",
+		.desc = "dex format bin plugin",
+		.license = "LGPL-3.0-only",
+	},
 	.destroy = &destroy,
 	.get_sdb = &get_sdb,
-	.load_buffer = &load_buffer,
-	.check_buffer = check_buffer,
-	.baddr = baddr,
+	.load = &load,
+	.check = check,
 	.entries = entries,
 	.classes = classes,
 	.sections = sections,
 	.symbols = methods,
+	.baddr = baddr,
 	.trycatch = trycatch,
 	.imports = imports,
 	.strings = strings,
@@ -2194,8 +2200,8 @@ RBinPlugin r_bin_plugin_dex = {
 	.size = &size,
 	.get_offset = &getoffset,
 	.get_name = &getname,
-	.dbginfo = &r_bin_dbginfo_dex,
-	.lines = &lines,
+//	.dbginfo = &r_bin_dbginfo_dex,
+	// .lines = &lines,
 };
 
 #ifndef R2_PLUGIN_INCORE

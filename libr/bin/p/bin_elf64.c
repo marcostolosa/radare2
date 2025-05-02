@@ -1,10 +1,9 @@
-/* radare - LGPL - Copyright 2009-2019 - pancake, nibble */
+/* radare - LGPL - Copyright 2009-2024 - pancake, nibble */
 
 #define R_BIN_ELF64 1
-#include "bin_elf.inc"
+#include "bin_elf.inc.c"
 
-
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 buf[5] = {0};
 	if (r_buf_size (b) > 4) {
 		r_buf_read_at (b, 0, buf, sizeof (buf));
@@ -15,12 +14,12 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 	return false;
 }
 
-extern struct r_bin_dbginfo_t r_bin_dbginfo_elf64;
+// extern struct r_bin_dbginfo_t r_bin_dbginfo_elf64;
 extern struct r_bin_write_t r_bin_write_elf64;
 
 static ut64 get_elf_vaddr64(RBinFile *bf, ut64 baddr, ut64 paddr, ut64 vaddr) {
 	//NOTE(aaSSfxxx): since RVA is vaddr - "official" image base, we just need to add imagebase to vaddr
-	struct Elf_(r_bin_elf_obj_t)* obj = bf->o->bin_obj;
+	struct Elf_(obj_t)* obj = bf->bo->bin_obj;
 	return obj->baddr - obj->boffset + vaddr;
 }
 
@@ -116,7 +115,7 @@ static RBuffer* create(RBin* bin, const ut8 *code, int codelen, const ut8 *data,
 	/* Append code */
 	B (code, codelen);
 
-	if (data && datalen>0) {
+	if (data && datalen > 0) {
 		R_LOG_WARN ("DATA section not support for ELF yet");
 		B (data, datalen);
 	}
@@ -124,19 +123,25 @@ static RBuffer* create(RBin* bin, const ut8 *code, int codelen, const ut8 *data,
 }
 
 RBinPlugin r_bin_plugin_elf64 = {
-	.name = "elf64",
-	.desc = "elf64 bin plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "elf64",
+		.desc = "elf64 bin plugin",
+		.author = "nibble",
+		.license = "LGPL-3.0-only",
+	},
 	.get_sdb = &get_sdb,
-	.check_buffer = &check_buffer,
-	.load_buffer= &load_buffer,
+	.check = &check,
+	.load = &load,
 	.destroy = &destroy,
 	.baddr = &baddr,
-	.boffset = &boffset,
 	.binsym = &binsym,
 	.entries = &entries,
+#if R2_590
+	.sections_vec = &sections_vec,
+#else
 	.sections = &sections,
-	.symbols = &symbols,
+#endif
+	.symbols_vec = symbols_vec,
 	.imports = &imports,
 	.minstrlen = 4,
 	.info = &info,
@@ -146,11 +151,10 @@ RBinPlugin r_bin_plugin_elf64 = {
 	.libs = &libs,
 	.relocs = &relocs,
 	.patch_relocs = &patch_relocs,
-	.dbginfo = &r_bin_dbginfo_elf64,
+//	.dbginfo = &r_bin_dbginfo_elf64,
 	.create = &create,
 	.write = &r_bin_write_elf64,
 	.get_vaddr = &get_elf_vaddr64,
-	.file_type = &get_file_type,
 	.regstate = &regstate,
 	.maps = &maps,
 };

@@ -52,7 +52,7 @@ bool test_buf(RBuffer *b) {
 	mu_assert_memeq (buffer, (ut8 *)"his is a ", 9, "read right bytes from offset 1");
 
 	r_buf_set_bytes (b, (ut8 *)"World", strlen ("World"));
-	char *base = r_buf_to_string (b);
+	char *base = r_buf_tostring (b);
 	mu_assert_notnull (base, "string should be there");
 	mu_assert_streq (base, "World", "World there");
 	free (base);
@@ -60,13 +60,13 @@ bool test_buf(RBuffer *b) {
 	const char *s3 = "Hello ";
 	res = r_buf_prepend_bytes (b, (const ut8 *)s3, strlen (s3));
 	mu_assert ("bytes should be prepended", res);
-	char *st = r_buf_to_string (b);
+	char *st = r_buf_tostring (b);
 	mu_assert_notnull (st, "string should be there");
 	mu_assert_streq (st, "Hello World", "hello world there");
 	free (st);
 
 	r_buf_insert_bytes (b, 5, (ut8 *)",", 1);
-	char *st2 = r_buf_to_string (b);
+	char *st2 = r_buf_tostring (b);
 	mu_assert_notnull (st2, "string should be there");
 	mu_assert_streq (st2, "Hello, World", "comma inserted");
 	free (st2);
@@ -84,7 +84,7 @@ bool test_buf(RBuffer *b) {
 	RBuffer *sec_buf = r_buf_new_with_bytes ((ut8 *)" second", 7);
 	res = r_buf_append_buf (b, sec_buf);
 	mu_assert ("append buf should succeed", res);
-	char *st3 = r_buf_to_string (b);
+	char *st3 = r_buf_tostring (b);
 	mu_assert_streq (st3, "Hello second", "append buf correctly");
 	free (st3);
 	r_buf_free (sec_buf);
@@ -92,12 +92,30 @@ bool test_buf(RBuffer *b) {
 	sec_buf = r_buf_new_with_bytes ((ut8 *)"123456789", 9);
 	res = r_buf_append_buf_slice (b, sec_buf, 5, 3);
 	mu_assert ("append buf slice should succeed", res);
-	char *st4 = r_buf_to_string (b);
+	char *st4 = r_buf_tostring (b);
 	mu_assert_streq (st4, "Hello second678", "append buf slice correctly");
 	free (st4);
 	r_buf_free (sec_buf);
 
 	return MU_PASSED;
+}
+
+bool test_r_buf_cache(void) {
+	const char bytes[] = "ABCDEFGHIJKLMNOP";
+	RBuffer *b0 = r_buf_new_with_bytes ((const ut8*)bytes, sizeof (bytes));
+	RBuffer *b1 = r_buf_new_with_cache (b0, false);
+	char buf[5] = {0};
+	r_buf_read_at (b0, 2, (ut8*)buf, 4);
+	mu_assert_streq (buf, "CDEF", "read original buffer");
+	r_buf_read_at (b1, 2, (ut8*)buf, 4);
+	mu_assert_streq (buf, "CDEF", "read cache buffer");
+	r_buf_write_at (b1, 2, (const ut8*)"XY", 2);
+	r_buf_read_at (b1, 2, (ut8*)buf, 4);
+	mu_assert_streq (buf, "XYEF", "read patched cache buffer");
+
+	r_buf_free (b0);
+	r_buf_free (b1);
+	mu_end;
 }
 
 bool test_r_buf_file(void) {
@@ -175,7 +193,6 @@ bool test_r_buf_mmap(void) {
 }
 
 bool test_r_buf_io(void) {
-	RBuffer *b;
 	const char *content = "Something To\nSay Here..";
 	const int length = 23;
 
@@ -189,7 +206,7 @@ bool test_r_buf_io(void) {
 	RIOBind bnd;
 	r_io_bind (io, &bnd);
 
-	b = r_buf_new_with_io(&bnd, desc->fd);
+	RBuffer *b = r_buf_new_with_io (&bnd, desc->fd);
 	mu_assert_notnull (b, "r_buf_new_file failed");
 
 	if (test_buf (b) != MU_PASSED) {
@@ -276,7 +293,7 @@ bool test_r_buf_bytes_steal(void) {
 
 	b = r_buf_new_with_bytes ((const ut8 *)content, length);
 	mu_assert_notnull (b, "r_buf_new_file failed");
-	char *s = r_buf_to_string (b);
+	char *s = r_buf_tostring (b);
 	mu_assert_streq (s, content, "content is right");
 	free (s);
 
@@ -405,7 +422,8 @@ bool test_r_buf_slice_too_big(void) {
 	mu_end;
 }
 
-int all_tests() {
+int all_tests(void) {
+	mu_run_test (test_r_buf_cache);
 	mu_run_test (test_r_buf_file);
 	mu_run_test (test_r_buf_bytes);
 	mu_run_test (test_r_buf_mmap);

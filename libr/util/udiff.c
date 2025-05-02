@@ -1,10 +1,9 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake, nikolai */
+/* radare - LGPL - Copyright 2009-2025 - pancake, nikolai */
 
 #include <r_util/r_diff.h>
 
 // the non-system-diff doesnt work well
 #define USE_SYSTEM_DIFF 1
-
 
 R_API RDiff *r_diff_new_from(ut64 off_a, ut64 off_b) {
 	RDiff *d = R_NEW0 (RDiff);
@@ -13,7 +12,7 @@ R_API RDiff *r_diff_new_from(ut64 off_a, ut64 off_b) {
 		d->user = NULL;
 		d->off_a = off_a;
 		d->off_b = off_b;
-		d->diff_cmd = strdup ("diff -u");
+		d->diff_cmd = strdup ("diff -au");
 	}
 	return d;
 }
@@ -61,7 +60,7 @@ static inline void lev_row_adjust(Levrow *row, ut32 maxdst, ut32 rownum, ut32 bu
 }
 
 static inline Levrow *lev_row_init(Levrow *matrix, ut32 maxdst, ut32 rownum, ut32 buflen, ut32 delta) {
-	r_return_val_if_fail (matrix && !matrix[rownum].changes, false);
+	R_RETURN_VAL_IF_FAIL (matrix && !matrix[rownum].changes, false);
 	Levrow *row = matrix + rownum;
 	lev_row_adjust (row, maxdst, rownum, buflen, delta);
 	if ((row->changes = R_NEWS (ut32, row->end - row->start + 1)) == NULL) {
@@ -77,10 +76,9 @@ static inline ut32 lev_get_val(Levrow *row, ut32 i) {
 	return UT32_MAX - 1; // -1 so a +1 with sub weight does not overflow
 }
 
-// obtains array of operations, in reverse order, to get from column to row of
-// matrix
+// obtains array of operations, in reverse order, to get from column to row of matrix
 static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chgs) {
-	r_return_val_if_fail (len >= 2 && matrix && chgs && !*chgs, -1);
+	R_RETURN_VAL_IF_FAIL (len >= 2 && matrix && chgs && !*chgs, -1);
 	Levrow *row = matrix + len - 1;
 	Levrow *prev_row = row - 1;
 	RLevOp a = LEVADD;
@@ -93,7 +91,7 @@ static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chg
 	const size_t overflow = (size_t)-1 / (2 * sizeof (RLevOp));
 	int j = row->end;
 	size_t size = j;
-	RLevOp *changes = R_NEWS (RLevOp, size);
+	RLevOp *changes = R_NEWS (RLevOp, size + 1);
 	if (!changes) {
 		return -1;
 	}
@@ -106,15 +104,12 @@ static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chg
 
 		if (insert >= size) {
 			if (size >= overflow) {
-				// overflow paranoia
-				free (changes);
-				return -1;
+				goto leave;
 			}
 			size *= 2;
-			RLevOp *tmp = realloc (changes, size * sizeof (RLevOp));
+			RLevOp *tmp = realloc (changes, (1 + size) * sizeof (RLevOp));
 			if (!tmp) {
-				free (changes);
-				return -1;
+				goto leave;
 			}
 			changes = tmp;
 		}
@@ -133,21 +128,17 @@ static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chg
 			j--;
 			continue; // continue with same rows
 		}
-		free (row->changes);
-		row->changes = NULL;
+		R_FREE (row->changes);
 		row = prev_row--;
 	}
 	if (size - insert < j) {
 		if (size > overflow) {
-			// overly paranoid
-			free (changes);
-			return -1;
+			goto leave;
 		}
 		size += j - (size - insert);
-		RLevOp *tmp = realloc (changes, size * sizeof (RLevOp));
+		RLevOp *tmp = realloc (changes, (1 + size) * sizeof (RLevOp));
 		if (!tmp) {
-			free (changes);
-			return -1;
+			goto leave;
 		}
 		changes = tmp;
 	}
@@ -158,6 +149,9 @@ static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chg
 
 	*chgs = changes;
 	return insert;
+leave:
+	free (changes);
+	return -1;
 }
 
 static inline void lev_fill_changes(RLevOp *chgs, RLevOp op, ut32 count) {
@@ -173,7 +167,7 @@ typedef struct {
 } RDiffUser;
 
 #if USE_SYSTEM_DIFF
-R_API char *r_diff_buffers_to_string(RDiff *d, const ut8 *a, int la, const ut8 *b, int lb) {
+R_API char *r_diff_buffers_tostring(RDiff *d, const ut8 *a, int la, const ut8 *b, int lb) {
 	return r_diff_buffers_unified (d, a, la, b, lb);
 }
 
@@ -211,7 +205,7 @@ static int tostring(RDiff *d, void *user, RDiffOp *op) {
 	return 1;
 }
 
-R_API char *r_diff_buffers_to_string(RDiff *d, const ut8 *a, int la, const ut8 *b, int lb) {
+R_API char *r_diff_buffers_tostring(RDiff *d, const ut8 *a, int la, const ut8 *b, int lb) {
 	// XXX buffers_static doesnt constructs the correct string in this callback
 	void *c = d->callback;
 	void *u = d->user;
@@ -243,7 +237,7 @@ R_API int r_diff_buffers_static(RDiff *d, const ut8 *a, int la, const ut8 *b, in
 	lb = R_ABS (lb);
 	if (la != lb) {
 		len = R_MIN (la, lb);
-		eprintf ("Buffer truncated to %d byte(s) (%d not compared)\n", len, R_ABS(lb - la));
+		R_LOG_INFO ("Buffer truncated to %d byte(s) (%d not compared)", len, R_ABS(lb - la));
 	} else {
 		len = la;
 	}
@@ -274,6 +268,8 @@ R_API char *r_diff_buffers_unified(RDiff *d, const ut8 *a, int la, const ut8 *b,
 	}
 	if (!fa || !fb) {
 		R_LOG_ERROR ("fafb nul");
+		free (fa);
+		free (fb);
 		return NULL;
 	}
 	r_file_dump (fa, a, la, 0);
@@ -299,6 +295,8 @@ R_API char *r_diff_buffers_unified(RDiff *d, const ut8 *a, int la, const ut8 *b,
 	close (fe);
 	r_file_rm (fa);
 	r_file_rm (fb);
+	free (fa);
+	free (fb);
 	free (err);
 	return out;
 }
@@ -309,10 +307,10 @@ R_API int r_diff_buffers(RDiff *d, const ut8 *a, ut32 la, const ut8 *b, ut32 lb)
 		: r_diff_buffers_static (d, a, la, b, lb);
 }
 
-// Eugene W. Myers' O(ND) diff algorithm
+// Eugene W. Myers O(ND) diff algorithm
 // Returns edit distance with costs: insertion=1, deletion=1, no substitution
 R_API bool r_diff_buffers_distance_myers(RDiff *diff, const ut8 *a, ut32 la, const ut8 *b, ut32 lb, ut32 *distance, double *similarity) {
-	r_return_val_if_fail (a && b, false);
+	R_RETURN_VAL_IF_FAIL (a && b, false);
 	const bool verbose = diff? diff->verbose: false;
 	const ut32 length = la + lb;
 	const ut8 *ea = a + la, *eb = b + lb;
@@ -365,7 +363,7 @@ out:
 }
 
 R_API bool r_diff_buffers_distance_levenshtein(RDiff *diff, const ut8 *a, ut32 la, const ut8 *b, ut32 lb, ut32 *distance, double *similarity) {
-	r_return_val_if_fail (a && b, false);
+	R_RETURN_VAL_IF_FAIL (a && b, false);
 	const bool verbose = diff ? diff->verbose : false;
 	const ut32 length = R_MAX (la, lb);
 	const ut8 *ea = a + la, *eb = b + lb, *t;
@@ -435,7 +433,7 @@ R_API bool r_diff_buffers_distance(RDiff *d, const ut8 *a, ut32 la, const ut8 *b
 // Note that 64KB * 64KB * 2 = 8GB.
 // TODO Discard common prefix and suffix
 R_API RDiffChar *r_diffchar_new(const ut8 *a, const ut8 *b) {
-	r_return_val_if_fail (a && b, NULL);
+	R_RETURN_VAL_IF_FAIL (a && b, NULL);
 	RDiffChar *diffchar = R_NEW0 (RDiffChar);
 	if (!diffchar) {
 		return NULL;
@@ -621,7 +619,7 @@ typedef enum {
 } R2RPrintDiffMode;
 
 R_API void r_diffchar_print(RDiffChar *diffchar) {
-	r_return_if_fail (diffchar);
+	R_RETURN_IF_FAIL (diffchar);
 	R2RPrintDiffMode cur_mode = R2R_DIFF_MATCH;
 	R2RCharAlignment cur_align;
 	size_t idx_align = diffchar->start_align;
@@ -633,7 +631,7 @@ R_API void r_diffchar_print(RDiffChar *diffchar) {
 		} else if (!a_ch && b_ch) {
 			cur_align = R2R_ALIGN_TOP_GAP;
 		} else if (a_ch != b_ch) {
-			eprintf ("Internal error: mismatch detected!\n");
+			R_LOG_ERROR ("Internal mismatch detected!");
 			cur_align = R2R_ALIGN_MISMATCH;
 		} else {
 			cur_align = R2R_ALIGN_MATCH;
@@ -709,8 +707,8 @@ R_API void r_diffchar_free(RDiffChar *diffchar) {
 }
 
 static st32 r_diff_levenshtein_nopath(RLevBuf *bufa, RLevBuf *bufb, ut32 maxdst, RLevMatches levdiff, size_t skip, ut32 alen, ut32 blen) {
-	r_return_val_if_fail (bufa && bufb && bufa->buf && bufb->buf, -1);
-	r_return_val_if_fail (blen >= alen && alen > 0, -1);
+	R_RETURN_VAL_IF_FAIL (bufa && bufb && bufa->buf && bufb->buf, -1);
+	R_RETURN_VAL_IF_FAIL (blen >= alen && alen > 0, -1);
 
 	// max distance is at most length of longer input, or provided by user
 	ut32 origdst = maxdst = R_MIN (maxdst, blen);
@@ -805,11 +803,11 @@ static st32 r_diff_levenshtein_nopath(RLevBuf *bufa, RLevBuf *bufb, ut32 maxdst,
 }
 
 /**
- * \brief Return Levenshtein distance and put array of changes, of unkown
+ * \brief Return Levenshtein distance and put array of changes, of unknown
  * lenght, in chgs
  * \param bufa Structure to represent starting buffer
  * \param bufb Structure to represent the buffer to reach
- * \param maxdst Max Levenshtein distance need, send UT32_MAX if unkown.
+ * \param maxdst Max Levenshtein distance need, send UT32_MAX if unknown.
  * \param levdiff Function pointer returning true when there is a difference.
  * \param chgs Returned array of changes to get from bufa to bufb
  *
@@ -821,8 +819,8 @@ static st32 r_diff_levenshtein_nopath(RLevBuf *bufa, RLevBuf *bufb, ut32 maxdst,
  * caller must free *chgs.
  */
 R_API st32 r_diff_levenshtein_path(RLevBuf *bufa, RLevBuf *bufb, ut32 maxdst, RLevMatches levdiff, RLevOp **chgs) {
-	r_return_val_if_fail (bufa && bufb && bufa->buf && bufb->buf, -1);
-	r_return_val_if_fail (!chgs || !*chgs, -1); // if chgs then it must point at NULL
+	R_RETURN_VAL_IF_FAIL (bufa && bufb && bufa->buf && bufb->buf, -1);
+	R_RETURN_VAL_IF_FAIL (!chgs || !*chgs, -1); // if chgs then it must point at NULL
 
 	// force buffer b to be longer, this will invert add/del resulsts
 	bool invert = false;
@@ -832,7 +830,7 @@ R_API st32 r_diff_levenshtein_path(RLevBuf *bufa, RLevBuf *bufb, ut32 maxdst, RL
 		bufa = bufb;
 		bufb = x;
 	}
-	r_return_val_if_fail (bufb->len < UT32_MAX, -1);
+	R_RETURN_VAL_IF_FAIL (bufb->len < UT32_MAX, -1);
 	ut32 ldelta = bufb->len - bufa->len;
 	if (ldelta > maxdst) {
 		return ST32_MAX;
@@ -842,7 +840,8 @@ R_API st32 r_diff_levenshtein_path(RLevBuf *bufa, RLevBuf *bufb, ut32 maxdst, RL
 	size_t skip;
 	ut32 alen = bufa->len;
 	ut32 blen = bufb->len;
-	for (skip=0; skip < alen && !levdiff (bufa, bufb, skip, skip); skip++) {}
+	for (skip = 0; skip < alen && !levdiff (bufa, bufb, skip, skip); skip++) {
+	}
 
 	// strip suffix as long as bytes don't diff
 	size_t i;
@@ -951,11 +950,11 @@ R_API st32 r_diff_levenshtein_path(RLevBuf *bufa, RLevBuf *bufb, ut32 maxdst, RL
 	{
 		// for debugging matrix
 		size_t total = 0;
-		for (i=0; i <= alen; i++) {
+		for (i = 0; i <= alen; i++) {
 			Levrow *bow = matrix + i;
 			ut32 j;
 			printf ("   ");
-			for (j=0; j <= blen; j++) {
+			for (j = 0; j <= blen; j++) {
 				ut32 val = lev_get_val (bow, j);
 				if (val >= UT32_MAX - 1) {
 					printf (" ..");

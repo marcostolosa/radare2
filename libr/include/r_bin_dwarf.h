@@ -303,7 +303,7 @@ extern "C" {
 #define DW_FORM_ref_sup4                0x1c
 #define DW_FORM_strp_sup                0x1d
 #define DW_FORM_data16                  0x1e
-#define DW_FORM_line_ptr                0x1f
+#define DW_FORM_line_strp               0x1f
 #define DW_FORM_ref_sig8                0x20
 #define DW_FORM_implicit_const          0x21
 #define DW_FORM_loclistx                0x22
@@ -545,6 +545,8 @@ extern "C" {
 #define DW_LANG_UPC                     0x0012
 #define DW_LANG_D                       0x0013
 #define DW_LANG_Python                  0x0014
+#define DW_LANG_OpenCL                  0x0015
+#define DW_LANG_Modula3                 0x0016
 #define DW_LANG_Rust                    0x001c
 #define DW_LANG_C11                     0x001d
 #define DW_LANG_Swift                   0x001e
@@ -555,6 +557,37 @@ extern "C" {
 #define DW_LANG_Fortran08               0x0023
 #define DW_LANG_lo_user                 0x8000
 #define DW_LANG_hi_user                 0xffff
+
+
+#define DW_LANG_Kotlin 0x0026
+#define DW_LANG_Zig 0x0027
+#define DW_LANG_Crystal 0x0028
+#define DW_LANG_C_plus_plus_17 0x002a
+#define DW_LANG_C_plus_plus_20 0x002b
+#define DW_LANG_C17 0x002c
+#define DW_LANG_Fortran18 0x002d
+#define DW_LANG_Ada2005 0x002e
+#define DW_LANG_Ada2012 0x002f
+#define DW_LANG_HIP 0x0030
+#define DW_LANG_Assembly 0x0031
+#define DW_LANG_C_sharp 0x0032
+#define DW_LANG_Mojo 0x0033
+#define DW_LANG_GLSL 0x0034
+#define DW_LANG_GLSL_ES 0x0035
+#define DW_LANG_HLSL 0x0036
+#define DW_LANG_OpenCL_CPP 0x0037
+#define DW_LANG_CPP_for_OpenCL 0x0038
+#define DW_LANG_SYCL 0x0039
+#define DW_LANG_C_plus_plus_23 0x003a
+#define DW_LANG_Odin 0x003b
+#define DW_LANG_P4 0x003c
+#define DW_LANG_Metal 0x003d
+#define DW_LANG_C23 0x003e
+#define DW_LANG_Fortran23 0x003f
+#define DW_LANG_Ruby 0x0040
+#define DW_LANG_Move 0x0041
+#define DW_LANG_Hylo 0x0042
+#define DW_LANG_V 0x0043
 
 #define DW_ID_case_sensitive            0x00
 #define DW_ID_up_case                   0x01
@@ -623,6 +656,14 @@ extern "C" {
 #define DW_UT_lo_user                   0x80
 #define DW_UT_hi_user                   0xff
 
+#define DW_LNCT_path            0x0001
+#define DW_LNCT_directory_index 0x0002
+#define DW_LNCT_timestamp       0x0003
+#define DW_LNCT_size            0x0004
+#define DW_LNCT_MD5             0x0005
+#define DW_LNCT_lo_user         0x2000
+#define DW_LNCT_hi_user         0x3fff
+
 typedef struct {
 	ut32 total_length;
 	ut16 version;
@@ -636,7 +677,7 @@ typedef struct {
 	const char **incdirs;
 	const char *file[128];
 } RBinDwarfInfoHeader;
-#define R_BIN_DWARF_INFO_HEADER_FILE_LENGTH(x) (sizeof (x->file)/sizeof(*(x->file)))
+#define R_BIN_DWARF_INFO_HEADER_FILE_LENGTH(x) (sizeof (x->file)/sizeof (*(x->file)))
 
 typedef struct {
 	ut64 address;
@@ -649,11 +690,20 @@ typedef struct {
 } RBinDwarfState;
 
 typedef struct {
-	ut64 address;
-	char *file;
-	unsigned int line;
-	unsigned int column;
-} RBinDwarfRow;
+	ut64 addr;
+	const char *file;
+	const char *path;
+	ut32 line;
+	ut32 column;
+} RBinAddrline;
+
+typedef struct {
+	ut64 addr;
+	ut32 path;
+	ut32 file;
+	ut32 line;
+	ut32 colu;
+} RBinAddrlineInternal;
 
 #define DWARF_INIT_LEN_64	0xffffffff
 typedef union {
@@ -762,8 +812,8 @@ typedef struct {
 	RBinDwarfDie *dies;
 } RBinDwarfCompUnit;
 
-#define COMP_UNIT_CAPACITY	8
-#define DEBUG_INFO_CAPACITY	8
+#define COMP_UNIT_CAPACITY 8
+#define DEBUG_INFO_CAPACITY 8
 typedef struct {
 	size_t count;
 	size_t capacity;
@@ -771,7 +821,7 @@ typedef struct {
 	HtUP/*<ut64 offset, DwarfDie *die>*/ *lookup_table;
 } RBinDwarfDebugInfo;
 
-#define	ABBREV_DECL_CAP		8
+#define	ABBREV_DECL_CAP 8
 
 typedef struct {
 	ut64 code;
@@ -791,20 +841,17 @@ typedef struct {
 	RBinDwarfAbbrevDecl *decls;
 } RBinDwarfDebugAbbrev;
 
-#define		DWARF_FALSE	0
-#define		DWARF_TRUE	1
-
 typedef struct {
 	ut64 address;
 	ut64 op_index;
 	ut64 file;
 	ut64 line;
 	ut64 column;
-	ut8 is_stmt;
-	ut8 basic_block;
-	ut8 end_sequence;
-	ut8 prologue_end;
-	ut8 epilogue_begin;
+	bool is_stmt;
+	bool basic_block;
+	bool end_sequence;
+	bool prologue_end;
+	bool epilogue_begin;
 	ut64 isa;
 	ut64 discriminator;
 } RBinDwarfSMRegisters;
@@ -812,6 +859,8 @@ typedef struct {
 typedef struct {
 	char *name;
 	ut32 id_idx, mod_time, file_len;
+	bool has_checksum;
+	ut8 md5sum[16];
 } file_entry;
 
 typedef struct {
@@ -847,10 +896,10 @@ typedef struct r_bin_dwarf_loc_list_t {
 
 #define r_bin_dwarf_line_new(o,a,f,l) o->address=a, o->file = strdup (r_str_get (f)), o->line = l, o->column =0,o
 
-R_API RList *r_bin_dwarf_parse_aranges(RBin *a, int mode);
+R_API void r_bin_dwarf_parse_aranges(RBin *a, int mode);
 R_API RList *r_bin_dwarf_parse_line(RBin *a, int mode);
 R_API RBinDwarfDebugAbbrev *r_bin_dwarf_parse_abbrev(RBin *a, int mode);
-R_API RBinDwarfDebugInfo *r_bin_dwarf_parse_info(RBinDwarfDebugAbbrev *da, RBin *a, int mode);
+R_API RBinDwarfDebugInfo *r_bin_dwarf_parse_info(RBin *a, RBinDwarfDebugAbbrev *da, int mode);
 R_API HtUP/*<offset, RBinDwarfLocList*>*/  *r_bin_dwarf_parse_loc(RBin *bin, int addr_size);
 R_API void r_bin_dwarf_print_loc(HtUP /*<offset, RBinDwarfLocList*>*/  *loc_table, int addr_size, PrintfCallback print);
 R_API void r_bin_dwarf_free_loc(HtUP /*<offset, RBinDwarfLocList*>*/  *loc_table);

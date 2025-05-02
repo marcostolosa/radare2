@@ -1,10 +1,9 @@
 #include <r_core.h>
 #include <r_anal.h>
 #include <r_util.h>
-#include <r_util/r_graph_drawable.h>
 #include "minunit.h"
 
-bool test_inherit_graph_creation() {
+bool test_inherit_graph_creation(void) {
 	RCore *core = r_core_new ();
 	r_core_cmd0 (core, "ac A");
 	r_core_cmd0 (core, "ac B");
@@ -93,7 +92,7 @@ bool test_inherit_graph_creation() {
 	mu_end;
 }
 
-int all_tests() {
+int all_tests(void) {
 	mu_run_test (test_inherit_graph_creation);
 	return tests_passed != tests_run;
 }

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2013-2019 - pancake */
+/* radare - LGPL - Copyright 2013-2023 - pancake */
 
 #include <r_bin.h>
 #include "../i/private.h"
@@ -20,8 +20,11 @@ R_API char *r_bin_demangle_cxx(RBinFile *bf, const char *str, ut64 vaddr) {
 	};
 	char *tmpstr = strdup (str);
 	char *p = tmpstr;
-
-	if (p[0] == p[1] && *p == '_') {
+	const char p0 = *p;
+	if (p0 == 0) {
+		return p;
+	}
+	if (p0 == p[1] && p0 == '_') {
 		p++;
 	}
 	for (i = 0; prefixes[i]; i++) {
@@ -64,14 +67,14 @@ R_API char *r_bin_demangle_cxx(RBinFile *bf, const char *str, ut64 vaddr) {
 				nerd = ptr;
 				str = ptr + 1;
 			}
-			if (nerd && *nerd) {
+			if (R_STR_ISNOTEMPTY (nerd)) {
 				*nerd = 0;
 				if (bf) {
 					RBinSymbol *sym = r_bin_file_add_method (bf, out, nerd + 2, 0);
 					if (sym) {
 						if (sym->vaddr != 0 && sym->vaddr != vaddr) {
-							if (bf && bf->rbin && bf->rbin->verbose) {
-								eprintf ("Dupped method found: %s\n", sym->name);
+							if (bf && bf->rbin && bf->rbin->options.verbose) {
+								R_LOG_WARN ("Dupped method found: %s", r_bin_name_tostring (sym->name));
 							}
 						}
 						if (sym->vaddr == 0) {

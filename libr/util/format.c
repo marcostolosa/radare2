@@ -464,7 +464,7 @@ static int r_print_format_string(const RPrint* p, ut64 seeki, ut64 addr64, ut64 
 	ut8 buffer[255];
 	buffer[0] = 0;
 	if (!p->iob.read_at) {
-		eprintf ("(cannot read memory)\n");
+		R_LOG_ERROR ("(cannot read memory)");
 		return -1;
 	}
 	const ut64 at = (is64 == 1)? addr64: (ut64)addr;
@@ -651,7 +651,7 @@ static void r_print_format_hex(const RPrint* p, int endian, int mode, const char
 		}
 	} else if (MUSTSEEJSON) {
 		if (size == -1) {
-			p->cb_printf ("0x%08"PFMT64x, addr);
+			p->cb_printf ("%"PFMT64d, addr);
 		} else {
 			p->cb_printf ("[ ");
 			while (size--) {
@@ -668,7 +668,7 @@ static void r_print_format_hex(const RPrint* p, int endian, int mode, const char
 				if (elem > -1) {
 					elem--;
 				}
-				i+=4;
+				i += 4;
 			}
 			p->cb_printf (" ]");
 		}
@@ -722,7 +722,7 @@ static void r_print_format_int(const RPrint* p, int endian, int mode, const char
 		if (size == -1) {
 			p->cb_printf ("%"PFMT64d, addr);
 		} else {
-			p->cb_printf ("[ ");
+			p->cb_printf ("[");
 			while (size--) {
 				updateAddr (buf + i, size - i, endian, &addr, NULL);
 				if (elem == -1 || elem == 0) {
@@ -737,7 +737,7 @@ static void r_print_format_int(const RPrint* p, int endian, int mode, const char
 				if (elem > -1) {
 					elem--;
 				}
-				i+=4;
+				i += 4;
 			}
 			p->cb_printf (" ]");
 		}
@@ -800,7 +800,7 @@ static void r_print_format_octal(const RPrint* p, int endian, int mode, const ch
 				if (elem > -1) {
 					elem--;
 				}
-				i+=4;
+				i += 4;
 			}
 			if (!SEEVALUE) {
 				p->cb_printf (" ]");
@@ -825,7 +825,7 @@ static void r_print_format_octal(const RPrint* p, int endian, int mode, const ch
 				if (elem > -1) {
 					elem--;
 				}
-				i+=4;
+				i += 4;
 			}
 			p->cb_printf (" ]");
 		}
@@ -874,7 +874,7 @@ static void r_print_format_hexflag(const RPrint* p, int endian, int mode, const 
 				if (elem > -1) {
 					elem--;
 				}
-				i+=4;
+				i += 4;
 			}
 			if (!SEEVALUE) {
 				p->cb_printf (" ]");
@@ -913,7 +913,7 @@ static int r_print_format_10bytes(const RPrint* p, int mode, const char *setval,
 	if (MUSTSET) {
 		p->cb_printf ("?e pf B not yet implemented\n");
 	} else if (mode & R_PRINT_DOT) {
-		for (j = 0; j<10; j++) {
+		for (j = 0; j < 10; j++) {
 			p->cb_printf ("%02x ", buf[j]);
 		}
 	} else if (MUSTSEE) {
@@ -925,7 +925,7 @@ static int r_print_format_10bytes(const RPrint* p, int mode, const char *setval,
 		if (!SEEVALUE && !ISQUIET) {
 			p->cb_printf ("0x%08" PFMT64x " = ", seeki);
 		}
-		for (j=0; j<10; j++) {
+		for (j = 0; j < 10; j++) {
 			p->cb_printf ("%02x ", buf[j]);
 		}
 		if (!SEEVALUE) {
@@ -955,7 +955,7 @@ static int r_print_format_10bytes(const RPrint* p, int mode, const char *setval,
 		for (; j < 10; j++) {
 			p->cb_printf (", %d", buf[j]);
 		}
-		p->cb_printf ("]");
+		p->cb_printf (" ]");
 		return 0;
 	}
 	return 0;
@@ -981,7 +981,7 @@ static int r_print_format_hexpairs(const RPrint* p, int endian, int mode, const 
 		if (!SEEVALUE) {
 			p->cb_printf (" ... (");
 		}
-		for (j=0; j<size; j++) {
+		for (j = 0; j < size; j++) {
 			if (!SEEVALUE) {
 				if (IS_PRINTABLE (buf[j])) {
 					p->cb_printf ("%c", buf[i+j]);
@@ -998,7 +998,7 @@ static int r_print_format_hexpairs(const RPrint* p, int endian, int mode, const 
 		for (; j < 10; j++) {
 			p->cb_printf (", %d", buf[j]);
 		}
-		p->cb_printf ("]");
+		p->cb_printf (" ]");
 		if (MUSTSEEJSON) {
 			p->cb_printf ("}");
 		}
@@ -1278,7 +1278,7 @@ static void r_print_format_word(const RPrint* p, int endian, int mode, const cha
 }
 
 static void r_print_byte_escape(const RPrint* p, const char *src, char **dst, int dot_nl) {
-	r_return_if_fail (p->strconv_mode);
+	R_RETURN_IF_FAIL (p->strconv_mode);
 	r_str_byte_escape (src, dst, dot_nl, !strcmp (p->strconv_mode, "asciidot"), p->esc_bslash);
 }
 
@@ -1288,11 +1288,14 @@ static void r_print_format_nulltermstring(const RPrint* p, int len, int endian, 
 		ut8 ch = 0xff;
 		// XXX there are some cases where the memory is there but is_valid_offset fails wtf
 		if (p->iob.read_at (p->iob.io, seeki, &ch, 1) != 1 && ch != 0xff) {
-			p->cb_printf ("-1");
+			p->cb_printf ("\"\"");
+			if (MUSTSEEJSON) {
+				p->cb_printf ("}");
+			}
 			return;
 		}
 	}
-	if (p->flags & R_PRINT_FLAGS_UNALLOC && !(p->iob.io->cached & R_PERM_R)) {
+	if (p->flags & R_PRINT_FLAGS_UNALLOC && !(p->iob.io->cache.mode & R_PERM_R)) {
 		ut64 total_map_left = 0;
 		ut64 addr = seeki;
 		RIOMap *map;
@@ -1346,7 +1349,7 @@ static void r_print_format_nulltermstring(const RPrint* p, int len, int endian, 
 		(MUSTSEESTRUCT) ?
 			p->cb_printf ("\"") :
 			p->cb_printf ("\\\"");
-		for (; j<len && ((size==-1 || size-- >0) && buf[j]) ; j++) {
+		for (; j < len && ((size==-1 || size-- >0) && buf[j]) ; j++) {
 			char ch = buf[j];
 			if (ch == '"') {
 				p->cb_printf ("\\\"");
@@ -1377,7 +1380,7 @@ static void r_print_format_nulltermstring(const RPrint* p, int len, int endian, 
 		p->cb_printf ("\"");
 		utf_encoded_buf = r_str_escape_utf8_for_json (
 		    (char *)buf + i, size == -1 ? str_len : R_MIN (size, str_len));
-		if (utf_encoded_buf){
+		if (utf_encoded_buf) {
 			p->cb_printf ("%s", utf_encoded_buf);
 			free (utf_encoded_buf);
 		}
@@ -1405,13 +1408,13 @@ static void r_print_format_nulltermwidestring(const RPrint* p, const int len, in
 			R_LOG_WARN ("new string is longer than previous one");
 		}
 		p->cb_printf ("ww %s @ 0x%08"PFMT64x"\n", newstring, seeki);
-		free(ons);
+		free (ons);
 	} else if (MUSTSEE) {
 		int j = i;
 		if (!SEEVALUE && !ISQUIET) {
 			p->cb_printf ("0x%08"PFMT64x" = ", seeki);
 		}
-		for (; j<len && ((size==-1 || size-->0) && buf[j]) ; j+=2) {
+		for (; j < len && ((size == -1 || size-- > 0) && buf[j]) ; j += 2) {
 			if (IS_PRINTABLE (buf[j])) {
 				p->cb_printf ("%c", buf[j]);
 			} else {
@@ -1435,7 +1438,11 @@ static void r_print_format_nulltermwidestring(const RPrint* p, const int len, in
 static void r_print_format_bitfield(const RPrint* p, ut64 seeki, char *fmtname,
 		char *fieldname, ut64 addr, int mode, int size) {
 	char *bitfield = NULL;
-	addr &= (1ULL << (size * 8)) - 1;
+	if (size >= 8) {
+		addr = 0;
+	} else {
+		addr &= (1ULL << (size * 8)) - 1;
+	}
 	if (MUSTSEE && !SEEVALUE) {
 		p->cb_printf ("0x%08"PFMT64x" = ", seeki);
 	}
@@ -1459,7 +1466,7 @@ static void r_print_format_bitfield(const RPrint* p, ut64 seeki, char *fmtname,
 
 static void r_print_format_enum(const RPrint* p, ut64 seeki, char *fmtname,
 		char *fieldname, ut64 addr, int mode, int size) {
-	char *enumvalue = NULL;
+	R_RETURN_IF_FAIL (p && fmtname && fieldname);
 	if (size >= 8) {
 		// avoid shift overflow
 	} else {
@@ -1468,8 +1475,8 @@ static void r_print_format_enum(const RPrint* p, ut64 seeki, char *fmtname,
 	if (MUSTSEE && !SEEVALUE) {
 		p->cb_printf ("0x%08"PFMT64x" = ", seeki);
 	}
-	enumvalue = r_type_enum_member (p->sdb_types, fmtname, NULL, addr);
-	if (enumvalue && *enumvalue) {
+	char *enumvalue = r_type_enum_member (p->sdb_types, fmtname, NULL, addr);
+	if (R_STR_ISNOTEMPTY (enumvalue)) {
 		if (mode & R_PRINT_DOT) {
 			p->cb_printf ("%s.%s", fmtname, enumvalue);
 		} else if (MUSTSEEJSON) {
@@ -1657,7 +1664,7 @@ R_API int r_print_format_struct_size(RPrint *p, const char *f, int mode, int n) 
 	if (fmt[i] == '{') {
 		char *end = strchr (fmt + i + 1, '}');
 		if (!end) {
-			eprintf ("No end curly bracket.\n");
+			R_LOG_ERROR ("No end curly bracket");
 			free (o);
 			free (args);
 			return -1;
@@ -1680,7 +1687,7 @@ R_API int r_print_format_struct_size(RPrint *p, const char *f, int mode, int n) 
 		if (fmt[i] == '[') {
 			char *end = strchr (fmt + i,']');
 			if (!end) {
-				eprintf ("No end bracket.\n");
+				R_LOG_ERROR ("No end bracket");
 				continue;
 			}
 			*end = '\0';
@@ -1738,7 +1745,7 @@ R_API int r_print_format_struct_size(RPrint *p, const char *f, int mode, int n) 
 		case 'E':
 			if (tabsize_set) {
 				if (tabsize < 1 || tabsize > 8) {
-					eprintf ("Unknown enum format size: %d\n", tabsize);
+					R_LOG_ERROR ("Unknown enum format size: %d", tabsize);
 					break;
 				}
 				size += tabsize;
@@ -1754,7 +1761,7 @@ R_API int r_print_format_struct_size(RPrint *p, const char *f, int mode, int n) 
 			char *endname = NULL, *structname = NULL;
 			char tmp = 0;
 			if (words < idx) {
-				eprintf ("Index out of bounds\n");
+				R_LOG_ERROR ("Index out of bounds");
 			} else {
 				wordAtIndex = r_str_word_get0 (args, idx);
 			}
@@ -1805,7 +1812,12 @@ R_API int r_print_format_struct_size(RPrint *p, const char *f, int mode, int n) 
 				return 0;
 			}
 			if (format) {
-				size += tabsize * newsize;
+				if (!ST32_MUL_OVFCHK (tabsize, newsize)) {
+					size = size + (tabsize * newsize);
+				} else {
+					R_LOG_ERROR ("Prevented multiply integer overflow in format.c");
+					return 0;
+				}
 			}
 			free (structname);
 			if (format_owned) {
@@ -1854,16 +1866,16 @@ R_API int r_print_format_struct_size(RPrint *p, const char *f, int mode, int n) 
 			break;
 		case 'n':
 		case 'N':
-			if (fmt[i+1] == '1') {
+			if (fmt[i + 1] == '1') {
 				size += tabsize * 1;
-			} else if (fmt[i+1] == '2') {
+			} else if (fmt[i + 1] == '2') {
 				size += tabsize * 2;
-			} else if (fmt[i+1] == '4') {
+			} else if (fmt[i + 1] == '4') {
 				size += tabsize * 4;
-			} else if (fmt[i+1] == '8') {
+			} else if (fmt[i + 1] == '8') {
 				size += tabsize * 8;
 			} else {
-				eprintf ("Invalid n format in (%s)\n", fmt);
+				R_LOG_ERROR ("Invalid n format in (%s)", fmt);
 				free (o);
 				free (args);
 				return -2;
@@ -1901,7 +1913,7 @@ static int r_print_format_struct(RPrint* p, ut64 seek, const ut8* b, int len, co
 
 	slide++;
 	if ((slide % STRUCTPTR) > NESTDEPTH || (slide % STRUCTFLAG)/STRUCTPTR > NESTDEPTH) {
-		eprintf ("Too much nested struct, recursion too deep...\n");
+		R_LOG_ERROR ("Too much nested struct, too much recursion");
 		return 0;
 	}
 	if (anon) {
@@ -1914,7 +1926,7 @@ static int r_print_format_struct(RPrint* p, ut64 seek, const ut8* b, int len, co
 		fmt_owned = true;
 	}
 	if (!fmt || !*fmt) {
-		eprintf ("Undefined struct '%s'.\n", name);
+		R_LOG_ERROR ("Undefined struct '%s'", name);
 		return 0;
 	}
 	if (MUSTSEE && !SEEVALUE) {
@@ -2025,8 +2037,7 @@ static char *get_format_type(const char fmt, const char arg) {
 //TODO PJ
 #define MINUSONE ((void*)(size_t)-1)
 #define ISSTRUCT (tmp == '?' || (tmp == '*' && *(arg+1) == '?'))
-R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
-		const char *formatname, int mode, const char *setval, char *ofield) {
+R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len, const char *formatname, int mode, const char *setval, char *ofield) {
 	int nargs, i, j, invalid, nexti, idx, times, otimes, endian, isptr = 0;
 	const int old_bits = (p && p->config)? p->config->bits: 32;
 	int p_bits = old_bits;
@@ -2034,7 +2045,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 	ut64 addr = 0, addr64 = 0, seeki = 0;
 	// XXX delete global
 	static R_TH_LOCAL int slide = 0, oldslide = 0, ident = 4;
-	char namefmt[32], *field = NULL;
+	char namefmt[128], *field = NULL;
 	const char *arg = NULL;
 	const char *fmt = NULL;
 	bool fmt_owned = false;
@@ -2047,7 +2058,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 	if (!formatname) {
 		return 0;
 	}
-	fmt = sdb_get (p->formats, formatname, NULL);
+	fmt = p? sdb_get (p->formats, formatname, NULL): NULL;
 	if (fmt) {
 		fmt_owned = true;
 	} else {
@@ -2077,7 +2088,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 		return 0;
 	}
 	memcpy (buf, b, len);
-	endian = (p && p->config)? p->config->big_endian: R_SYS_ENDIAN;
+	endian = (p && p->config)? R_ARCH_CONFIG_IS_BIG_ENDIAN (p->config): R_SYS_ENDIAN;
 
 	if (ofield && ofield != MINUSONE) {
 		field = strdup (ofield);
@@ -2085,7 +2096,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 	/* get times */
 	otimes = times = atoi (arg);
 	if (times > 0) {
-		while (IS_DIGIT(*arg)) {
+		while (isdigit(*arg)) {
 			arg++;
 		}
 	}
@@ -2094,7 +2105,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 	if (bracket) {
 		char *end = strchr (arg, '}');
 		if (!end) {
-			eprintf ("No end bracket. Try pf {ecx}b @ esi\n");
+			R_LOG_ERROR ("No end bracket. Try pf {ecx}b @ esi");
 			goto beach;
 		}
 		*end = '\0';
@@ -2109,7 +2120,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 	/* get args */
 	args = get_args_offset (arg);
 	if (args) {
-		int l = 0, maxl = 0;
+		int maxl = 0;
 		argend = args;
 		tmp = *args;
 		while (tmp == ' ') {
@@ -2129,7 +2140,6 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 				maxl = len;
 			}
 		}
-		l++;
 		const char *ends = " "; // XXX trailing space warning
 		snprintf (namefmt, sizeof (namefmt), "%%%ds :%s",
 			((maxl + 1) * (1 + slide)) % STRUCTPTR, ends);
@@ -2203,7 +2213,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 			if (arg[0] == '[') {
 				char *end = strchr (arg,']');
 				if (!end) {
-					eprintf ("No end bracket.\n");
+					R_LOG_ERROR ("No end bracket");
 					goto beach;
 				}
 				*end = '\0';
@@ -2232,7 +2242,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 					addr = addr64;
 				}
 			} else {
-				// eprintf ("Format strings is too big for this buffer\n");
+				R_LOG_WARN ("format string (%s) is too large for this buffer (%d, %d)", formatname, i + fs, len);
 				goto beach;
 			}
 
@@ -2256,18 +2266,18 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 				}
 				free (oarg);
 				oarg = fieldname = strdup (r_str_word_get0 (args, idx));
-				if (ISSTRUCT || tmp=='E' || tmp=='B' || tmp=='r') {
+				if (ISSTRUCT || tmp == 'E' || tmp == 'B' || tmp == 'r') {
 					if (*fieldname == '(') {
 						fmtname = fieldname + 1;
 						fieldname = (char*)r_str_rchr (fieldname, NULL, ')');
 						if (fieldname) {
 							*fieldname++ = '\0';
 						} else {
-							eprintf ("Missing closing parenthesis in format ')'\n");
+							R_LOG_ERROR ("Missing closing parenthesis in format ')'");
 							goto beach;
 						}
 					} else {
-						eprintf ("Missing name (%s)\n", fieldname);
+						R_LOG_ERROR ("Missing name (%s)", fieldname);
 						goto beach;
 					}
 				}
@@ -2285,7 +2295,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 				if (field && (bracket = strchr (field, '[')) && mode & R_PRINT_ISFIELD) {
 					char *end = strchr (field, ']');
 					if (!end) {
-						eprintf ("Missing closing bracket\n");
+						R_LOG_ERROR ("Missing closing bracket");
 						goto beach;
 					}
 					*end = '\0';
@@ -2328,12 +2338,11 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 							updateAddr (buf + i, len - i, endian, &addr, &addr64);
 						}
 					} else {
-						eprintf ("Likely a heap buffer overflow.\n");
+						R_LOG_ERROR ("Likely a heap buffer overflow");
 						goto beach;
 					}
 				} else {
-					eprintf ("(cannot read at 0x%08"PFMT64x", block: %s, blocksize: 0x%x)\n",
-							addr, b, len);
+					R_LOG_ERROR ("cannot read at 0x%08"PFMT64x", block: %s, blocksize: 0x%x", addr, b, len);
 					p->cb_printf ("\n");
 					goto beach;
 				}
@@ -2413,7 +2422,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 					p->cb_printf ("f %s.%s_", fmtname, fieldname);
 				} else if (tmp == 'E') {
 					p->cb_printf ("f %s=0x%08"PFMT64x"\n", fieldname, seeki);
-				} else if (slide/STRUCTFLAG>0 && idx==1) {
+				} else if (slide/STRUCTFLAG>0 && idx == 1) {
 					p->cb_printf ("%s=0x%08"PFMT64x"\n", fieldname, seeki);
 				} else {
 					p->cb_printf ("f %s=0x%08" PFMT64x "\n", fieldname, seeki);
@@ -2557,15 +2566,15 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 					break;
 				case 'i':
 					r_print_format_int (p, endian, mode, setval, seeki, buf, i, size);
-					i+= (size == -1)? 4: 4 * size;
+					i += (size == -1)? 4: 4 * size;
 					break;
 				case 'd':
 					r_print_format_hex (p, endian, mode, setval, seeki, buf, i, size);
-					i+= (size == -1)? 4: 4 * size;
+					i += (size == -1)? 4: 4 * size;
 					break;
 				case 'D':
 					if (MUSTSET) {
-						eprintf ("Set val not implemented yet for disassembler!\n");
+						R_LOG_ERROR ("Set val not implemented yet for disassembler!");
 					}
 					{
 						ut64 at = isptr? ((p_bits == 64)? addr64: addr): seeki;
@@ -2624,7 +2633,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 					break;
 				case 's':
 					if (MUSTSET) {
-						eprintf ("Set val not implemented yet for strings!\n");
+						R_LOG_ERROR ("Set val not implemented yet for strings!");
 					}
 					if (r_print_format_string (p, seeki, addr64, addr, 0, mode) == 0) {
 						i += (size==-1) ? 4 : 4*size;
@@ -2632,7 +2641,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 					break;
 				case 'S':
 					if (MUSTSET) {
-						eprintf ("Set val not implemented yet for strings!\n");
+						R_LOG_ERROR ("Set val not implemented yet for strings!");
 					}
 					if (r_print_format_string (p, seeki, addr64, addr, 1, mode) == 0) {
 						i += (size == -1) ? 8 : 8 * size;
@@ -2644,27 +2653,30 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 					}
 					if (MUSTSET) {
 						p->cb_printf ("wv4 %s @ 0x%08"PFMT64x"\n", setval, seeki+((elem>=0)?elem*4:0));
-						// eprintf ("Set val not implemented yet for bitfields!\n");
+						// R_LOG_ERROR ("Set val not implemented yet for bitfields!");
 					}
 					r_print_format_bitfield (p, seeki, fmtname, fieldname, addr, mode, size);
-					i+=(size == -1)? 1: size;
+					i += (size == -1)? 1: size;
 					break;
 				case 'E': // resolve enum
 					if (MUSTSET) {
-						// eprintf ("Set val not implemented yet for enums!\n");
 						p->cb_printf ("wv4 %s @ 0x%08"PFMT64x"\n", setval, seeki+((elem>=0)?elem*4:0));
 					}
 					if (size >= ARRAYINDEX_COEF) {
 						size %= ARRAYINDEX_COEF;
 					}
-					r_print_format_enum (p, seeki, fmtname, fieldname, addr, mode, size);
+					if (fmtname) {
+						r_print_format_enum (p, seeki, fmtname, fieldname, addr, mode, size);
+					} else {
+						R_LOG_ERROR ("Missing enum type after the E()");
+					}
 					i += (size == -1)? 1: size;
 					break;
 				case 'r':
 					if (fmtname) {
 						r_print_format_register (p, mode, fmtname, setval);
 					} else {
-						eprintf ("Unknown register\n");
+						R_LOG_ERROR ("Unknown register");
 					}
 					break;
 				case '?':
@@ -2715,10 +2727,7 @@ R_API int r_print_format(RPrint *p, ut64 seek, const ut8* b, const int len,
 					format = strchr (fmtname, ' ');
 					if (format) {
 						anon = 1;
-						fmtname = format;
-						while (*fmtname == ' ') {
-							fmtname++;
-						}
+						fmtname = (char *)r_str_trim_head_ro (format);
 					}
 					oldslide = slide;
 					//slide += (isptr) ? STRUCTPTR : NESTEDSTRUCT;

@@ -149,6 +149,22 @@ R_API RList *r_io_sundo_list(RIO *io, int mode) {
 				io->cb_printf ("0x%"PFMT64x"%s", addr, notLast? " > ": "");
 			}
 			break;
+		case 'r':
+			{
+				char *cmt = io->coreb.cmdStrF (io->coreb.core, "fd 0x%08"PFMT64x, addr);
+				r_str_trim (cmt);
+				if (j < undos) {
+					io->cb_printf ("0x%08"PFMT64x" ; %ds- # %s\n", addr, idx + 1, cmt);
+				} else if (j == undos && j != 0 && redos != 0) {
+					io->cb_printf ("0x%08"PFMT64x" ; # CUR %s\n", addr, cmt);
+				} else if (j != undos) {
+					io->cb_printf ("0x%08"PFMT64x" ; %ds+ # %s\n", addr, idx + 1, cmt);
+				} else if (addr != 0) {
+					io->cb_printf ("0x%08"PFMT64x" ; # CUR %s\n", addr, cmt);
+				}
+				free (cmt);
+			}
+			break;
 		case '*':
 			if (j < undos) {
 				io->cb_printf ("f undo_%d @ 0x%"PFMT64x"\n", idx, addr);
@@ -161,16 +177,14 @@ R_API RList *r_io_sundo_list(RIO *io, int mode) {
 		case 0:
 			if (list) {
 				RIOUndos *u = R_NEW0 (RIOUndos);
-				if (u) {
-					if (!(j == undos && redos == 0)) {
-						// Current position gets pushed before seek, so there
-						// is no valid offset when we are at the end of list.
-						memcpy (u, undo, sizeof (RIOUndos));
-					} else {
-						u->off = io->off;
-					}
-					r_list_append (list, u);
+				if (!(j == undos && redos == 0)) {
+					// Current position gets pushed before seek, so there
+					// is no valid offset when we are at the end of list.
+					memcpy (u, undo, sizeof (RIOUndos));
+				} else {
+					u->off = io->off;
 				}
+				r_list_append (list, u);
 			}
 			break;
 		}
@@ -190,15 +204,12 @@ R_API RList *r_io_sundo_list(RIO *io, int mode) {
 /* undo writez */
 
 R_API void r_io_wundo_new(RIO *io, ut64 off, const ut8 *data, int len) {
-	RIOUndoWrite *uw;
+	R_RETURN_IF_FAIL (io);
 	if (!io->undo.w_enable) {
 		return;
 	}
 	/* undo write changes */
-	uw = R_NEW0 (RIOUndoWrite);
-	if (!uw) {
-		return;
-	}
+	RIOUndoWrite *uw = R_NEW0 (RIOUndoWrite);
 	uw->set = true;
 	uw->off = off;
 	uw->len = len;
@@ -210,26 +221,30 @@ R_API void r_io_wundo_new(RIO *io, ut64 off, const ut8 *data, int len) {
 	memcpy (uw->n, data, len);
 	uw->o = (ut8*) malloc (len);
 	if (!uw->o) {
+		free (uw->n);
 		R_FREE (uw);
 		return;
 	}
-	memset (uw->o, 0xff, len);
+	memset (uw->o, io->Oxff, len);
 	r_io_read_at (io, off, uw->o, len);
 	r_list_append (io->undo.w_list, uw);
 }
 
 R_API void r_io_wundo_clear(RIO *io) {
+	R_RETURN_IF_FAIL (io);
 	// XXX memory leak
 	io->undo.w_list = r_list_new ();
 }
 
 // rename to r_io_undo_length ?
 R_API int r_io_wundo_size(RIO *io) {
+	R_RETURN_VAL_IF_FAIL (io, 0);
 	return r_list_length (io->undo.w_list);
 }
 
 // TODO: Deprecate or so? iterators must be language-wide, but helpers are useful
 R_API void r_io_wundo_list(RIO *io) {
+	R_RETURN_IF_FAIL (io);
 #define BW 8 /* byte wrap */
 	RListIter *iter;
 	RIOUndoWrite *u;
@@ -283,7 +298,7 @@ R_API void r_io_wundo_apply_all(RIO *io, int set) {
 }
 
 /* sets or unsets the writes done */
-/* if ( set == 0 ) unset(n) */
+/* if (set == 0) unset(n) */
 R_API int r_io_wundo_set(RIO *io, int n, int set) {
 	RListIter *iter;
 	RIOUndoWrite *u = NULL;

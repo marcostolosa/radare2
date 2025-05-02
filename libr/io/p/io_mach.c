@@ -1,38 +1,44 @@
-/* radare - LGPL - Copyright 2009-2022 - pancake */
+/* radare - LGPL - Copyright 2009-2024 - pancake */
 
 #include <r_userconf.h>
 
 #include <r_io.h>
 #include <r_lib.h>
 #include <r_cons.h>
+#include <r_core.h>
 
 #if __APPLE__ && DEBUGGER
 
-static int __get_pid(RIODesc *desc);
-#define EXCEPTION_PORT 0
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
 
-// NOTE: mach/mach_vm is not available for iOS
 #include <mach/exception_types.h>
 #include <mach/mach_host.h>
 #include <mach/host_priv.h>
+#include <mach/processor_set.h>
 #include <mach/mach_init.h>
 #include <mach/mach_port.h>
+#include <mach/vm_map.h>
+
+static int __get_pid(RIODesc *desc);
+#if APPLE_SDK_IPHONEOS
+// missing includes
+#else
+
+#define EXCEPTION_PORT 0
+
+// NOTE: mach/mach_vm is not available for iOS
 #include <mach/mach_traps.h>
-#include <mach/processor_set.h>
 #include <mach/mach_error.h>
-#include <mach/task.h>
-#include <mach/task_info.h>
 #include <mach/thread_act.h>
 #include <mach/thread_info.h>
-#include <mach/vm_map.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include <sys/ptrace.h>
-#include <sys/types.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/wait.h>
-#include <errno.h>
+#endif
+#include <mach/task.h>
+#include <mach/task_info.h>
 
 #define MACH_ERROR_STRING(ret) \
 	(mach_error_string (ret) ? mach_error_string (ret) : "(unknown)")
@@ -81,14 +87,14 @@ static task_t task_for_pid_workaround(int pid) {
 	}
 	kr = host_processor_set_priv (myhost, psDefault, &psDefault_control);
 	if (kr != KERN_SUCCESS) {
-//		eprintf ("host_processor_set_priv failed with error 0x%x\n", kr);
+		R_LOG_DEBUG ("host_processor_set_priv failed with error 0x%x", kr);
 		//mach_error ("host_processor_set_priv",kr);
 		return MACH_PORT_NULL;
 	}
 	numTasks = 0;
 	kr = processor_set_tasks (psDefault_control, &tasks, &numTasks);
 	if (kr != KERN_SUCCESS) {
-//		eprintf ("processor_set_tasks failed with error %x\n", kr);
+		R_LOG_DEBUG ("processor_set_tasks failed with error %x", kr);
 		return MACH_PORT_NULL;
 	}
 	if (pid == 0) {
@@ -135,7 +141,7 @@ static task_t pid_to_task(RIODesc *fd, int pid) {
 		//since we are going to get a new task
 		kr = mach_port_deallocate (mach_task_self (), old_task);
 		if (kr != KERN_SUCCESS) {
-			eprintf ("pid_to_task: fail to deallocate port\n");
+			R_LOG_ERROR ("pid_to_task: fail to deallocate port");
 			return 0;
 		}
 	}
@@ -175,7 +181,7 @@ static ut64 getNextValid(RIO *io, RIODesc *fd, ut64 addr) {
 	int tid = __get_pid (fd);
 	task_t task = pid_to_task (fd, tid);
 	ut64 lower = addr;
-#if __arm64__ || __aarch64__
+#if __arm64__ || __aarch64__ || __arm64e__
 	size = osize = 16384; // acording to frida
 #else
 	size = osize = 4096;
@@ -227,7 +233,7 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int len) {
 	if (dd ->magic != r_str_hash ("mach")) {
 		return -1;
 	}
-	memset (buf, 0xff, len);
+	memset (buf, io->Oxff, len);
 	int pid = __get_pid (desc);
 	task_t task = pid_to_task (desc, pid);
 	if (task_is_dead (desc, pid)) {
@@ -250,16 +256,16 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int len) {
 			(pointer_t)buf + copied, &size);
 		switch (err) {
 		case KERN_PROTECTION_FAILURE:
-			//eprintf ("r_io_mach_read: kern protection failure.\n");
+			R_LOG_DEBUG ("r_io_mach_read: kern protection failure");
 			break;
 		case KERN_INVALID_ADDRESS:
 			if (blocksize == 1) {
-				memset (buf+copied, 0xff, len-copied);
+				memset (buf+copied, io->Oxff, len-copied);
 				return size+copied;
 			}
 			blocksize = 1;
 			blen = 1;
-			buf[copied] = 0xff;
+			buf[copied] = io->Oxff;
 			break;
 		}
 		if (err == -1 || size < 1) {
@@ -267,12 +273,12 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int len) {
 		}
 		if (size == 0) {
 			if (blocksize == 1) {
-				memset (buf + copied, 0xff, len - copied);
+				memset (buf + copied, io->Oxff, len - copied);
 				return len;
 			}
 			blocksize = 1;
 			blen = 1;
-			buf[copied] = 0xff;
+			buf[copied] = io->Oxff;
 		}
 		copied += blen;
 	}
@@ -348,17 +354,16 @@ static int mach_write_at(RIO *io, RIODesc *desc, const void *buf, int len, ut64 
 	}
 	operms = tsk_getperm (io, task, pageaddr);
 	if (!tsk_setperm (io, task, pageaddr, total_size, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY)) {
-		eprintf ("io.mach: Cannot set page perms for %d byte(s) at 0x%08"
-			PFMT64x"\n", (int)pagesize, (ut64)pageaddr);
+		R_LOG_ERROR ("io.mach: Cannot set page perms for %d byte(s) at 0x%08" PFMT64x, (int)pagesize, (ut64)pageaddr);
 		return -1;
 	}
 	if (!tsk_write (task, vaddr, buf, len)) {
-		eprintf ("io.mach: Cannot write on memory\n");
+		R_LOG_ERROR ("io.mach: Cannot write on memory");
 		len = -1;
 	}
 	if (operms) {
 		if (!tsk_setperm (io, task, pageaddr, total_size, operms)) {
-			eprintf ("io.mach: Cannot restore page perms\n");
+			R_LOG_ERROR ("io.mach: Cannot restore page perms");
 			return -1;
 		}
 	}
@@ -404,7 +409,7 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 		 * the pid > 0 check  doesn't seem to be reasonable to me too
 		 * what was this intended to check anyway ? */
 		if (pid > 0 && io->referer && !strncmp (io->referer, "dbg://", 6)) {
-			eprintf ("Child killed\n");
+			R_LOG_INFO ("Child killed");
 			kill (pid, SIGKILL);
 		}
 #endif
@@ -414,7 +419,7 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 			break;
 		case EINVAL:
 			r_sys_perror ("ptrace: Cannot attach");
-			eprintf ("Possibly unsigned r2. Please see doc/macos.md\n");
+			R_LOG_INFO ("Possibly unsigned r2. Please see doc/macos.md");
 			break;
 		default:
 			R_LOG_ERROR ("unknown error in debug_attach");
@@ -458,7 +463,8 @@ static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 		io->off += offset;
 		break;
 	case R_IO_SEEK_END:
-		io->off = ST64_MAX;
+		io->off = UT64_MAX;
+		break;
 	}
 	return io->off;
 }
@@ -484,7 +490,7 @@ static bool __close(RIODesc *fd) {
 }
 
 static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
-	r_return_val_if_fail (io && fd, NULL);
+	R_RETURN_VAL_IF_FAIL (io && fd, NULL);
 	if (!cmd || !fd->data) {
 		return NULL;
 	}
@@ -497,14 +503,22 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 	}
 	if (r_str_startswith (cmd, "perm")) {
 		int perm = r_str_rwx (cmd + 4);
-		if (perm) {
+		if (perm >= 0) {
 			int pagesize = tsk_pagesize (fd);
 			task_t task = pid_to_task (fd, iodd->tid);
 			tsk_setperm (io, task, io->off, pagesize, perm);
 		} else {
-			eprintf ("Usage: =!perm [rwx]\n");
+			R_LOG_ERROR ("Usage: :perm [rwx]");
 		}
 		return NULL;
+	}
+	if (r_str_startswith (cmd, "tls")) {
+#if __arm64__
+		RCore *core = io->coreb.core;
+		io->coreb.cmd (core, "dxr 60d03bd5");
+#else
+		R_LOG_TODO ("Not implemented for this architecture");
+#endif
 	}
 	if (r_str_startswith (cmd, "pid")) {
 		RIOMachData *iodd = fd->data;
@@ -532,7 +546,7 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 				return NULL;
 			}
 		}
-		eprintf ("io_mach_system: Invalid pid %d\n", pid);
+		R_LOG_ERROR ("Invalid pid %d", pid);
 	} else {
 		eprintf ("Try: ':pid' or ':perm'\n");
 	}
@@ -555,9 +569,12 @@ static int __get_pid(RIODesc *desc) {
 
 // TODO: rename ptrace to io_mach .. err io.ptrace ??
 RIOPlugin r_io_plugin_mach = {
-	.name = "mach",
-	.desc = "Attach to mach debugger instance",
-	.license = "LGPL",
+	.meta = {
+		.name = "mach",
+		.author = "pancake",
+		.desc = "Attach to mach debugger instance",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "attach://,mach://,smach://",
 	.open = __open,
 	.close = __close,
@@ -573,9 +590,12 @@ RIOPlugin r_io_plugin_mach = {
 
 #else
 RIOPlugin r_io_plugin_mach = {
-	.name = "mach",
-	.desc = "mach debug io (unsupported in this platform)",
-	.license = "LGPL"
+	.meta = {
+		.name = "mach",
+		.author = "pancake",
+		.desc = "mach debug io (unsupported in this platform)",
+		.license = "LGPL-3.0-only"
+	},
 };
 #endif
 

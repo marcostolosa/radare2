@@ -3,7 +3,7 @@
 #include <r_bin.h>
 #include <r_core.h>
 #include <r_bin_dwarf.h>
-#include "../../libr/bin/pdb/types.h"
+#include "../../libr/bin/format/pdb/types.h"
 
 #define MODE 2
 
@@ -499,10 +499,12 @@ bool test_pdb_type_save(void) {
 	mu_end;
 }
 
-bool all_tests() {
+bool all_tests(void) {
+#if R_SYS_ENDIAN == 0
 	mu_run_test (test_pdb_tpi_cpp);
 	mu_run_test (test_pdb_tpi_rust);
 	mu_run_test (test_pdb_type_save);
+#endif
 	return tests_passed != tests_run;
 }
 

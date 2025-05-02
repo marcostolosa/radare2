@@ -61,48 +61,48 @@ between those and the 64-bit encryption key, so they probably use an additional
 
 First FN:
 
- B(0 1 3 5 8 9 11 12)        A(10 4 6 7 2 13 15 14)
-         L0                             R0
-         |                              |
-        XOR<-----------[F1]<------------|
-         |                              |
-         R1                             L1
-         |                              |
-         |------------>[F2]----------->XOR
-         |                              |
-         L2                             R2
-         |                              |
-        XOR<-----------[F3]<------------|
-         |                              |
-         R3                             L3
-         |                              |
-         |------------>[F4]----------->XOR
-         |                              |
-         L4                             R4
-  (10 4 6 7 2 13 15 14)       (0 1 3 5 8 9 11 12)
+	 B(0 1 3 5 8 9 11 12)        A(10 4 6 7 2 13 15 14)
+		 L0                             R0
+		 |                              |
+		XOR<-----------[F1]<------------|
+		 |                              |
+		 R1                             L1
+		 |                              |
+		 |------------>[F2]----------->XOR
+		 |                              |
+		 L2                             R2
+		 |                              |
+		XOR<-----------[F3]<------------|
+		 |                              |
+		 R3                             L3
+		 |                              |
+		 |------------>[F4]----------->XOR
+		 |                              |
+		 L4                             R4
+	  (10 4 6 7 2 13 15 14)       (0 1 3 5 8 9 11 12)
 
 
 Second FN:
 
- B(3 5 9 10 8 15 12 11)      A(6 0 2 13 1 4 14 7)
-         L0                             R0
-         |                              |
-        XOR<-----------[F1]<------------|
-         |                              |
-         R1                             L1
-         |                              |
-         |------------>[F2]----------->XOR
-         |                              |
-         L2                             R2
-         |                              |
-        XOR<-----------[F3]<------------|
-         |                              |
-         R3                             L3
-         |                              |
-         |------------>[F4]----------->XOR
-         |                              |
-         L4                             R4
-  (6 0 2 13 1 4 14 7)         (3 5 9 10 8 15 12 11)
+	 B(3 5 9 10 8 15 12 11)      A(6 0 2 13 1 4 14 7)
+		 L0                             R0
+		 |                              |
+		XOR<-----------[F1]<------------|
+		 |                              |
+		 R1                             L1
+		 |                              |
+		 |------------>[F2]----------->XOR
+		 |                              |
+		 L2                             R2
+		 |                              |
+		XOR<-----------[F3]<------------|
+		 |                              |
+		 R3                             L3
+		 |                              |
+		 |------------>[F4]----------->XOR
+		 |                              |
+		 L4                             R4
+	  (6 0 2 13 1 4 14 7)         (3 5 9 10 8 15 12 11)
 
 ******************************************************************************
 
@@ -666,18 +666,21 @@ static void cps2_crypt(int dir, const ut16 *rom, ut16 *dec, int length, const ut
 
 		// de/en-crypt the opcodes
 		for (a = i; a < length/2 && a < upper_limit/2; a += 0x10000) {
-			if (dir) {
+			switch (dir) {
+			case R_CRYPTO_DIR_DECRYPT:
 				/* decrypt */
 				dec[a] = feistel (rom[a], fn2_groupA, fn2_groupB,
 					&sboxes2[0*4], &sboxes2[1*4], &sboxes2[2*4], &sboxes2[3*4],
 					key2[0], key2[1], key2[2], key2[3]);
 				dec[a] = r_read_be16 (&dec[a]);
-			} else {
+				break;
+			case R_CRYPTO_DIR_ENCRYPT:
 				/* encrypt */
 				dec[a] = r_read_be16 (&rom[a]);
 				dec[a] = feistel (dec[a], fn2_groupA, fn2_groupB,
 					&sboxes2[3*4], &sboxes2[2*4], &sboxes2[1*4], &sboxes2[0*4],
 					key2[3], key2[2], key2[1], key2[0]);
+				break;
 			}
 		}
 		// copy the unencrypted part
@@ -694,7 +697,7 @@ main(cps_state,cps2crypt) {
 	ut32 lower;
 	ut32 upper;
 
-	std::string skey1 = parameter("cryptkey1");;
+	std::string skey1 = parameter("cryptkey1");
 	key[0] = strtoll(skey1.c_str(), nullptr, 16);
 
 	std::string skey2 = parameter("cryptkey2");
@@ -713,15 +716,13 @@ main(cps_state,cps2crypt) {
 }
 #endif
 
-static ut32 cps2key[2] = {0};
-
-static bool set_key(RCrypto *cry, const ut8 *key, int keylen, int mode, int direction) {
-	cry->dir = direction;
+static bool set_key(RCryptoJob *cj, const ut8 *key, int keylen, int mode, int direction) {
+	cj->dir = direction;
 	if (keylen == 8) { // old hardcoded MAME keys
 		/* fix key endianness */
 		const ut32* key32 = (const ut32*)key;
-		cps2key[0] = r_read_be32(key32);
-		cps2key[1] = r_read_be32(key32 + 1);
+		cj->cps2key[0] = r_read_be32(key32);
+		cj->cps2key[1] = r_read_be32(key32 + 1);
 		return true;
 	} else if (keylen == 20) {
 		const ut8* key8 = (const ut8*)key;
@@ -733,36 +734,45 @@ static bool set_key(RCrypto *cry, const ut8 *key, int keylen, int mode, int dire
 				decoded[b / 16] |= (0x8000 >> (b % 16));
 			}
 		}
-		cps2key[0] = ((uint32_t)decoded[0] << 16) | decoded[1];
-		cps2key[1] = ((uint32_t)decoded[2] << 16) | decoded[3];
+		cj->cps2key[0] = ((uint32_t)decoded[0] << 16) | decoded[1];
+		cj->cps2key[1] = ((uint32_t)decoded[2] << 16) | decoded[3];
 		return true;
 	}
 	return false;
 }
 
-static int get_key_size(RCrypto *cry) {
+static int get_key_size(RCryptoJob *cj) {
 	/* 64bit key */
 	return 8;
 }
 
-static bool cps2_use(const char *algo) {
+static bool cps2_check(const char *algo) {
 	return !strcmp (algo, "cps2");
 }
 
-static bool update(RCrypto *cry, const ut8 *buf, int len) {
+static bool update(RCryptoJob *cj, const ut8 *buf, int len) {
 	ut8 *output = calloc (1, len);
-	/* TODO : control decryption errors */
-	cps2_crypt (cry->dir, (const ut16 *)buf, (ut16*)output, len, cps2key, UPPER_LIMIT);
-	r_crypto_append (cry, output, len);
+	if (!output) {
+		return false;
+	}
+	/* TODO : handle decryption errors */
+	cps2_crypt (cj->dir, (const ut16 *)buf, (ut16*)output, len, cj->cps2key, UPPER_LIMIT);
+	r_crypto_job_append (cj, output, len);
 	free (output);
 	return true;
 }
 
 RCryptoPlugin r_crypto_plugin_cps2 = {
-	.name = "cps2",
+	.type = R_CRYPTO_TYPE_ENCRYPT,
+	.meta = {
+		.name = "cps2",
+		.desc = "Capcom Play System 2",
+		.author = "pof,esanfelix",
+		.license = "LGPL-3.0-only",
+	},
 	.set_key = set_key,
 	.get_key_size = get_key_size,
-	.use = cps2_use,
+	.check = cps2_check,
 	.update = update
 };
 

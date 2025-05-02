@@ -46,11 +46,20 @@ RebuildSpp() {
 	Rebuild libr/lang
 }
 
+RebuildQJS() {
+# rm -f shlr/qjs/js_repl.c
+	rm -f shlr/qjs/js_r2papi.c
+	make -C shlr/qjs
+	Rebuild libr/lang
+	touch libr/core/cmd.c
+	make -C libr/core
+}
+
 RebuildJava() {
 	Rebuild shlr/java
 	Rebuild libr/bin
 	Rebuild libr/asm
-	Rebuild libr/anal
+	Rebuild libr/arch
 	Rebuild libr/core
 }
 
@@ -64,7 +73,7 @@ RebuildCapstone() {
 }
 
 RebuildSdb() {
-	Rebuild shlr/sdb
+	Rebuild subprojects/sdb
 	Rebuild libr/util
 }
 
@@ -76,6 +85,11 @@ RebuildFs() {
 RebuildBin() {
 	Rebuild libr/bin
 	Rebuild libr/core
+}
+
+RebuildAr() {
+	Rebuild shlr/ar
+	Rebuild libr/io
 }
 
 RebuildGdb() {
@@ -97,13 +111,14 @@ RebuildZip() {
 
 RebuildTcc() {
 	Rebuild shlr/tcc
-	Rebuild libr/parse
+	Rebuild libr/asm
 }
 
 case "$1" in
 grub|fs)RebuildFs; ;;
 bin)    RebuildBin ; ;;
 gdb)    RebuildGdb ; ;;
+ar)     RebuildAr ; ;;
 winkd)  RebuildWinkd ; ;;
 sdb)    RebuildSdb ; ;;
 spp)    RebuildSpp ; ;;
@@ -111,6 +126,7 @@ tcc)    RebuildTcc ; ;;
 bin)    RebuildBin ; ;;
 zip)    RebuildZip ; ;;
 java)   RebuildJava ; ;;
+qjs)    RebuildQJS ; ;;
 iosdbg) RebuildIOSDebug ; ;;
 capstone|cs) RebuildCapstone ; ;;
 *)

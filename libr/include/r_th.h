@@ -1,5 +1,5 @@
-#ifndef R_TH_H
-#define R_TH_H
+#ifndef R2_TH_H
+#define R2_TH_H
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -8,9 +8,11 @@
 #include "r_types.h"
 #include "r_userconf.h"
 #include <r_list.h>
+#include <r_util/r_w32.h>
 
 #include <stdio.h>
 #include <stdlib.h>
+
 
 #ifndef WANT_THREADS
 #define WANT_THREADS 1
@@ -19,12 +21,17 @@
 #if !WANT_THREADS
 # define HAVE_TH_LOCAL 0
 # define R_TH_LOCAL
-
 # define HAVE_STDATOMIC_H 0
 # define R_ATOMIC_BOOL int
+
+#elif defined(__APPLE__) && (defined(__ppc__) || defined (__powerpc__))
+# define HAVE_TH_LOCAL 0
+# define R_TH_LOCAL
+# define HAVE_STDATOMIC_H 0
+# define R_ATOMIC_BOOL int
+
 #elif defined (__GNUC__) && !__TINYC__
 # define R_TH_LOCAL __thread
-
 # define HAVE_STDATOMIC_H 0
 # define R_ATOMIC_BOOL int
 
@@ -53,7 +60,7 @@
 
 #if WANT_THREADS
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 #undef HAVE_PTHREAD
 #define HAVE_PTHREAD 0
 #define R_TH_TID HANDLE
@@ -78,7 +85,11 @@
 #if __linux__ && __GLIBC_MINOR < 12
 #define HAVE_PTHREAD_NP 0
 #else
+#if __APPLE__ && __ppc__
+#define HAVE_PTHREAD_NP 0
+#else
 #define HAVE_PTHREAD_NP 1
+#endif
 #endif
 #if __APPLE__
 #include <pthread.h>
@@ -111,7 +122,8 @@ extern "C" {
 typedef enum {
 	R_TH_FREED = -1,
 	R_TH_STOP = 0,
-	R_TH_REPEAT = 1
+	R_TH_REPEAT = 1,
+	R_TH_PAUSE = 2
 } RThreadFunctionRet;
 
 struct r_th_t;
@@ -129,10 +141,15 @@ typedef enum r_th_lock_type_t {
 
 typedef struct r_th_lock_t {
 	R_ATOMIC_BOOL activating;
+#if 1
+	bool active;
+	RThreadLockType type;
+#else
 	struct {
 		bool active : 1;
 		RThreadLockType type : 7;
 	};
+#endif
 	R_TH_LOCK_T lock;
 } RThreadLock;
 
@@ -149,7 +166,7 @@ typedef struct r_th_t {
 	void *user;    // user pointer
 	bool running;
 	int breaked;   // thread aims to be interrupted
-	int delay;     // delay the startup of the thread N seconds
+	ut32 delay;    // delay the startup of the thread for at least N seconds
 	int ready;     // thread is properly setup
 } RThread;
 
@@ -197,8 +214,8 @@ R_API RThreadChannelPromise *r_th_channel_promise_new(RThreadChannel *tc);
 R_API RThreadChannelMessage *r_th_channel_promise_wait(RThreadChannelPromise *promise);
 R_API void r_th_channel_promise_free(RThreadChannelPromise *cp);
 
-R_API RThread *r_th_new(RThreadFunction fun, void *user, int delay);
-R_API bool r_th_start(RThread *th, int enable);
+R_API RThread *r_th_new(RThreadFunction fun, void *user, ut32 delay);
+R_API bool r_th_start(RThread *th);
 R_API int r_th_wait(RThread *th);
 R_API int r_th_wait_async(RThread *th);
 R_API void r_th_break(RThread *th);
@@ -223,6 +240,13 @@ R_API bool r_th_lock_tryenter(RThreadLock *thl);
 R_API bool r_th_lock_enter(RThreadLock *thl);
 R_API bool r_th_lock_leave(RThreadLock *thl);
 R_API void *r_th_lock_free(RThreadLock *thl);
+#if R_CRITICAL_ENABLED
+#define R_CRITICAL_ENTER(x) r_th_lock_enter((x)->lock)
+#define R_CRITICAL_LEAVE(x) r_th_lock_leave((x)->lock)
+#else
+#define R_CRITICAL_ENTER(x)
+#define R_CRITICAL_LEAVE(x)
+#endif
 
 R_API RThreadCond *r_th_cond_new(void);
 R_API void r_th_cond_signal(RThreadCond *cond);

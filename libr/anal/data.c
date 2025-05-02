@@ -1,6 +1,103 @@
-/* radare - LGPL - Copyright 2012-2017 - pancake */
+/* radare - LGPL - Copyright 2012-2024 - pancake */
 
 #include <r_anal.h>
+
+// TODO: integrate this code in a better way.. maybe reftype as name?
+R_API int r_anal_data_type(RAnal *anal, ut64 da) {
+	R_RETURN_VAL_IF_FAIL (anal, R_ANAL_REF_TYPE_NULL);
+	RIO *io = anal->iob.io;
+	if (!anal->iob.is_valid_offset (io, da, R_PERM_R)) {
+		return R_ANAL_REF_TYPE_ERROR;
+	}
+	ut8 buf[64] = {0};
+	// check if valid address
+	if (!anal->iob.read_at (io, da, buf, sizeof (buf))) {
+		// R_LOG_ERROR ("RAnal.dataType(): Cannot read at 0x%08"PFMT64x, da);
+		return R_ANAL_REF_TYPE_ERROR;
+	}
+	int k = R_ANAL_REF_TYPE_NULL;
+	RAnalOp op = {0};
+	int oplen = r_anal_op (anal, &op, da, buf, sizeof (buf), -1);
+	if (oplen > 2) {
+		if (op.type == R_ANAL_OP_TYPE_PUSH) {
+			k = R_ANAL_REF_TYPE_CODE;
+		} else if (op.type == R_ANAL_OP_TYPE_RET) {
+			k = R_ANAL_REF_TYPE_CODE;
+		} else if (r_anal_is_prelude (anal, da, buf, sizeof (buf))) {
+			k = R_ANAL_REF_TYPE_CODE;
+		}
+	}
+	r_anal_op_fini (&op);
+	return k;
+#if 0
+	const char *kind = r_anal_data_kind (anal, da, buf, sizeof (buf));
+	if (!kind) {
+		return 0;
+	}
+	// TODO: move into RAnalKind
+	int i, zeros = 0;
+	// XXX move this into datakind
+	for (i = 0; i < R_MIN (8, sizeof (buf)); i++) {
+		if (buf[i] == 0 || buf[i] == 0xff) {
+			zeros++;
+		}
+	}
+	if (!strcmp (kind, "data")) {
+		// reduce false positives
+		RAnalOp op = {0};
+		int oplen = r_anal_op (anal, &op, da, buf, sizeof (buf), -1);
+		if (oplen > 2) {
+			if (op.type == R_ANAL_OP_TYPE_PUSH) {
+				kind = "code";
+			} else if (op.type == R_ANAL_OP_TYPE_RET) {
+				kind = "code";
+			} else if (r_anal_is_prelude (anal, da, buf, sizeof (buf))) {
+				kind = "code";
+			} else if (zeros > 2) {
+				kind = "data";
+			}
+		}
+		r_anal_op_fini (&op);
+	}
+	if (!strcmp (kind, "text")) {
+		// TODO: honor anal.strings
+		return R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_READ;
+	}
+	if (!strcmp (kind, "data")) {
+		if (zeros > 1) {
+			return R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_READ;
+		}
+		// check if destination is code or data.. data use to have null bytes
+		// return R_ANAL_REF_TYPE_CODE | R_ANAL_REF_TYPE_READ;
+	}
+	if (strcmp (kind, "code")) {
+		R_LOG_DEBUG ("%s xref at 0x%08"PFMT64x, kind, da);
+		return R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_READ;
+	}
+#if 0
+	{
+		// try to reduce false positives, but it actually increases them
+		RAnalOp op = {0};
+		int oplen = r_anal_op (anal, &op, da, buf, sizeof (buf), -1);
+		if (oplen > 2) {
+			if (op.type == R_ANAL_OP_TYPE_PUSH) {
+				kind = "code";
+			} else if (op.type == R_ANAL_OP_TYPE_RET) {
+				kind = "code";
+			} else if (r_anal_is_prelude (anal, da, buf, sizeof (buf))) {
+				kind = "code";
+			} else {
+				r_anal_op_fini (&op);
+				return R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_READ;
+			}
+		}
+		r_anal_op_fini (&op);
+	}
+	// should be code i guess
+#endif
+	return R_ANAL_REF_TYPE_CODE | R_ANAL_REF_TYPE_READ;
+#endif
+}
 
 #define MINLEN 1
 static int is_string(const ut8 *buf, int size, int *len) {
@@ -75,7 +172,7 @@ static ut64 is_pointer(RAnal *anal, const ut8 *buf, int size) {
 	if (n < 0x1000) {
 		return 0;	// probably wrong
 	}
-	if (n > 0xffffffffffffLL) {
+	if (n > UT48_MAX) {
 		return 0; // probably wrong
 	}
 	if (iob->read_at (iob->io, n, buf2, size) != size) {
@@ -87,11 +184,13 @@ static ut64 is_pointer(RAnal *anal, const ut8 *buf, int size) {
 
 static bool is_bin(const ut8 *buf, int size) {
 	// TODO: add more magic signatures heres
-	if ((size >= 4 && !memcmp (buf, "\xcf\xfa\xed\xfe", 4))) {
-		return true;
-	}
-	if ((size >= 4 && !memcmp (buf, "\x7f\x45\x4c\x46", 4))) { // \x7fELF
-		return true;
+	if (size >= 4) {
+		if (!memcmp (buf, "\xcf\xfa\xed\xfe", 4)) {
+			return true;
+		}
+		if (!memcmp (buf, "\x7f\x45\x4c\x46", 4)) { // \x7fELF
+			return true;
+		}
 	}
 	if ((size >= 2 && !memcmp (buf, "MZ", 2))) {
 		return true;
@@ -100,21 +199,18 @@ static bool is_bin(const ut8 *buf, int size) {
 }
 
 // TODO: add is_flag, is comment?
-R_API char *r_anal_data_to_string(RAnalData *d, RConsPrintablePalette *pal) {
+R_API char *r_anal_data_tostring(RAnalData *d, R_NULLABLE RConsPrintablePalette *pal) {
+	R_RETURN_VAL_IF_FAIL (d, NULL);
 	int i, len, mallocsz = 1024;
 	ut32 n32;
 
-	if (!d) {
-		return NULL;
-	}
-
 	RStrBuf *sb = r_strbuf_new (NULL);
 	if (!sb || !r_strbuf_reserve (sb, mallocsz)) {
+		r_strbuf_free (sb);
 		return NULL;
 	}
 	if (pal) {
-		const char *k = pal->offset;
-		r_strbuf_appendf (sb, "%s0x%08" PFMT64x Color_RESET"  ", k, d->addr);
+		r_strbuf_appendf (sb, "%s0x%08" PFMT64x Color_RESET"  ", pal->addr, d->addr);
 	} else {
 		r_strbuf_appendf (sb, "0x%08" PFMT64x "  ", d->addr);
 	}
@@ -159,8 +255,7 @@ R_API char *r_anal_data_to_string(RAnalData *d, RConsPrintablePalette *pal) {
 	case R_ANAL_DATA_TYPE_POINTER:
 		r_strbuf_append (sb, "pointer ");
 		if (pal) {
-			const char *k = pal->offset;
-			r_strbuf_appendf (sb, " %s0x%08" PFMT64x, k, d->ptr);
+			r_strbuf_appendf (sb, " %s0x%08" PFMT64x, pal->addr, d->ptr);
 		} else {
 			r_strbuf_appendf (sb, " 0x%08" PFMT64x, d->ptr);
 		}
@@ -200,6 +295,7 @@ R_API char *r_anal_data_to_string(RAnalData *d, RConsPrintablePalette *pal) {
 }
 
 R_API RAnalData *r_anal_data_new_string(ut64 addr, const char *p, int len, int type) {
+	// R_RETURN_VAL_IF_FAIL (p, NULL);
 	RAnalData *ad = R_NEW0 (RAnalData);
 	if (!ad) {
 		return NULL;
@@ -234,6 +330,7 @@ R_API RAnalData *r_anal_data_new_string(ut64 addr, const char *p, int len, int t
 }
 
 R_API RAnalData *r_anal_data_new(ut64 addr, int type, ut64 n, const ut8 *buf, int len) {
+	R_RETURN_VAL_IF_FAIL (buf, NULL);
 	RAnalData *ad = R_NEW0 (RAnalData);
 	int l = R_MIN (len, 8);
 	if (!ad) {
@@ -274,6 +371,7 @@ R_API void r_anal_data_free(RAnalData *d) {
 }
 
 R_API RAnalData *r_anal_data(RAnal *anal, ut64 addr, const ut8 *buf, int size, int wordsize) {
+	R_RETURN_VAL_IF_FAIL (anal && buf && size >= 0, NULL);
 	ut64 dst = 0;
 	int n, nsize = 0;
 	int bits = anal->config->bits;
@@ -282,6 +380,22 @@ R_API RAnalData *r_anal_data(RAnal *anal, ut64 addr, const ut8 *buf, int size, i
 	if (size < 4) {
 		return NULL;
 	}
+#if 0
+	if (!buf) {
+		int type = r_anal_data_type (anal, addr);
+		if (type == R_ANAL_REF_TYPE_ERROR) {
+			return NULL;
+		} else switch (R_ANAL_REF_TYPE_MASK (type)) {
+		case R_ANAL_REF_TYPE_CODE:
+		case R_ANAL_REF_TYPE_DATA:
+			break;
+		}
+	}
+#endif
+	switch (is_string (buf, size, &nsize)) {
+	case 1: return r_anal_data_new_string (addr, (const char *)buf, nsize, R_ANAL_DATA_TYPE_STRING);
+	case 2: return r_anal_data_new_string (addr, (const char *)buf, nsize, R_ANAL_DATA_TYPE_WIDE_STRING);
+	}
 	if (size >= word && is_invalid (buf, word)) {
 		return r_anal_data_new (addr, R_ANAL_DATA_TYPE_INVALID, -1, buf, word);
 	}
@@ -289,10 +403,13 @@ R_API RAnalData *r_anal_data(RAnal *anal, ut64 addr, const ut8 *buf, int size, i
 		int i, len = R_MIN (size, 64);
 		int is_pattern = 0;
 		int is_sequence = 0;
+		int zeros = 0;
 		char ch = buf[0];
 		char ch2 = ch + 1;
 		for (i = 1; i < len; i++) {
-			if (ch2 == buf[i]) {
+			if (buf[i] == 0) {
+				zeros++;
+			} else if (ch2 == buf[i]) {
 				ch2++;
 				is_sequence++;
 			} else {
@@ -302,13 +419,14 @@ R_API RAnalData *r_anal_data(RAnal *anal, ut64 addr, const ut8 *buf, int size, i
 				is_pattern++;
 			}
 		}
+		if (zeros == len) {
+			return r_anal_data_new (addr, R_ANAL_DATA_TYPE_INVALID, -1, buf, 0); // XXX should be TYPE_ZERO
+		}
 		if (is_sequence > len - 2) {
-			return r_anal_data_new (addr, R_ANAL_DATA_TYPE_SEQUENCE, -1,
-						buf, is_sequence);
+			return r_anal_data_new (addr, R_ANAL_DATA_TYPE_SEQUENCE, -1, buf, is_sequence);
 		}
 		if (is_pattern > len - 2) {
-			return r_anal_data_new (addr, R_ANAL_DATA_TYPE_PATTERN, -1,
-						buf, is_pattern);
+			return r_anal_data_new (addr, R_ANAL_DATA_TYPE_PATTERN, -1, buf, is_pattern);
 		}
 	}
 	if (size >= word && is_null (buf, word)) {
@@ -323,10 +441,6 @@ R_API RAnalData *r_anal_data(RAnal *anal, ut64 addr, const ut8 *buf, int size, i
 			return r_anal_data_new (addr, R_ANAL_DATA_TYPE_POINTER, dst, buf, word);
 		}
 	}
-	switch (is_string (buf, size, &nsize)) {
-	case 1: return r_anal_data_new_string (addr, (const char *)buf, nsize, R_ANAL_DATA_TYPE_STRING);
-	case 2: return r_anal_data_new_string (addr, (const char *)buf, nsize, R_ANAL_DATA_TYPE_WIDE_STRING);
-	}
 	if (size >= word) {
 		n = is_number (buf, word);
 		if (n) {
@@ -337,19 +451,37 @@ R_API RAnalData *r_anal_data(RAnal *anal, ut64 addr, const ut8 *buf, int size, i
 }
 
 R_API const char *r_anal_data_kind(RAnal *a, ut64 addr, const ut8 *buf, int len) {
+	R_RETURN_VAL_IF_FAIL (a && buf && len >= 0, NULL);
 	int inv = 0;
 	int unk = 0;
 	int str = 0;
 	int num = 0;
 	int i, j;
-	RAnalData *data;
+	len = R_MIN (len, 32); // smoler dim causes some tests to fail
 	int word = a->config->bits / 8;
+	if (word < 1) {
+		word = 4;
+	}
+	ut8 *lbuf = NULL;
+	if (!buf) {
+		RIOBind *iob = &a->iob;
+		if (!iob->read_at) {
+			R_LOG_ERROR ("RAnal.dataKind() requires ioBind");
+			return "error";
+		}
+		len = 64;
+		lbuf = malloc (len);
+		if (!lbuf || iob->read_at (iob->io, addr, lbuf, len) != len) {
+			return "invalid";
+		}
+		buf = lbuf;
+	}
 	for (i = j = 0; i < len; j++) {
-		if (str && !buf[i]) {
+		if (R_UNLIKELY (str && !buf[i])) {
 			str++;
 		}
-		data = r_anal_data (a, addr + i, buf + i, len - i, 0);
-		if (!data) {
+		RAnalData *data = r_anal_data (a, addr + i, buf + i, len - i, 0);
+		if (R_UNLIKELY (!data)) {
 			i += word;
 			continue;
 		}
@@ -378,9 +510,11 @@ R_API const char *r_anal_data_kind(RAnal *a, ut64 addr, const ut8 *buf, int len)
 			break;
 		default:
 			i += word;
+			break;
 		}
 		r_anal_data_free (data);
 	}
+	free (lbuf);
 	if (j < 1) {
 		return "unknown";
 	}
@@ -399,7 +533,7 @@ R_API const char *r_anal_data_kind(RAnal *a, ut64 addr, const ut8 *buf, int len)
 	return "data";
 }
 
-R_API const char *r_anal_datatype_to_string(RAnalDataType t) {
+R_API R_NULLABLE const char *r_anal_datatype_tostring(RAnalDataType t) {
 	switch (t) {
 	case R_ANAL_DATATYPE_NULL:
 		return NULL;

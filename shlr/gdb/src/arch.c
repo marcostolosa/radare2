@@ -22,7 +22,7 @@ gdb_reg_t *parse_def(char **tok) {
 		return NULL;
 	}
 
-	strcpy (r->name, tok[1]);
+	r_str_ncpy (r->name, tok[1], sizeof (r->name));
 	r->size = parse_size (tok[2], &end);
 	if (*end != '\0' || !r->size) {
 		free (r);
@@ -104,7 +104,7 @@ gdb_reg_t *arch_parse_reg_profile(const char * reg_profile) {
 				reg = parse_def (tok);
 				// Warn the user if something went wrong
 				if (!reg) {
-					eprintf ("gdb_regs: Parse error @ line %d\n", l);
+					R_LOG_ERROR ("%s: gdb_regs: Parse error @ line %d", __func__, l);
 					for (i = 0; i < j; i++) {
 						free (tok[i]);
 					}

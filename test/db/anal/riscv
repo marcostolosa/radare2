@@ -5,7 +5,7 @@ af @ sym._printf_r
 afl~_printf_r
 EOF
 EXPECT=<<EOF
-0x00010330    1 68           sym._printf_r
+0x00010330    1     68 sym._printf_r
 EOF
 RUN
 
@@ -56,5 +56,17 @@ EXPECT=<<EOF
             0x00010180      93850700       a1 = a5
             0x00010184      b7170200       a5 = 0x21
             0x00010188      13850751       a0 = a5 + 1296
+EOF
+RUN
+
+NAME=asm fibonacci
+FILE=bins/elf/riscv-fibonacci
+CMDS=<<EOF
+aaa
+afl
+EOF
+EXPECT=<<EOF
+0x20040014    8    154 entry0
+0x200400ae    4     66 fcn.200400ae
 EOF
 RUN

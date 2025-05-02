@@ -1,5 +1,6 @@
 NAME=f_123
 FILE=-
+ARGS=-1
 CMDS=<<EOF
 f _foo=123
 f _123=_foo
@@ -15,18 +16,19 @@ f $foo=456
 ?v $foo
 EOF
 EXPECT=<<EOF
+ERROR: Invalid flag name '123'
+ERROR: Invalid flag name '$123'
+ERROR: Invalid flag name '$foo'
 0x7b
 0x7b
 0x141
 0x7b
-0xffffffffffffffff
-0xffffffffffffffff
+ERROR: cant find flag
+0x0
+ERROR: cant find flag
+0x0
 EOF
-EXPECT_ERR=<<EOF
-Invalid flag name '123'.
-Invalid flag name '$123'.
-Invalid flag name '$foo'.
-EOF
+EXPECT_ERR=
 RUN
 
 NAME=f?flag
@@ -95,12 +97,13 @@ RUN
 
 NAME=2: fs *
 FILE=bins/elf/analysis/main
+ARGS=-e bin.types=true
 CMDS=<<EOF
 fs *
 fs~?*
 EOF
 EXPECT=<<EOF
-9
+8
 EOF
 RUN
 
@@ -279,7 +282,7 @@ f bloh 0x00000003 @ 0x00000002
 fj
 EOF
 EXPECT=<<EOF
-[{"name":"bloh","size":3,"offset":2},{"name":"blah","size":10,"offset":11}]
+[{"name":"bloh","size":3,"addr":2},{"name":"blah","size":10,"addr":11}]
 EOF
 RUN
 
@@ -438,7 +441,8 @@ all
 f.patata@0x00400410
 EOF
 EXPECT_ERR=<<EOF
-Cannot find function at 0x00000000
+WARN: Relocs has not been applied. Please use `-e bin.relocs.apply=true` or `-e bin.cache=true` next time
+ERROR: Cannot find function at 0x00000000
 EOF
 RUN
 
@@ -461,7 +465,8 @@ all
 {"entry0":{"patata":4195344}}
 EOF
 EXPECT_ERR=<<EOF
-Cannot find function at 0x00000000
+WARN: Relocs has not been applied. Please use `-e bin.relocs.apply=true` or `-e bin.cache=true` next time
+ERROR: Cannot find function at 0x00000000
 EOF
 RUN
 
@@ -477,7 +482,9 @@ EOF
 EXPECT=<<EOF
 0x00400410 patata   [entry0 + 0]
 EOF
-EXPECT_ERR=
+EXPECT_ERR=<<EOF
+WARN: Relocs has not been applied. Please use `-e bin.relocs.apply=true` or `-e bin.cache=true` next time
+EOF
 RUN
 
 NAME=f-.
@@ -502,7 +509,7 @@ e asm.arch=x86
 e asm.bits=32
 s entry0
 e asm.lines=false
-e asm.offset=false
+e asm.addr=false
 e asm.functions=false
 e asm.comments=false
 f--
@@ -546,7 +553,7 @@ f+skutter 1 @ 12
 fj
 EOF
 EXPECT=<<EOF
-[{"name":"cat","size":1,"offset":0},{"name":"rimmer","size":12,"offset":0},{"name":"skutter","size":1,"offset":12},{"name":"lister","size":32,"offset":666},{"name":"kryten","size":32,"offset":666}]
+[{"name":"cat","size":1,"addr":0},{"name":"rimmer","size":12,"addr":0},{"name":"skutter","size":1,"addr":12},{"name":"lister","size":32,"addr":666},{"name":"kryten","size":32,"addr":666}]
 EOF
 RUN
 
@@ -664,12 +671,12 @@ fj
 EOF
 EXPECT=<<EOF
 fs *
-f direct1 1 0x00000000 base64:dmVyYmF0aW0=
+'f direct1 1 0x00000000 base64:dmVyYmF0aW0=
 fs *
-f direct2 1 0x00000010 base64:ImJhc2U2NCBhcm1vcmVkIg==
+'f direct2 1 0x00000010 base64:ImJhc2U2NCBhcm1vcmVkIg==
 fs *
-f indirect 1 0x00000020 base64:d29ya3MgdG9v
-[{"name":"direct1","size":1,"offset":0,"comment":"verbatim"},{"name":"direct2","size":1,"offset":16,"comment":"\"base64 armored\""},{"name":"indirect","size":1,"offset":32,"comment":"works too"}]
+'f indirect 1 0x00000020 base64:d29ya3MgdG9v
+[{"name":"direct1","size":1,"comment":"verbatim","addr":0},{"name":"direct2","size":1,"comment":"\"base64 armored\"","addr":16},{"name":"indirect","size":1,"comment":"works too","addr":32}]
 EOF
 RUN
 
@@ -707,7 +714,7 @@ EXPECT=<<EOF
 [32m0x00400c40[0m  [31mc7[31mc0 [31m80[31m14 [31m40[31m00 [31m48[31mc7 [31mc1[31mf0 [31m13[31m40 [31m00[31m48 [31mc7[31mc7[0m  [31m.[31m.[31m.[31m.[31m@[31m.[31mH[31m.[31m.[31m.[31m.[31m@[31m.[31mH[31m.[31m.[0m
 [32m0x00400c50[0m  [31m4e[31m0d [31m40[31m00 [31me8[31m57 [31m01[31m00 [31m00[31mf4 660f 1f44 0000[0m  [31mN[31m.[31m@[31m.[31m.[31mW[31m.[31m.[31m.[31m.f..D..[0m
             /sym.deregister_tm_clones                              
-[32m0x00400c60[0m  [7m[37mb8[27m37 346b 0055 482d 3034 6b00 4883 f80e[0m  [7m[37m[27m.74k.UH-04k.H...[0m
+[32m0x00400c60[0m  [7m[32mb8[27m37 346b 0055 482d 3034 6b00 4883 f80e[0m  [7m[32m[27m.74k.UH-04k.H...[0m
 [32m0x00400c70[0m  4889 e576 1bb8 0000 0000 4885 c074 115d[0m  H..v......H..t.][0m
 [32m0x00400c80[0m  bf30 346b 00ff e066 0f1f 8400 0000 0000[0m  .04k...f........[0m
 [32m0x00400c90[0m  5dc3 0f1f 4000 662e 0f1f 8400 0000 0000[0m  ]...@.f.........[0m

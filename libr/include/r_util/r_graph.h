@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
 typedef struct r_graph_node_t {
-	unsigned int idx;
+	ut32 idx;
 	void *data;
 	RList *out_nodes;
 	RList *in_nodes;
@@ -19,13 +19,13 @@ typedef struct r_graph_node_t {
 typedef struct r_graph_edge_t {
 	RGraphNode *from;
 	RGraphNode *to;
-	int nth;
+	st32 nth;
 } RGraphEdge;
 
 typedef struct r_graph_t {
-	unsigned int n_nodes;
-	unsigned int n_edges;
-	int last_index;
+	ut32 n_nodes;
+	ut32 n_edges;
+	st32 last_index;
 	RList *nodes; /* RGraphNode */
 } RGraph;
 
@@ -39,6 +39,11 @@ typedef struct r_graph_visitor_t {
 } RGraphVisitor;
 typedef void (*RGraphNodeCallback)(RGraphNode *n, RGraphVisitor *vis);
 typedef void (*RGraphEdgeCallback)(const RGraphEdge *e, RGraphVisitor *vis);
+
+typedef struct r_graph_dom_node_t {
+	RGraphNode *node;
+	ut32 idx;
+} RGraphDomNode;
 
 // Contrructs a new RGraph, returns heap-allocated graph.
 R_API RGraph *r_graph_new(void);
@@ -65,6 +70,8 @@ R_API bool r_graph_adjacent(const RGraph *g, const RGraphNode *from, const RGrap
 R_API void r_graph_dfs_node(RGraph *g, RGraphNode *n, RGraphVisitor *vis);
 R_API void r_graph_dfs_node_reverse(RGraph *g, RGraphNode *n, RGraphVisitor *vis);
 R_API void r_graph_dfs(RGraph *g, RGraphVisitor *vis);
+R_API RGraph *r_graph_dom_tree(RGraph *graph, RGraphNode *root);
+R_API RGraph *r_graph_pdom_tree(RGraph *graph, RGraphNode *root);
 
 #ifdef __cplusplus
 }

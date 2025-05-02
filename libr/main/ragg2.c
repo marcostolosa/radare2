@@ -1,4 +1,6 @@
-/* radare - LGPL - Copyright 2011-2022 - pancake */
+/* radare - LGPL - Copyright 2011-2024 - pancake */
+
+#define R_LOG_ORIGIN "ragg2"
 
 #include <r_egg.h>
 #include <r_bin.h>
@@ -9,6 +11,7 @@
 typedef struct {
 	RLib *l;
 	REgg *e;
+	RAnal *a;
 	// TODO flags
 	// bool oneliner;
 	// bool coutput;
@@ -16,37 +19,26 @@ typedef struct {
 	// bool quiet;
 } REggState;
 
-static void __load_plugins(REggState *es);
+typedef struct {
+	const char *name;
+	const char *desc;
+} REggEnv;
 
-static REggState *__es_new(void) {
-	REggState *es = R_NEW0 (REggState);
-	if (es) {
-		es->l = r_lib_new (NULL, NULL);
-		es->e = r_egg_new ();
-		__load_plugins (es);
-	}
-	return es;
-}
+static REggEnv env[] = {
+	{ "R2_NOPLUGINS", "do not load any plugin" }
+};
 
-static void __es_free(REggState *es) {
-	r_egg_free (es->e);
-	r_lib_free (es->l);
-	free (es);
-}
+static void ragg_show_env(bool show_desc);
 
 /* egg callback */
 static int __lib_egg_cb(RLibPlugin *pl, void *user, void *data) {
 	REggPlugin *hand = (REggPlugin *)data;
 	REggState *es = (REggState *)user;
-	r_egg_add (es->e, hand);
+	r_egg_plugin_add (es->e, hand);
 	return true;
 }
 
 static void __load_plugins(REggState *es) {
-	if (r_sys_getenv_asbool ("RAGG2_NOPLUGINS")) {
-		return;
-	}
-
 	r_lib_add_handler (es->l, R_LIB_TYPE_EGG, "egg plugins", &__lib_egg_cb, NULL, es);
 
 	char *path = r_sys_getenv (R_LIB_ENV);
@@ -55,7 +47,7 @@ static void __load_plugins(REggState *es) {
 	}
 
 	// load plugins from the home directory
-	char *homeplugindir = r_str_home (R2_HOME_PLUGINS);
+	char *homeplugindir = r_xdg_datadir ("plugins");
 	r_lib_opendir (es->l, homeplugindir);
 	free (homeplugindir);
 
@@ -71,6 +63,26 @@ static void __load_plugins(REggState *es) {
 	free (bindingsdir);
 
 	free (path);
+}
+
+static REggState *__es_new(bool load_plugins) {
+	REggState *es = R_NEW0 (REggState);
+	es->l = r_lib_new (NULL, NULL);
+	es->e = r_egg_new ();
+	es->a = r_anal_new ();
+	r_anal_bind (es->a, &es->e->rasm->analb);
+	if (load_plugins) {
+		__load_plugins (es);
+	}
+	return es;
+}
+
+static void __es_free(REggState *es) {
+	if (es) {
+		r_egg_free (es->e);
+		r_lib_free (es->l);
+		free (es);
+	}
 }
 
 static int usage(int v) {
@@ -91,6 +103,7 @@ static int usage(int v) {
 			" -f [format]     output format (raw, c, pe, elf, mach0, python, javascript)\n"
 			" -F              output native format (osx=mach0, linux=elf, ..)\n"
 			" -h              show this help\n"
+			" -H ([var])      display variable\n"
 			" -i [shellcode]  include shellcode plugin, uses options. see -L\n"
 			" -I [path]       add include path\n"
 			" -k [os]         operating system's kernel (linux,bsd,osx,w32)\n"
@@ -112,6 +125,7 @@ static int usage(int v) {
 			" -x              execute\n"
 			" -X [hexpairs]   execute rop chain, using the stack provided\n"
 			" -z              output in C string syntax\n");
+			ragg_show_env (true);
 	}
 	return 1;
 }
@@ -123,13 +137,13 @@ static void list(REgg *egg) {
 	printf ("shellcodes:\n");
 	r_list_foreach (egg->plugins, iter, p) {
 		if (p->type == R_EGG_PLUGIN_SHELLCODE) {
-			printf ("%10s : %s\n", p->name, p->desc);
+			printf ("%10s : %s\n", p->meta.name, p->meta.desc);
 		}
 	}
 	printf ("encoders:\n");
 	r_list_foreach (egg->plugins, iter, p) {
 		if (p->type == R_EGG_PLUGIN_ENCODER) {
-			printf ("%10s : %s\n", p->name, p->desc);
+			printf ("%10s : %s\n", p->meta.name, p->meta.desc);
 		}
 	}
 }
@@ -144,11 +158,11 @@ static int create(const char *format, const char *arch, int bits, const ut8 *cod
 		ut64 blen;
 		const ut8 *tmp = r_buf_data (b, &blen);
 		if (write (1, tmp, blen) != blen) {
-			eprintf ("Failed to write buffer\n");
+			R_LOG_ERROR ("Failed to write buffer");
 		}
 		r_buf_free (b);
 	} else {
-		eprintf ("Cannot create binary for this format '%s'.\n", format);
+		R_LOG_ERROR ("Cannot create binary for this format '%s'", format);
 	}
 	r_bin_free (bin);
 	return 0;
@@ -162,18 +176,18 @@ static int openfile(const char *f, int x) {
 			return -1;
 		}
 	}
-#if __UNIX__ && !__wasi__
+#if R2__UNIX__ && !__wasi__
 	if (x) {
 		fchmod (fd, 0755);
 	}
 #endif
-#if _MSC_VER || __WINDOWS__
+#if _MSC_VER || R2__WINDOWS__
 	int r = _chsize (fd, 0);
 #else
 	int r = ftruncate (fd, 0);
 #endif
 	if (r != 0) {
-		eprintf ("Could not resize\n");
+		R_LOG_ERROR ("Could not resize");
 	}
 	close (1);
 #if !__wasi__
@@ -181,7 +195,25 @@ static int openfile(const char *f, int x) {
 #endif
 	return fd;
 }
-#define ISEXEC (fmt!='r')
+#define ISEXEC (fmt != 'r')
+
+static void ragg_env_print(const char *name) {
+	char *value = r_sys_getenv (name);
+	printf ("%s\n", R_STR_ISNOTEMPTY (value) ? value : "");
+	free (value);
+}
+
+static void ragg_show_env(bool show_desc) {
+	int id = 0;
+	for (id = 0; id < (sizeof (env) / sizeof (env[0])); id++) {
+		if (show_desc) {
+			printf ("%s\t%s\n", env[id].name, env[id].desc);
+		} else {
+			printf ("%s=", env[id].name);
+			ragg_env_print(env[id].name);
+		}
+	}
+}
 
 R_API int r_main_ragg2(int argc, const char **argv) {
 	const char *file = NULL;
@@ -205,7 +237,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 	const char *encoder = NULL;
 	const char *eggprg = NULL;
 	char *sequence = NULL;
-	int bits = (R_SYS_BITS & R_SYS_BITS_64)? 64: 32;
+	int bits = R_SYS_BITS_CHECK (R_SYS_BITS, 64)? 64: 32;
 	int fmt = 0;
 	const char *ofile = NULL;
 	int ofileauto = 0;
@@ -215,11 +247,18 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 	if (argc < 2) {
 		return usage (1);
 	}
+	const bool load_plugins = !r_sys_getenv_asbool ("R2_NOPLUGINS");
 
-	REggState *es = __es_new ();
+	REggState *es = __es_new (load_plugins);
 
 	RGetopt opt;
-	r_getopt_init (&opt, argc, argv, "a:b:B:c:C:d:D:e:E:f:Fhi:I:k:Ln:N:o:Op:P:q:rsS:vw:xX:z");
+	r_getopt_init (&opt, argc, argv, "a:b:B:c:C:d:D:e:E:f:FhH:i:I:k:Ln:N:o:Op:P:q:rsS:vw:xX:z");
+	if (argc == 2 && !strcmp (argv[1], "-H")) {
+		ragg_show_env (false);
+		__es_free (es);
+		free (sequence);
+		return 0;
+	}
 	while ((c = r_getopt_next (&opt)) != -1) {
 		switch (c) {
 		case 'a':
@@ -243,7 +282,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 			break;
 		case 'C':
 			if (R_STR_ISEMPTY (opt.arg)) {
-				eprintf ("Cannot open empty contents path\n");
+				R_LOG_ERROR ("Cannot open empty contents path");
 				free (sequence);
 				__es_free (es);
 				return 1;
@@ -259,16 +298,16 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 				ut8 *b;
 				*p++ = 0;
 				off = r_num_math (NULL, arg);
-				b = malloc (strlen (opt.arg) + 1);
+				b = calloc (1, strlen (opt.arg) + 1);
 				len = r_hex_str2bin (p, b);
 				if (len > 0) {
 					r_egg_patch (es->e, off, (const ut8 *)b, len);
 				} else {
-					eprintf ("Invalid hexstr for -w\n");
+					R_LOG_ERROR ("Invalid hexstr for -w");
 				}
 				free (b);
 			} else {
-				eprintf ("Missing colon in -w\n");
+				R_LOG_ERROR ("Missing colon in -w");
 			}
 			free (arg);
 			}
@@ -296,10 +335,12 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 				off = r_num_math (NULL, opt.arg);
 				n = r_num_math (NULL, p + 1);
 				*p = ':';
-				// TODO: honor endianness here
-				r_egg_patch (es->e, off, (const ut8 *)&n, 4);
+				ut8 word[4];
+				r_write_le32 (word, (ut32)n);
+				// TODO: support big endian
+				r_egg_patch (es->e, off, word, sizeof (word));
 			} else {
-				eprintf ("Missing colon in -d\n");
+				R_LOG_ERROR ("Missing colon in -d");
 			}
 			}
 			break;
@@ -310,9 +351,11 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 				ut64 n, off = r_num_math (NULL, opt.arg);
 				n = r_num_math (NULL, p + 1);
 				// TODO: honor endianness here
-				r_egg_patch (es->e, off, (const ut8 *)&n, 8);
+				ut8 word[8];
+				r_write_le64 (word, n);
+				r_egg_patch (es->e, off, word, sizeof (word));
 			} else {
-				eprintf ("Missing colon in -d\n");
+				R_LOG_ERROR ("Missing colon in -d");
 			}
 			}
 			break;
@@ -327,7 +370,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 			break;
 		case 'I':
 			if (R_STR_ISEMPTY (opt.arg)) {
-				eprintf ("Cannot open empty include path\n");
+				R_LOG_ERROR ("Cannot open empty include path");
 				free (sequence);
 				__es_free (es);
 				return 1;
@@ -357,7 +400,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 		case 'F':
 #if __APPLE__
 			format = "mach0";
-#elif __WINDOWS__
+#elif R2__WINDOWS__
 			format = "pe";
 #else
 			format = "elf";
@@ -396,10 +439,15 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 			__es_free (es);
 			free (sequence);
 			return usage (1);
+		case 'H':
+			ragg_env_print (opt.arg);
+			__es_free (es);
+			free (sequence);
+			return 0;
 		case 'v':
 			free (sequence);
 			__es_free (es);
-			return r_main_version_print ("ragg2");
+			return r_main_version_print ("ragg2", 0);
 		case 'z':
 			show_str = 1;
 			break;
@@ -428,13 +476,15 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 			format = "mach064";
 		} else if (!strcmp (format, "elf")) {
 			format = "elf64";
+		} else if (!strcmp (format, "pe")) {
+			format = "pe64";
 		}
 	}
 
 	// catch this first
 	if (get_offset) {
 		if (strncmp (sequence, "0x", 2)) {
-			eprintf ("Need hex value with `0x' prefix e.g. 0x41414142\n");
+			R_LOG_ERROR ("Need hex value with `0x' prefix e.g. 0x41414142");
 			free (sequence);
 			__es_free (es);
 			return 1;
@@ -452,7 +502,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 	r_egg_setup (es->e, arch, bits, 0, os);
 	if (file) {
 		if (R_STR_ISEMPTY (file)) {
-			eprintf ("Cannot open empty path\n");
+			R_LOG_ERROR ("Cannot open empty path");
 			goto fail;
 		}
 		if (!strcmp (file, "-")) {
@@ -472,7 +522,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 			char *textFile = r_egg_cfile_parser (fileSanitized, arch, os, bits);
 
 			if (!textFile) {
-				eprintf ("Failure while parsing '%s'\n", fileSanitized);
+				R_LOG_ERROR ("Failure while parsing '%s'", fileSanitized);
 				goto fail;
 			}
 
@@ -481,7 +531,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 			if (buf && l > 0) {
 				r_egg_raw (es->e, (const ut8 *)buf, (int)l);
 			} else {
-				eprintf ("Error loading '%s'\n", textFile);
+				R_LOG_ERROR ("Cannot load '%s'", textFile);
 			}
 
 			r_file_rm (textFile);
@@ -497,13 +547,13 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 				fmt = 0;
 			}
 			if (!r_egg_include (es->e, file, fmt)) {
-				eprintf ("Cannot open '%s'\n", file);
+				R_LOG_ERROR ("Cannot open '%s'", file);
 				goto fail;
 			}
 		}
 	} else {
 		if (eggprg && !r_egg_include_str (es->e, eggprg)) {
-			eprintf ("Cannot parse egg program.\n");
+			R_LOG_ERROR ("Cannot parse egg program");
 			goto fail;
 		}
 	}
@@ -511,7 +561,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 	// compile source code to assembly
 	if (!r_egg_compile (es->e)) {
 		if (!fmt) {
-			eprintf ("r_egg_compile: fail\n");
+			R_LOG_ERROR ("r_egg_compile failed");
 			free (sequence);
 			__es_free (es);
 			return 1;
@@ -533,7 +583,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 		if (buf && l > 0) {
 			r_egg_raw (es->e, (const ut8 *)buf, (int)l);
 		} else {
-			eprintf ("Error loading '%s'\n", contents);
+			R_LOG_ERROR ("Cannot load '%s'", contents);
 		}
 		free (buf);
 	}
@@ -541,28 +591,29 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 	// add shellcode
 	if (shellcode) {
 		if (!r_egg_shellcode (es->e, shellcode)) {
-			eprintf ("Unknown shellcode '%s'\n", shellcode);
+			R_LOG_ERROR ("Unknown shellcode '%s'", shellcode);
 			goto fail;
 		}
 	}
 
 	// add raw bytes
 	if (bytes) {
-		ut8 *b = malloc (strlen (bytes) + 1);
+		ut8 *b = calloc (1, strlen (bytes) + 1);
 		int len = r_hex_str2bin (bytes, b);
 		if (len > 0) {
 			if (!r_egg_raw (es->e, b, len)) {
-				eprintf ("Unknown '%s'\n", shellcode);
+				R_LOG_ERROR ("Unknown '%s'", shellcode);
 				free (b);
 				goto fail;
 			}
 		} else {
-			eprintf ("Invalid hexpair string for -B\n");
+			R_LOG_ERROR ("Invalid hexpair string for -B");
 		}
 		free (b);
 		free (bytes);
 		bytes = NULL;
 	}
+
 
 	/* set output (create output file if needed) */
 	if (ofileauto) {
@@ -582,7 +633,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 			fd = openfile ("a.out", ISEXEC);
 		}
 		if (fd == -1) {
-			eprintf ("cannot open file '%s'\n", opt.arg);
+			R_LOG_ERROR ("cannot open file '%s'", opt.arg);
 			goto fail;
 		}
 		close (fd);
@@ -590,7 +641,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 	if (ofile) {
 		fd = openfile (ofile, ISEXEC);
 		if (fd == -1) {
-			eprintf ("cannot open file '%s'\n", ofile);
+			R_LOG_ERROR ("cannot open file '%s'", ofile);
 			goto fail;
 		}
 	}
@@ -598,13 +649,13 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 	// assemble to binary
 	if (!show_asm) {
 		if (!r_egg_assemble (es->e)) {
-			eprintf ("r_egg_assemble: invalid assembly\n");
+			R_LOG_ERROR ("r_egg_assemble: invalid assembly");
 			goto fail;
 		}
 	}
 	if (encoder) {
 		if (!r_egg_encode (es->e, encoder)) {
-			eprintf ("Invalid encoder '%s'\n", encoder);
+			R_LOG_ERROR ("Invalid encoder '%s'", encoder);
 			goto fail;
 		}
 	}
@@ -624,7 +675,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 		es->e->bin = r_buf_new ();
 	}
 	if (!(b = r_egg_get_bin (es->e))) {
-		eprintf ("r_egg_get_bin: invalid egg :(\n");
+		R_LOG_ERROR ("r_egg_get_bin: invalid egg :(");
 		goto fail;
 	}
 	r_egg_finalize (es->e);
@@ -653,12 +704,12 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 			ut64 blen;
 			const ut8 *tmp = r_buf_data (b, &blen);
 			if (write (1, tmp, blen) != blen) {
-				eprintf ("Failed to write buffer\n");
+				R_LOG_ERROR ("Failed to write buffer");
 				goto fail;
 			}
 		} else {
 			if (!format) {
-				eprintf ("No format specified wtf\n");
+				R_LOG_ERROR ("No format specified wtf");
 				goto fail;
 			}
 			RPrint *p = r_print_new ();
@@ -686,9 +737,11 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 					printf ("\n");
 				} // else show_raw is_above()
 				break;
-			case 'p': // PE
-				if (strlen (format) >= 2 && format[1] == 'y') { // Python
+			case 'p': // PE/python
+				if (strlen (format) > 2 && format[1] == 'y') { // Python
 					r_print_code (p, 0, tmp, tmpsz, 'p');
+				} else { // PE
+					create (format, arch, bits, tmp, tmpsz);
 				}
 				break;
 			case 'e': // ELF
@@ -696,7 +749,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 				create (format, arch, bits, tmp, tmpsz);
 				break;
 			default:
-				eprintf ("unknown executable format (%s)\n", format);
+				R_LOG_ERROR ("unknown executable format (%s)", format);
 				goto fail;
 			}
 			r_print_free (p);

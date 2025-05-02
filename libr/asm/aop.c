@@ -1,79 +1,79 @@
-/* radare - LGPL - Copyright 2018-2021 - pancake */
+/* radare - LGPL - Copyright 2018-2025 - pancake */
 
 #include <r_asm.h>
 
-R_API RAsmOp *r_asm_op_new(void) {
-	return R_NEW0 (RAsmOp);
+// XXX R2_590 - this file should be just r_arch_op so should be removed soon
+R_API RAnalOp *r_asm_op_new(void) {
+	return R_NEW0 (RAnalOp);
 }
 
-R_API void r_asm_op_free(RAsmOp *op) {
+R_API void r_asm_op_free(RAnalOp *op) {
 	if (op) {
 		r_asm_op_fini (op);
 		free (op);
 	}
 }
 
-R_API void r_asm_op_init(RAsmOp *op) {
+R_API void r_asm_op_init(RAnalOp *op) {
 	if (op) {
 		memset (op, 0, sizeof (*op));
 	}
 }
 
-R_API void r_asm_op_fini(RAsmOp *op) {
-	r_return_if_fail (op);
-	r_strbuf_fini (&op->buf);
-	r_strbuf_fini (&op->buf_asm);
-	r_buf_fini (op->buf_inc);
+R_DEPRECATE R_API void r_asm_op_fini(RAnalOp *op) {
+	R_RETURN_IF_FAIL (op);
+	r_anal_op_fini (op);
 }
 
-// accessors
-R_API char *r_asm_op_get_hex(RAsmOp *op) {
-	r_return_val_if_fail (op, NULL);
-	int size = r_strbuf_length (&op->buf);
+// R2_600 - must use RArchOp.getHex()
+R_DEPRECATE R_API char *r_asm_op_get_hex(RAnalOp *op) {
+	R_RETURN_VAL_IF_FAIL (op && op->bytes, NULL);
+	const int size = op->size;
+	if (size < 1) {
+		return NULL;
+	}
 	char* str = calloc (size + 1, 2);
-	r_return_val_if_fail (str, NULL);
-	r_hex_bin2str ((const ut8*) r_strbuf_get (&op->buf), size, str);
+	if (str) {
+		int res = r_hex_bin2str (op->bytes, size, str);
+		if (res < 1) {
+			R_FREE (str);
+		}
+	}
 	return str;
 }
 
-R_API char *r_asm_op_get_asm(RAsmOp *op) {
-	r_return_val_if_fail (op, NULL);
-	char *s = r_strbuf_get (&op->buf_asm);
-	return s? s: strdup ("");
-}
-
-R_API ut8 *r_asm_op_get_buf(RAsmOp *op) {
-	r_return_val_if_fail (op, NULL);
-	return (ut8*)r_strbuf_get (&op->buf);
-}
-
-R_API int r_asm_op_get_size(RAsmOp *op) {
-	r_return_val_if_fail (op, 1);
+R_API int r_asm_op_get_size(RAnalOp *op) {
+	R_RETURN_VAL_IF_FAIL (op, 1);
 	const int len = op->size - op->payload;
 	return R_MAX (1, len);
 }
 
-R_API void r_asm_op_set_asm(RAsmOp *op, const char *str) {
-	r_return_if_fail (op && str);
-	r_strbuf_set (&op->buf_asm, str);
+R_API void r_asm_op_set_asm(RAnalOp *op, const char *str) {
+	R_RETURN_IF_FAIL (op && str);
+	r_anal_op_set_mnemonic (op, op->addr, str);
 }
 
-R_API int r_asm_op_set_hex(RAsmOp *op, const char *str) {
-	r_return_val_if_fail (op && str, 0);
+R_API int r_asm_op_set_hex(RAnalOp *op, const char *str) {
+	R_RETURN_VAL_IF_FAIL (op && str, 0);
 	ut8 *bin = (ut8*)strdup (str);
 	if (bin) {
 		int len = r_hex_str2bin (str, bin);
 		if (len > 0) {
-			r_strbuf_setbin (&op->buf, bin, len);
+			if (!op->weakbytes) {
+				free (op->bytes);
+			}
+			op->bytes = bin;
+			op->size = len;
+		} else {
+			free (bin);
 		}
-		free (bin);
 		return len;
 	}
 	return 0;
 }
 
-R_API int r_asm_op_set_hexbuf(RAsmOp *op, const ut8 *buf, int len) {
-	r_return_val_if_fail (op && buf && len >= 0, 0);
+R_API int r_asm_op_set_hexbuf(RAnalOp *op, const ut8 *buf, int len) {
+	R_RETURN_VAL_IF_FAIL (op && buf && len >= 0, 0);
 	char *hex = malloc (len * 4 + 1);
 	if (hex) {
 		(void)r_hex_bin2str (buf, len, hex);
@@ -84,8 +84,7 @@ R_API int r_asm_op_set_hexbuf(RAsmOp *op, const ut8 *buf, int len) {
 	return 0;
 }
 
-R_API void r_asm_op_set_buf(RAsmOp *op, const ut8 *buf, int len) {
-	r_return_if_fail (op && buf && len >= 0);
-	r_strbuf_setbin (&op->buf, buf, len);
-	r_asm_op_set_hexbuf (op, buf, len);
+R_DEPRECATE R_API void r_asm_op_set_buf(RAnalOp *op, const ut8 *buf, int len) {
+	R_RETURN_IF_FAIL (op && buf && len >= 0);
+	r_anal_op_set_bytes (op, op->addr, buf, len);
 }

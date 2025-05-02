@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2022 - LGPL, SkUaTeR, All rights reserved.
+// Copyright (c) 2016-2024 - LGPL, SkUaTeR, All rights reserved.
 
 #include <r_io.h>
 #include <r_lib.h>
@@ -17,22 +17,20 @@ static bool __plugin_open(RIO *io, const char *file, bool many) {
 }
 
 static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
-	RIOBochs  *riob;
-	const char *i;
-	char * fileBochs = NULL;
-	char * fileCfg = NULL;
+	char *fileBochs = NULL;
+	char *fileCfg = NULL;
 	int l;
+	if (riobochs) {
+		return riobochs;
+	}
 	if (!__plugin_open (io, file, 0)) {
 		return NULL;
 	}
 	if (r_sandbox_enable (false)) {
 		return NULL;
 	}
-	if (riobochs) {
-		return riobochs;
-	}
 
-	i = strchr (file + 8, '#');
+	const char *i = strchr (file + 8, '#');
 	if (i) {
 		l = i - file - 8;
 		fileBochs = r_str_ndup (file + 8, l);
@@ -42,15 +40,13 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 		R_LOG_ERROR ("can't find :");
 		return NULL;
 	}
-	riob = R_NEW0 (RIOBochs);
-
-	// Inicializamos
+	RIOBochs  *riob = R_NEW0 (RIOBochs);
 	if (bochs_open (&riob->desc, fileBochs, fileCfg) == true) {
 		desc = &riob->desc;
 		riobochs = r_io_desc_new (io, &r_io_plugin_bochs, file, rw, mode, riob);
 		//riogdb = r_io_desc_new (&r_io_plugin_gdb, riog->desc.sock->fd, file, rw, mode, riog);
-		free(fileBochs);
-		free(fileCfg);
+		free (fileBochs);
+		free (fileCfg);
 		return riobochs;
 	}
 	free (riob);
@@ -68,7 +64,7 @@ static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 }
 
 static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
-	memset (buf, 0xff, count);
+	memset (buf, io->Oxff, count);
 	ut64 addr = io->off;
 	if (!desc || !desc->data) {
 		return -1;
@@ -84,9 +80,9 @@ static bool __close(RIODesc *fd) {
 
 static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 	if (*cmd == '?' || !strcmp (cmd, "help")) {
-		eprintf ("Usage: =!cmd args\n"
-			" =!:<bochscmd>      - Send a bochs command.\n"
-			" =!dobreak	  - pause bochs.\n");
+		eprintf ("Usage: :cmd args\n"
+			" ::<bochscmd>      - Send a bochs command.\n"
+			" :dobreak	  - pause bochs.\n");
 		bochs_send_cmd (desc, &cmd[1], true);
 		io->cb_printf ("%s\n", desc->data);
 	} else if (r_str_startswith (cmd, "dobreak")) {
@@ -97,9 +93,12 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 }
 
 RIOPlugin r_io_plugin_bochs = {
-	.name = "bochs",
-	.desc = "Attach to a BOCHS debugger instance",
-	.license = "LGPL3",
+	.meta = {
+		.name = "bochs",
+		.author = "skuater",
+		.desc = "Attach to a BOCHS debugger instance",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "bochs://",
 	.open = __open,
 	.close = __close,

@@ -1,18 +1,44 @@
 #ifndef R2_CONFIGURE_H
 #define R2_CONFIGURE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "r_version.h"
 
+#define WANT_DEBUGSTUFF @WANT_DEBUGSTUFF@
 #define R_CHECKS_LEVEL @R_CHECKS_LEVEL@
+#define R_CRITICAL_ENABLED @R_CRITICAL_ENABLED@
 #define DEBUGGER @DEBUGGER@
 #define HAVE_DECL_ADDR_NO_RANDOMIZE @HAVE_DECL_ADDR_NO_RANDOMIZE@
+#ifdef __EMSCRIPTEN__
+#define HAVE_ARC4RANDOM_UNIFORM 0
+#else
 #define HAVE_ARC4RANDOM_UNIFORM @HAVE_ARC4RANDOM_UNIFORM@
+#endif
 #define HAVE_EXPLICIT_BZERO @HAVE_EXPLICIT_BZERO@
 #define HAVE_EXPLICIT_MEMSET @HAVE_EXPLICIT_MEMSET@
 #define HAVE_CLOCK_NANOSLEEP @HAVE_CLOCK_NANOSLEEP@
 #define HAVE_SIGACTION @HAVE_SIGACTION@
 #define WANT_THREADS @WANT_THREADS@
+#define WANT_QJS @WANT_QJS@
+#define WANT_V35 @WANT_V35@
 #define WANT_CAPSTONE @WANT_CAPSTONE@
+#define HAVE_LINUX_CAN_H @HAVE_LINUX_CAN_H@
+#define R2_USE_NEW_ABI @USE_NEW_ABI@
+#define R2_USE_SQSH @USE_SQSH@
+
+#define R_BUILDSYSTEM "@R2_BUILDSYSTEM@"
+#if @USE_CS4@ == 1
+#define R2_CSVERSION 4
+#elif @USE_CSNEXT@ == 1
+#define R2_CSVERSION 6
+#else
+#define R2_CSVERSION 5
+#endif
+
+#define WITH_STATIC_THEMES @WITH_STATIC_THEMES@
 
 #define HAVE_GPERF @HAVE_GPERF@
 #if (HAVE_GPERF) == 1
@@ -25,6 +51,7 @@
 #define R2_PREFIX "@PREFIX@"
 #define R2_ETCDIR "@ETCDIR@"
 #define R2_LIBDIR "@LIBDIR@"
+#define R2_BINDIR "@BINDIR@"
 #define R2_INCDIR "@INCLUDEDIR@"
 #define R2_DATDIR "@DATADIR@"
 #define R2_WWWROOT "@WWWROOT@"
@@ -39,9 +66,10 @@
 #define R2_FLAGS "@FLAGS@"
 #define R2_HUD "@HUD@"
 #else
-#if __WINDOWS__ || _MSC_VER
+#if R2__WINDOWS__ || _MSC_VER
 #define R2_PREFIX "."
 #define R2_ETCDIR "etc"
+#define R2_BINDIR "bin"
 #define R2_LIBDIR "lib"
 #define R2_INCDIR "include\\libr"
 #define R2_DATDIR "share"
@@ -53,6 +81,7 @@
 #define R2_PREFIX "@PREFIX@"
 #define R2_ETCDIR "@ETCDIR@"
 #define R2_LIBDIR "@LIBDIR@"
+#define R2_BINDIR "@BINDIR@"
 #define R2_INCDIR "@INCLUDEDIR@/libr"
 #define R2_DATDIR "@DATADIR@"
 #define R2_WWWROOT R2_DATDIR "/radare2/" R2_VERSION "/www"
@@ -74,27 +103,6 @@
 #define R2_SDB_MAGIC        R_JOIN_2_PATHS (R2_SDB, "magic")
 #define R2_SDB_FORMAT       R_JOIN_2_PATHS (R2_SDB, "format")
 
-#define R2_HOME_CONFIGDIR   R_JOIN_2_PATHS (".config", "radare2")
-#define R2_HOME_DATADIR     R_JOIN_3_PATHS (".local", "share", "radare2")
-#define R2_HOME_CACHEDIR    R_JOIN_2_PATHS (".cache", "radare2")
-
-#define R2_HOME_THEMES      R_JOIN_2_PATHS (R2_HOME_DATADIR, "cons")
-#define R2_HOME_FORTUNES    R_JOIN_2_PATHS (R2_HOME_DATADIR, "fortunes")
-#define R2_HOME_PLUGINS     R_JOIN_2_PATHS (R2_HOME_DATADIR, "plugins")
-#define R2_HOME_ZIGNS       R_JOIN_2_PATHS (R2_HOME_DATADIR, "zigns")
-#define R2_HOME_PDB         R_JOIN_2_PATHS (R2_HOME_DATADIR, "pdb")
-#define R2_HOME_PROJECTS    R_JOIN_2_PATHS (R2_HOME_DATADIR, "projects")
-#define R2_HOME_WWWROOT     R_JOIN_2_PATHS (R2_HOME_DATADIR, "www")
-#define R2_HOME_SDB_FCNSIGN R_JOIN_2_PATHS (R2_HOME_DATADIR, "fcnsign")
-#define R2_HOME_SDB_FORMAT  R_JOIN_2_PATHS (R2_HOME_DATADIR, "format")
-#define R2_HOME_HUD         R_JOIN_2_PATHS (R2_HOME_DATADIR, "hud")
-#define R2_HOME_BINRC       R_JOIN_2_PATHS (R2_HOME_DATADIR, "rc.d")
-#define R2_HOME_BIN         R_JOIN_3_PATHS (R2_HOME_DATADIR, "prefix", "bin")
-
-#define R2_HOME_HISTORY     R_JOIN_2_PATHS (R2_HOME_CACHEDIR, "history")
-
-#define R2_HOME_RC          R_JOIN_2_PATHS (R2_HOME_CONFIGDIR, "radare2rc")
-#define R2_HOME_RC_DIR      R_JOIN_2_PATHS (R2_HOME_CONFIGDIR, "radare2rc.d")
 #define R2_GLOBAL_RC        R_JOIN_2_PATHS (R2_DATDIR_R2, "radare2rc")
 
 #define HAVE_LIB_MAGIC @HAVE_LIB_MAGIC@
@@ -104,6 +112,10 @@
 
 #ifndef HAVE_LIB_SSL
 #define HAVE_LIB_SSL @HAVE_OPENSSL@
+#endif
+
+#ifndef WANT_SSL_CRYPTO
+#define WANT_SSL_CRYPTO @WANT_SSL_CRYPTO@
 #endif
 
 #define HAVE_LIBUV @HAVE_LIBUV@
@@ -123,6 +135,10 @@
 #define HAVE_JEMALLOC 0
 #else
 #define HAVE_JEMALLOC @HAVE_JEMALLOC@
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif

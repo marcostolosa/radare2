@@ -1,4 +1,6 @@
-/* radare2 - LGPL - Copyright 2014-2018 - thelemon, kazarmy, pancake */
+/* radare2 - LGPL - Copyright 2014-2024 - thelemon, kazarmy, pancake */
+
+// R2R db/cmd/cmd_iz
 
 #include <r_types.h>
 #include <r_util.h>
@@ -483,31 +485,47 @@ R_API const char *r_utf_block_name(int idx) {
 	return r_utf_blocks[idx].name;
 }
 
-#define r_utf_blocks_count (sizeof (r_utf_blocks) / sizeof (r_utf_blocks[0]))
+#define R_UTF_BLOCKS_COUNT (sizeof (r_utf_blocks) / sizeof (r_utf_blocks[0]))
 
 /* Convert an UTF-8 buf into a unicode RRune */
 R_API int r_utf8_decode(const ut8 *ptr, int ptrlen, RRune *ch) {
 	if (ptrlen < 1) {
 		return 0;
 	}
-	if (ptr[0] < 0x80) {
+	const ut8 p0 = ptr[0];
+	if (p0 < 0x80) {
 		if (ch) {
-			*ch = (ut32)ptr[0];
+			*ch = (ut32)p0;
 		}
 		return 1;
-	} else if (ptrlen>1 && (ptr[0]&0xe0) == 0xc0 && (ptr[1]&0xc0) == 0x80) {
+	}
+	if (ptrlen < 2) {
+		return 0;
+	}
+	const ut8 p1 = ptr[1];
+	if ((p0 & 0xe0) == 0xc0 && (p1 & 0xc0) == 0x80) {
 		if (ch) {
-			*ch = (ptr[0] & 0x1f) << 6 | (ptr[1] & 0x3f);
+			*ch = (p0 & 0x1f) << 6 | (p1 & 0x3f);
 		}
 		return 2;
-	} else if (ptrlen>2 && (ptr[0]&0xf0) == 0xe0 && (ptr[1]&0xc0) == 0x80 && (ptr[2]&0xc0) == 0x80) {
+	}
+	if (ptrlen < 3) {
+		return 0;
+	}
+	const ut8 p2 = ptr[2];
+	if ((p0 & 0xf0) == 0xe0 && (p1 & 0xc0) == 0x80 && (p2 & 0xc0) == 0x80) {
 		if (ch) {
-			*ch = (ptr[0] & 0xf) << 12 | (ptr[1] & 0x3f) << 6 | (ptr[2] & 0x3f);
+			*ch = (p0 & 0xf) << 12 | (p1 & 0x3f) << 6 | (p2 & 0x3f);
 		}
 		return 3;
-	} else if (ptrlen>3 && (ptr[0]&0xf8) == 0xf0 && (ptr[1]&0xc0) == 0x80 && (ptr[2]&0xc0) == 0x80 && (ptr[3]&0xc0) == 0x80) {
+	}
+	if (ptrlen < 4) {
+		return 0;
+	}
+	const ut8 p3 = ptr[3];
+	if ((p0 & 0xf8) == 0xf0 && (p1 & 0xc0) == 0x80 && (p2 & 0xc0) == 0x80 && (p3 & 0xc0) == 0x80) {
 		if (ch) {
-			*ch = (ptr[0] & 7) << 18 | (ptr[1] & 0x3f) << 12 | (ptr[2] & 0x3f) << 6 | (ptr[3] & 0x3f);
+			*ch = (p0 & 7) << 18 | (p1 & 0x3f) << 12 | (p2 & 0x3f) << 6 | (p3 & 0x3f);
 		}
 		return 4;
 	}
@@ -520,18 +538,18 @@ R_API int r_utf8_encode(ut8 *ptr, const RRune ch) {
 		ptr[0] = (ut8)ch;
 		return 1;
 	}
-	else if (ch < 0x800) {
+	if (ch < 0x800) {
 		ptr[0] = 0xc0 | (ch >> 6);
 		ptr[1] = 0x80 | (ch & 0x3f);
 		return 2;
 	}
-	else if (ch < 0x10000) {
+	if (ch < 0x10000) {
 		ptr[0] = 0xe0 | (ch >> 12);
 		ptr[1] = 0x80 | ((ch >> 6) & 0x3f);
 		ptr[2] = 0x80 | (ch & 0x3f);
 		return 3;
 	}
-	else if (ch < 0x200000) {
+	if (ch < 0x200000) {
 		ptr[0] = 0xf0 | (ch >> 18);
 		ptr[1] = 0x80 | ((ch >> 12) & 0x3f);
 		ptr[2] = 0x80 | ((ch >> 6) & 0x3f);
@@ -619,7 +637,7 @@ R_API int r_isprint(const RRune c) {
 	return true;
 }
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 R_API char *r_utf16_to_utf8_l(const wchar_t *wc, int len) {
 	if (!wc) {
 		return NULL;
@@ -635,7 +653,7 @@ R_API char *r_utf16_to_utf8_l(const wchar_t *wc, int len) {
 	WideCharToMultiByte (CP_UTF8, 0, wc, len, rutf8, csize, NULL, NULL);
 #if 0
 	if ((csize = WideCharToMultiByte (CP_UTF8, 0, wc, len, NULL, 0, NULL, NULL))) {
-		++csize;
+		csize++;
 		if ((rutf8 = malloc (csize))) {
 			WideCharToMultiByte (CP_UTF8, 0, wc, len, rutf8, csize, NULL, NULL);
 			if (len != -1) {
@@ -648,7 +666,10 @@ R_API char *r_utf16_to_utf8_l(const wchar_t *wc, int len) {
 }
 
 R_API wchar_t *r_utf8_to_utf16_l(const char *cstring, int len) {
-	r_return_val_if_fail (cstring && len >= -1, NULL);
+	if (!cstring || len < -1) {
+		return NULL;
+	}
+	// R_RETURN_VAL_IF_FAIL (cstring && len >= -1, NULL);
 
 	if (len == -1) {
 		len = strlen (cstring);
@@ -676,7 +697,7 @@ R_API char *r_utf8_to_acp_l(const char *str, int len) {
 	int wcsize, csize;
 	if ((wcsize = MultiByteToWideChar (CP_UTF8, 0, str, len, NULL, 0))) {
 		wchar_t *rutf16;
-		++wcsize;
+		wcsize++;
 		if ((rutf16 = (wchar_t *)calloc (wcsize, sizeof (wchar_t)))) {
 			MultiByteToWideChar (CP_UTF8, 0, str, len, rutf16, wcsize);
 			if (len != -1) {
@@ -699,7 +720,11 @@ R_API char *r_utf8_to_acp_l(const char *str, int len) {
 }
 
 R_API char *r_acp_to_utf8_l(const char *str, int len) {
-	r_return_val_if_fail (str && len >= -1, NULL);
+	// there are some asserts that are boring to debug, make the precondition at runtime
+	// R_RETURN_VAL_IF_FAIL (str && len >= -1, NULL);
+	if (!str || len < -1) {
+		return NULL;
+	}
 	if (len == -1) {
 		len = strlen (str);
 	}
@@ -718,17 +743,15 @@ R_API char *r_acp_to_utf8_l(const char *str, int len) {
 	return NULL;
 }
 
-#endif // __WINDOWS__
+#endif // R2__WINDOWS__
 
 R_API int r_utf_block_idx(RRune ch) {
-	const int last = r_utf_blocks_count;
-	int low, hi, mid;
-
-	low = 0;
-	hi = last - 1;
+	const int last = R_UTF_BLOCKS_COUNT;
+	int low = 0;
+	int hi = last - 1;
 
 	do {
-		mid = (low + hi) >> 1;
+		int mid = (low + hi) >> 1;
 		if (ch >= r_utf_blocks[mid].from && ch <= r_utf_blocks[mid].to) {
 			return mid;
 		}
@@ -740,7 +763,7 @@ R_API int r_utf_block_idx(RRune ch) {
 		}
 	} while (low <= hi);
 
-	return r_utf_blocks_count - 1; /* index for "No_Block" */
+	return R_UTF_BLOCKS_COUNT - 1; /* index for "No_Block" */
 }
 
 /* str must be UTF8-encoded */
@@ -751,7 +774,7 @@ R_API int *r_utf_block_list(const ut8 *str, int len, int **freq_list) {
 	if (len < 0) {
 		len = strlen ((const char *)str);
 	}
-	static R_TH_LOCAL int block_freq[r_utf_blocks_count] = {0};
+	int block_freq[R_UTF_BLOCKS_COUNT] = {0};
 	int *list = R_NEWS (int, len + 1);
 	if (!list) {
 		return NULL;
@@ -771,10 +794,10 @@ R_API int *r_utf_block_list(const ut8 *str, int len, int **freq_list) {
 	RRune ch;
 	while (str_ptr < str_end) {
 		int block_idx;
-		int ch_bytes = r_utf8_decode (str_ptr, str_end - str_ptr, &ch);
-		if (!ch_bytes) {
-			block_idx = r_utf_blocks_count - 1;
-			ch_bytes = 1;
+		int runesize = r_utf8_decode (str_ptr, str_end - str_ptr, &ch);
+		if (!runesize) {
+			block_idx = R_UTF_BLOCKS_COUNT - 1;
+			runesize = 1;
 		} else {
 			block_idx = r_utf_block_idx (ch);
 		}
@@ -783,7 +806,7 @@ R_API int *r_utf_block_list(const ut8 *str, int len, int **freq_list) {
 			list_ptr++;
 		}
 		block_freq[block_idx]++;
-		str_ptr += ch_bytes;
+		str_ptr += runesize;
 	}
 	*list_ptr = -1;
 	if (freq_list_ptr) {
@@ -793,31 +816,40 @@ R_API int *r_utf_block_list(const ut8 *str, int len, int **freq_list) {
 		}
 		*freq_list_ptr = -1;
 	}
-	for (list_ptr = list; *list_ptr != -1; list_ptr++) {
-		block_freq[*list_ptr] = 0;
-	}
 	return list;
 }
 
 R_API RStrEnc r_utf_bom_encoding(const ut8 *ptr, int ptrlen) {
+	if (ptrlen < 2) {
+		return R_STRING_ENC_GUESS;
+	}
 	if (ptrlen > 3) {
-		if (ptr[0] == 0xff && ptr[1] == 0xfe && !ptr[2] && !ptr[3]) {
+		const ut8 p0 = ptr[0];
+		const ut8 p1 = ptr[1];
+		const ut8 p2 = ptr[2];
+		const ut8 p3 = ptr[3];
+		if (p0 == 0xff && p1 == 0xfe && !p2 && !p3) {
 			return R_STRING_ENC_UTF32LE;
 		}
-		if (!ptr[0] && !ptr[1] && ptr[2] == 0xfe && ptr[3] == 0xff) {
+		if (!p0 && !p1 && p2 == 0xfe && p3 == 0xff) {
 			return R_STRING_ENC_UTF32BE;
 		}
 	}
 	if (ptrlen > 2) {
-		if (ptr[0] == 0xef && ptr[1] == 0xbb && ptr[2] == 0xbf) {
+		const ut8 p0 = ptr[0];
+		const ut8 p1 = ptr[1];
+		const ut8 p2 = ptr[2];
+		if (p0 == 0xef && p1 == 0xbb && p2 == 0xbf) {
 			return R_STRING_ENC_UTF8;
 		}
 	}
 	if (ptrlen > 1) {
-		if (ptr[0] == 0xff && ptr[1] == 0xfe) {
+		const ut8 p0 = ptr[0];
+		const ut8 p1 = ptr[1];
+		if (p0 == 0xff && p1 == 0xfe) {
 			return R_STRING_ENC_UTF16LE;
 		}
-		if (ptr[0] == 0xfe && ptr[1] == 0xff) {
+		if (p0 == 0xfe && p1 == 0xff) {
 			return R_STRING_ENC_UTF16BE;
 		}
 	}

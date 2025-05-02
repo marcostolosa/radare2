@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2020 - GustavoLCR */
+/* radare - LGPL - Copyright 2020-2025 - GustavoLCR */
 
 #define INITGUID
 #include <r_core.h>
@@ -342,20 +342,21 @@ fail:
 	return NULL;
 }
 
-static bool windbg_init(void) {
+static bool windbg_init(RIODesc *desc) {
 	if (w32_DebugCreate && w32_DebugConnectWide) {
 		return true;
 	}
 	char *ext_path = r_sys_getenv ("_NT_DEBUGGER_EXTENSION_PATH");
 	HANDLE h = NULL;
+	char *save_ptr = NULL;
 	if (R_STR_ISNOTEMPTY (ext_path)) {
-		char *s = strtok (ext_path, ";");
+		char *s = r_str_tok_r (ext_path, ";", &save_ptr);
 		do {
 			PWCHAR dir = r_utf8_to_utf16 (s);
 			SetDllDirectoryW (dir);
 			free (dir);
 			h = LoadLibrary (TEXT ("dbgeng.dll"));
-		} while (!h && (s = strtok (NULL, ";")));
+		} while (!h && (s = r_str_tok_r (NULL, ";", &save_ptr)));
 		SetDllDirectoryW (NULL);
 	}
 	free (ext_path);
@@ -397,7 +398,7 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 	if (!windbg_check (io, uri, 0)) {
 		return NULL;
 	}
-	if (!windbg_init ()) {
+	if (!windbg_init (NULL)) {
 		return NULL;
 	}
 	HRESULT hr = E_FAIL;
@@ -516,7 +517,7 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 		const char *store = io->coreb.cfgGet (core, "pdb.symstore");
 		const char *server = io->coreb.cfgGet (core, "pdb.server");
 		char *s = strdup (server);
-		r_str_replace_ch (s, ';', '*', true);
+		r_str_replace_ch (s, ' ', '*', true);
 		char *sympath = r_str_newf ("cache*;srv*%s*%s", store, s);
 		ITHISCALL (dbgSymbols, SetSymbolPath, sympath);
 		free (s);
@@ -534,7 +535,7 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 			hr = ITHISCALL (dbgClient, CreateProcess, 0ULL, cmd, spawn_options);
 			free (cmd);
 		} else {
-			eprintf ("Missing argument for local spawn\n");
+			R_LOG_ERROR ("Missing argument for local spawn");
 		}
 		break;
 	case TARGET_LOCAL_ATTACH: // -p (PID)
@@ -542,7 +543,7 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 		break;
 	case TARGET_LOCAL_KERNEL: // -kl
 		if (ITHISCALL0 (dbgClient, IsKernelDebuggerEnabled) == S_FALSE) {
-			eprintf ("Live Kernel debug not available. Set the /debug boot switch to enable it\n");
+			R_LOG_ERROR ("Live Kernel debug not available. Set the /debug boot switch to enable it");
 		} else {
 			hr = ITHISCALL (dbgClient, AttachKernel, DEBUG_ATTACH_LOCAL_KERNEL, args);
 		}
@@ -596,7 +597,7 @@ static ut64 windbg_lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 		io->off += (st64)offset;
 		break;
 	case R_IO_SEEK_END:
-		io->off = UT64_MAX;
+		io->off = UT64_MAX - 1; // UT64_MAX reserved for error case
 		break;
 	}
 	return io->off;
@@ -671,12 +672,14 @@ static char *windbg_system(RIO *io, RIODesc *fd, const char *cmd) {
 }
 
 RIOPlugin r_io_plugin_windbg = {
-	.name = "windbg",
-	.desc = "WinDBG (DbgEng.dll) based io plugin for Windows",
-	.license = "LGPL3",
+	.meta = {
+		.name = "windbg",
+		.author = "GustavoLCR",
+		.desc = "WinDBG (DbgEng.dll) based io plugin for Windows",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = WINDBGURI,
 	.isdbg = true,
-	.init = windbg_init,
 	.open = windbg_open,
 	.seek = windbg_lseek,
 	.read = windbg_read,

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2007-2022 - pancake */
+/* radare - LGPL - Copyright 2007-2025 - pancake */
 
 #define R_LOG_ORIGIN "util.num"
 
@@ -26,7 +26,20 @@ static int r_rand(int mod) {
 }
 
 // This function count bits set on 32bit words
-R_API size_t r_num_bit_count(ut32 val) {
+R_API size_t r_num_bit_clz32(ut32 val) { // CLZ
+	val = val - ((val >> 1) & 0x55555555);
+	val = (val & 0x33333333) + ((val >> 2) & 0x33333333);
+	return (((val + (val >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+}
+
+R_API size_t r_num_bit_clz64(ut64 val) { // CLZ
+	val = val - ((val >> 1) & 0x5555555555555555ULL);
+	val = (val & 0x3333333333333333ULL) + ((val >> 2) & 0x3333333333333333ULL);
+	return (((val + (val >> 4)) & 0x0F0F0F0F0F0F0F0FULL) * 0x0101010101010101ULL) >> 24;
+}
+
+R_API size_t r_num_bit_count(ut32 val) { // CLZ
+	return r_num_bit_clz32 (val);
 	/* visual studio doesnt supports __buitin_clz */
 #if defined(_MSC_VER) || defined(__TINYC__)
 	size_t count = 0;
@@ -37,6 +50,18 @@ R_API size_t r_num_bit_count(ut32 val) {
 #else
 	return val? __builtin_clz (val): 0;
 #endif
+}
+
+R_API size_t r_num_bit_ctz64(ut64 val) { // CTZ
+	const ut64 m = 0x0101010101010101ULL;
+	val ^= val - 1;
+	return (unsigned)(((ut64)((val & (m - 1)) * m)) >> 56);
+}
+
+R_API size_t r_num_bit_ctz32(ut32 val) { // CTZ
+	// FROM shlr/lz4/lz4.c
+	const ut32 m = 0x01010101;
+	return (unsigned)((((val - 1) ^ val) & (m - 1)) * m) >> 24;
 }
 
 R_API void r_num_irand(void) {
@@ -73,12 +98,10 @@ R_API void r_num_minmax_swap_i(int *a, int *b) {
 
 R_API RNum *r_num_new(RNumCallback cb, RNumCallback2 cb2, void *ptr) {
 	RNum *num = R_NEW0 (RNum);
-	if (num) {
-		num->value = 0LL;
-		num->callback = cb;
-		num->cb_from_value = cb2;
-		num->userptr = ptr;
-	}
+	num->value = 0LL;
+	num->callback = cb;
+	num->cb_from_value = cb2;
+	num->userptr = ptr;
 	return num;
 }
 
@@ -108,18 +131,26 @@ R_API char *r_num_units(char *buf, size_t len, ut64 num) {
 	char unit;
 	const char *fmt_str;
 	if (!buf) {
-		buf = malloc (64);
+		len = 64;
+		buf = malloc (len);
 		if (!buf) {
 			return NULL;
 		}
 	}
 	fnum = (long double)num;
-	if (num >= EB) { unit = 'E'; fnum /= EB; } else
-	if (num >= PB) { unit = 'P'; fnum /= PB; } else
-	if (num >= TB) { unit = 'T'; fnum /= TB; } else
-	if (num >= GB) { unit = 'G'; fnum /= GB; } else
-	if (num >= MB) { unit = 'M'; fnum /= MB; } else
-	if (num >= KB) { unit = 'K'; fnum /= KB; } else {
+	if (num >= EB) {
+		unit = 'E'; fnum /= EB;
+	} else if (num >= PB) {
+		unit = 'P'; fnum /= PB;
+	} else if (num >= TB) {
+		unit = 'T'; fnum /= TB;
+	} else if (num >= GB) {
+		unit = 'G'; fnum /= GB;
+	} else if (num >= MB) {
+		unit = 'M'; fnum /= MB;
+	} else if (num >= KB) {
+		unit = 'K'; fnum /= KB;
+	} else {
 		unit = '\0';
 	}
 	fmt_str = ((double)ceill (fnum) == (double)fnum)
@@ -130,10 +161,11 @@ R_API char *r_num_units(char *buf, size_t len, ut64 num) {
 }
 
 R_API const char *r_num_get_name(RNum *num, ut64 n) {
+	R_RETURN_VAL_IF_FAIL (num, NULL);
 	if (num->cb_from_value) {
-		int ok = 0;
+		bool ok = false;
 		const char *msg = num->cb_from_value (num, n, &ok);
-		if (msg && *msg) {
+		if (R_STR_ISNOTEMPTY (msg)) {
 			return msg;
 		}
 		if (ok) {
@@ -143,7 +175,7 @@ R_API const char *r_num_get_name(RNum *num, ut64 n) {
 	return NULL;
 }
 
-static void error(RNum *num, const char *err_str) {
+static void error(R_NULLABLE RNum *num, const char *err_str) {
 	if (num) {
 		if (err_str) {
 			num->nc.errors++;
@@ -200,9 +232,9 @@ R_API ut64 r_num_from_ternary(const char *inp) {
 
 // TODO: try to avoid the use of sscanf
 /* old get_offset */
-R_API ut64 r_num_get(RNum *num, const char *str) {
-	int i, j, ok;
-	char lch, len;
+R_API ut64 r_num_get(R_NULLABLE RNum *num, const char *str) {
+	int i, j;
+	char lch;
 	ut64 ret = 0LL;
 	ut32 s, a;
 
@@ -213,7 +245,7 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 	if (R_STR_ISEMPTY (str)) {
 		return 0;
 	}
-	if (!strncmp (str, "1u", 2)) { // '1' is captured by op :(
+	if (r_str_startswith (str, "1u")) { // '1' is captured by op :(
 		if (num && num->value == UT64_MAX) {
 			num->value = 0;
 		}
@@ -226,7 +258,7 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 	}
 	/* resolve string with an external callback */
 	if (num && num->callback) {
-		ok = 0;
+		bool ok = false;
 		ret = num->callback (num->userptr, str, &ok);
 		if (ok) {
 			return ret;
@@ -239,7 +271,7 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 		}
 	}
 
-	len = strlen (str);
+	size_t len = strlen (str);
 	if (len > 3 && str[4] == ':') {
 		if (sscanf (str, "%04x", &s) == 1) {
 			if (sscanf (str + 5, "%04x", &a) == 1) {
@@ -271,7 +303,10 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 		}
 	} else if (!strncmp (str, "0xf..", 5) || !strncmp (str, "0xF..", 5)) {
 		ret = r_num_tailff (num, str + 5);
-	} else if (str[0] == '0' && tolower ((unsigned char)str[1]) == 'x') {
+	} else if (str[0] == '0' && tolower ((ut8)str[1]) == '_') {
+		// base36 here
+		ret = b36_tonum (str + 2);
+	} else if (str[0] == '0' && tolower ((ut8)str[1]) == 'x') {
 		const char *lodash = strchr (str + 2, '_');
 		if (lodash) {
 			// Support 0x1000_f000_4000
@@ -297,7 +332,7 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 		int chars_read = len_num;
 		bool zero_read = false;
 		lch = str[len > 0 ? len - 1 : 0];
-		if (*str == '0' && IS_DIGIT (*(str + 1)) && lch != 'b' && lch != 'h') {
+		if (*str == '0' && isdigit (*(str + 1)) && lch != 'b' && lch != 'h') {
 			lch = 'o';
 			len_num++;
 		}
@@ -316,7 +351,7 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 			break;
 		case 'b': // binary
 			ret = 0;
-			ok = true;
+			bool ok = true;
 			if (strlen (str) <= 65) { // 64 bit + the 'b' suffix
 				for (j = 0, i = strlen (str) - 2; i >= 0; i--, j++) {
 					if (str[i] == '1') {
@@ -408,14 +443,29 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 				error (num, "invalid gigabyte number");
 			}
 			break;
+#if 0
+		case 's':
+			// support 's' for miliseconds to seconds
+			if (isdigit (*str)) {
+				if (sscanf (str, "%"PFMT64d"%n", &ret, &chars_read)) {
+					ret *= 1000;
+				} else {
+					error (num, "invalid seconds");
+				}
+			}
+			break;
+#endif
 		default:
 			errno = 0;
-			ret = strtoull (str, &endptr, 10);
-			if (errno == ERANGE) {
-				error (num, "number won't fit into 64 bits");
-			}
-			if (!IS_DIGIT (*str)) {
+			if (*str != '-' && !isdigit (*str)) {
 				error (num, "unknown symbol");
+			} else {
+				ret = strtoull (str, &endptr, 10);
+				if (errno == EINVAL) {
+					error (num, "invalid symbol");
+				} else if (errno == ERANGE) {
+					error (num, "number won't fit into 64 bits");
+				}
 			}
 			break;
 		}
@@ -426,23 +476,11 @@ R_API ut64 r_num_get(RNum *num, const char *str) {
 	return ret;
 }
 
-R_API ut64 r_num_math(RNum *num, const char *str) {
-	const char *err = NULL;
-	if (R_STR_ISEMPTY (str)) {
-		return 0LL;
-	}
-	ut64 ret = r_num_calc (num, str, &err); // TODO: rename r_num_calc to r_num_math_err()
-	if (err) {
-		R_LOG_DEBUG ("(%s) in (%s)", err, str);
-	}
-	return ret;
-}
-
 R_API int r_num_is_float(RNum *num, const char *str) {
-	return (IS_DIGIT (*str) && (strchr (str, '.') || str[strlen (str) - 1] == 'f'));
+	return (isdigit (*str) && (strchr (str, '.') || str[strlen (str) - 1] == 'f'));
 }
 
-R_API double r_num_get_float(RNum *num, const char *str) {
+R_API double r_num_get_double(RNum *num, const char *str) {
 	double d = 0.0f;
 	(void) sscanf (str, "%lf", &d);
 	return d;
@@ -509,7 +547,7 @@ R_API ut64 r_num_chs(int cylinder, int head, int sector, int sectorsize) {
 	return (ut64)cylinder * (ut64)head * (ut64)sector * (ut64)sectorsize;
 }
 
-R_API int r_num_conditional(RNum *num, const char *str) {
+R_API int r_num_conditional(R_NULLABLE RNum *num, const char *str) {
 	char *lgt, *t, *p, *s = strdup (str);
 	int res = 0;
 	ut64 n, a, b;
@@ -587,7 +625,7 @@ R_API int r_num_is_valid_input(RNum *num, const char *input_value) {
 	return !(value == 0 && input_value && *input_value != '0') || !(value == 0 && input_value && *input_value != '@');
 }
 
-R_API ut64 r_num_get_input_value(RNum *num, const char *input_value) {
+R_API ut64 r_num_get_input_value(R_NULLABLE RNum *num, const char *input_value) {
 	ut64 value = input_value ? r_num_math (num, input_value) : 0;
 	return value;
 }
@@ -600,7 +638,8 @@ static int escape_char(char* dst, char byte) {
 		*(dst++) = escape_map [byte - 7];
 		*dst = 0;
 		return 2;
-	} else if (byte) {
+	}
+	if (byte) {
 		*(dst++) = '\\';
 		*(dst++) = 'x';
 		*(dst++) = NIBBLE_TO_HEX (byte >> 4);
@@ -641,7 +680,7 @@ R_API char* r_num_as_string(RNum *___, ut64 n, bool printable_only) {
 	return NULL;
 }
 
-R_API bool r_is_valid_input_num_value(RNum *num, const char *input_value) {
+R_API bool r_is_valid_input_num_value(R_NULLABLE RNum *num, const char *input_value) {
 	if (!input_value) {
 		return false;
 	}
@@ -691,10 +730,8 @@ R_API ut64 r_num_tail(RNum *num, ut64 addr, const char *hex) {
 		hex++;
 	}
 	int i = strlen (hex) * 4;
-	char *p = malloc (strlen (hex) + 10);
+	char *p = r_str_newf ("0x%s", hex);
 	if (p) {
-		strcpy (p, "0x");
-		strcpy (p + 2, hex);
 		if (isxdigit ((ut8)hex[0])) {
 			n = r_num_math (num, p);
 		} else {
@@ -715,10 +752,8 @@ static ut64 r_num_tailff(RNum *num, const char *hex) {
 		hex++;
 	}
 	int i = strlen (hex) * 4;
-	char *p = malloc (strlen (hex) + 10);
+	char *p = r_str_newf ("0x%s", hex);
 	if (p) {
-		strcpy (p, "0x");
-		strcpy (p + 2, hex);
 		if (isxdigit ((ut8)hex[0])) {
 			n = r_num_get (num, p);
 		} else {
@@ -863,3 +898,30 @@ R_API bool r_num_segaddr(ut64 addr, ut64 sb, int sg, ut32 *a, ut32 *b) {
 	}
 	return *a <= 0xffff && *b <= 0xffff;
 }
+
+// wont work for 64bit but thats by design
+R_API char *r_num_list_join(RList *str, const char *sep) {
+	R_RETURN_VAL_IF_FAIL (str && sep, NULL);
+	RListIter *iter;
+	RStrBuf *sb = r_strbuf_new ("");
+	r_list_foreach_iter (str, iter) {
+		if (r_strbuf_length (sb) != 0) {
+			r_strbuf_append (sb, sep);
+		}
+		r_strbuf_appendf (sb, "%d", (int)(size_t)iter->data);
+	}
+	return r_strbuf_drain (sb);
+}
+
+/* Returns the number that has bits + 1 least significant bits set. */
+R_API ut64 r_num_genmask(int bits) {
+	ut64 m = UT64_MAX;
+	if (bits > 0 && bits < 64) {
+		m = (ut64)(((ut64)(2) << bits) - 1);
+		if (!m) {
+			m = UT64_MAX;
+		}
+	}
+	return m;
+}
+

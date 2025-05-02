@@ -11,10 +11,26 @@ EXPECT=<<EOF
             ;-- func.100003c0c:
             0x100003c0c      55             push rbp
             0x100003c0d      4889e5         mov rbp, rsp
-[Entrypoints]
-vaddr=0x100003c0c paddr=0x00007c0c haddr=0x00000658 type=program
+paddr      vaddr       phaddr     vhaddr     type
+-------------------------------------------------
+0x00007c0c 0x100003c0c 0x00000658 ---------- program
+EOF
+RUN
 
-1 entrypoints
+NAME=o3
+FILE=--
+CMDS=<<EOF
+on file://bins/elf/ezpz 0x4000 r
+?ee ok
+o
+om
+EOF
+EXPECT=<<EOF
+ 3 - r-- 0x0000c3ef bins/elf/ezpz
+- 1 fd: 3 +0x00000000 0x00004000 - 0x000103ee r--
+EOF
+EXPECT_ERR=<<EOF
+ok
 EOF
 RUN
 
@@ -31,15 +47,18 @@ EXPECT=<<EOF
             ;-- func.100003a90:
             0x100003a90      7f2303d5       pacibsp
             0x100003a94      fc6fbaa9       stp x28, x27, [sp,  -0x60]!
-[Entrypoints]
-vaddr=0x100003a90 paddr=0x0001ba90 haddr=0x00000600 type=program
-
-1 entrypoints
+paddr      vaddr       phaddr     vhaddr     type
+-------------------------------------------------
+0x0001ba90 0x100003a90 0x00000600 ---------- program
 EOF
 RUN
 
+## XXX this test was assuming arch was arm when trying an unexistent plugin
+## XXX the reason to mark this as broken is because the mess to get it to
+## XXX work with asm/arch/anal is too much for something that will change soon
 NAME=m1slice.v35
 ARGS=-a arm.404
+BROKEN=1
 FILE=bins/mach0/ls-m1
 CMDS=<<EOF
 pd 2
@@ -50,7 +69,7 @@ EXPECT=<<EOF
             ;-- entry0:
             ;-- func.100003a90:
             0x100003a90      7f2303d5       pacibsp
-            0x100003a94      fc6fbaa9       stp x28, x27, [sp, #-0x60]!
+            0x100003a94      fc6fbaa9       stp x28, x27, [sp, -0x60]!
 [Entrypoints]
 vaddr=0x100003a90 paddr=0x0001ba90 haddr=0x00000600 type=program
 
@@ -65,13 +84,13 @@ oon
 o
 EOF
 EXPECT=<<EOF
- 4 * r-- 0x00009730 bins/mach0/mac-ls2
+ 5 * r-- 0x00009730 bins/mach0/mac-ls2
 EOF
 RUN
 
 NAME=oonn
 FILE=bins/mach0/mac-ls2
-ARGS=-n
+ARGS=-n -e bin.types=true
 CMDS=<<EOF
 pf.~?
 oonn
@@ -80,13 +99,14 @@ o~?
 EOF
 EXPECT=<<EOF
 0
-58
+59
 1
 EOF
 RUN
 
 NAME=oonn
 FILE=bins/mach0/mac-ls2
+ARGS=-e bin.types=true
 CMDS=<<EOF
 pf.~?
 oonn
@@ -94,8 +114,8 @@ pf.~?
 o~?
 EOF
 EXPECT=<<EOF
-58
-58
+59
+59
 1
 EOF
 RUN
@@ -122,7 +142,7 @@ o bins/mach0/mac-ls
 s
 obo 3
 s
-obo 4
+obo 5
 s
 EOF
 EXPECT=<<EOF
@@ -235,26 +255,31 @@ RUN
 
 NAME=oob consider baddr
 FILE=bins/mach0/mac-ls
+ARGS=-e bin.types=true
 CMDS=<<EOF
 e bin.baddr = 0xf00000
 k old_v=`ieq`
 oob
 iI~baddr[1]
-ie~vaddr[1]
+ie
 p8 10 @ entry0
 p8 10 @ `k old_v`
+ie,:quiet
 EOF
 EXPECT=<<EOF
 0xf00000
-0x00f01058
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00001058 0x00f01058 0x00000648 ---------- program
 554889e5415741564155
 ffffffffffffffffffff
+0x00001058 0x00f01058 0x00000648 ---------- program
 EOF
 RUN
 
 NAME=oob consider laddr 32bit
 FILE=bins/mach0/fatmach0-3true
-ARGS=-a x86 -b 32
+ARGS=-a x86 -b 32 -e bin.types=true
 CMDS=<<EOF
 e bin.laddr = 0x5000
 e bin.baddr = -1
@@ -391,7 +416,7 @@ px 16~:1
 ?e
 om
 ?e
-omp 1
+omr 1
 px 16~:1
 EOF
 EXPECT=<<EOF
@@ -433,6 +458,7 @@ EXPECT=<<EOF
     "iofd": 3,
     "bfid": 0,
     "size": 512,
+    "addr": -1,
     "obj": {
       "arch": "x86",
       "bits": 64,
@@ -508,9 +534,6 @@ fd       3
 file     bins/elf/true32
 size     0x560c
 humansz  21.5K
-minopsz  1
-maxopsz  16
-invopsz  1
 mode     r-x
 format   elf
 iorw     false
@@ -522,6 +545,7 @@ binsz    20668
 bintype  elf
 bits     32
 canary   true
+injprot  false
 class    ELF32
 crypto   false
 endian   little
@@ -548,9 +572,6 @@ fd       3
 file     malloc://512
 size     0x200
 humansz  512
-minopsz  1
-maxopsz  16
-invopsz  1
 mode     rwx
 format   any
 iorw     true
@@ -593,12 +614,68 @@ ob 1
 is~?
 EOF
 EXPECT=<<EOF
-133
-134
+132
+138
 --
-267
+270
 --
-133
-134
+132
+138
+EOF
+RUN
+
+NAME=obf
+FILE=--
+CMDS=<<EOF
+# pwd
+obf ./bins/mach0/test-arm32
+is~?
+obf ./bins/mach0/ls-m1
+is~?
+ob 1
+is~?
+i
+?e -- o
+o
+?e -- ob
+ob
+EOF
+EXPECT=<<EOF
+7
+137
+7
+arch     arm
+baddr    0x4000
+binsz    65536
+bintype  mach0
+bits     32
+canary   false
+injprot  false
+class    MACH0
+compiler clang
+crypto   false
+endian   little
+havecode true
+intrp    /usr/lib/dyld
+laddr    0x0
+lang     c
+linenum  false
+lsyms    false
+machine  v7
+nx       false
+os       ios
+pic      true
+relocs   true
+sanitize false
+static   false
+stripped false
+subsys   darwin
+va       true
+-- o
+ 4 - r-- 0x00003f14 null://16148
+-- ob
+- 0 3 arm-32 ba:0x00000000 sz:65536 ./bins/mach0/test-arm32
+* 1 3 arm-32 ba:0x00004000 sz:65536 ./bins/mach0/test-arm32
+- 2 3 x86-64 ba:0x100000000 sz:72800 ./bins/mach0/ls-m1
 EOF
 RUN

@@ -1,5 +1,5 @@
 NAME=r_crypto
-R2DEPS=r_hash r_util
+R2DEPS=r_util
 CFLAGS+=-DR2_PLUGIN_INCORE
 
 include ../config.mk
@@ -10,7 +10,9 @@ foo:
 include ${STATIC_CRYPTO_PLUGINS}
 STATIC_OBJS=$(subst ..,p/..,$(subst crypto_,p/crypto_,$(STATIC_OBJ)))
 
-OBJS=${STATIC_OBJS} crypto.o des.o
+OBJS=${STATIC_OBJS} crypto.o
+include hash/deps.mk
+include signature/ed25519/deps.mk
 
 pre:
 	@if [ ! -e ${LIBSO} ]; then rm -f ${STATIC_OBJS} ; fi

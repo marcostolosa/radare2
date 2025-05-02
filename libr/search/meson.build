@@ -4,16 +4,18 @@ r_search_sources = [
   'keyword.c',
   'regexp.c',
   'uds.c',
-  'privkey_find.c',
-  'rabin_karp.c',
+  'privkey.c',
+  'karp.c',
   'search.c',
+  'tire.c',
+  'sm4_find.c',
   'strings.c'
 ]
 
 r_search = library('r_search', r_search_sources,
   include_directories: [platform_inc],
   c_args: library_cflags,
-  dependencies: [r_util_dep],
+  dependencies: [r_crypto_dep, r_util_dep],
   install: true,
   implicit_include_directories: false,
   install_rpath: rpath_lib,

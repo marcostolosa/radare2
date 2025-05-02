@@ -1,9 +1,7 @@
-/* radare - LGPL - Copyright 2009-2022 - pancake, jduck, TheLemonMan, saucec0de */
+/* radare - LGPL - Copyright 2009-2025 - pancake, jduck, TheLemonMan, saucec0de */
 
-#include <r_debug.h>
-#include <r_drx.h>
 #include <r_core.h>
-#include <signal.h>
+#include <r_drx.h>
 
 R_LIB_VERSION(r_debug);
 
@@ -11,11 +9,12 @@ R_LIB_VERSION(r_debug);
 #define DBG_BUF_SIZE 512
 
 R_API RDebugInfo *r_debug_info(RDebug *dbg, const char *arg) {
-	r_return_val_if_fail (dbg && dbg->h, NULL);
+	R_RETURN_VAL_IF_FAIL (dbg, NULL);
 	if (dbg->pid < 0) {
 		return NULL;
 	}
-	return dbg->h->info? dbg->h->info (dbg, arg): NULL;
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	return plugin->info? plugin->info (dbg, arg): NULL;
 }
 
 R_API void r_debug_info_free(RDebugInfo *rdi) {
@@ -40,9 +39,10 @@ R_API void r_debug_bp_update(RDebug *dbg) {
 	}
 }
 
-static int r_debug_drx_at(RDebug *dbg, ut64 addr) {
-	if (dbg && dbg->h && dbg->h->drx) {
-		return dbg->h->drx (dbg, 0, addr, 0, 0, 0, DRX_API_GET_BP);
+R_API int r_debug_drx_get(RDebug *dbg, ut64 addr) {
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->drx) {
+		return plugin->drx (dbg, 0, addr, 0, 0, 0, DRX_API_GET_BP);
 	}
 	return -1;
 }
@@ -56,21 +56,18 @@ static int r_debug_drx_at(RDebug *dbg, ut64 addr) {
  * r_debug_bp_hit handles stage 1.
  * r_debug_recoil handles stage 2.
  */
-static int r_debug_bp_hit(RDebug *dbg, RRegItem *pc_ri, ut64 pc, RBreakpointItem **pb) {
-	RBreakpointItem *b;
-
-	if (!pb) {
-		eprintf ("BreakpointItem is NULL!\n");
-		return false;
-	}
+static bool r_debug_bp_hit(RDebug *dbg, RRegItem *pc_ri, ut64 pc, RBreakpointItem **pb) {
+	R_RETURN_VAL_IF_FAIL (dbg && pc_ri && pb, false);
+	RBreakpointItem *b = NULL;
 	/* initialize the output parameter */
 	*pb = NULL;
-
+#if 0
 	/* if we are tracing, update the tracing data */
+	// uncommenting this line causes the trace to be dupped
 	if (dbg->trace->enabled) {
 		r_debug_trace_pc (dbg, pc);
 	}
-
+#endif
 	/* remove all sw breakpoints for now. we'll set them back in stage 2
 	 *
 	 * this is necessary because while stopped we don't want any breakpoints in
@@ -106,9 +103,9 @@ static int r_debug_bp_hit(RDebug *dbg, RRegItem *pc_ri, ut64 pc, RBreakpointItem
 #if __i386__ || __x86_64__
 			if (!b) {
 				/* handle the case of hw breakpoints - notify the user */
-				int drx_reg_idx = r_debug_drx_at (dbg, pc);
+				int drx_reg_idx = r_debug_drx_get (dbg, pc);
 				if (drx_reg_idx != -1) {
-					eprintf ("hit hardware breakpoint %d at: %" PFMT64x "\n",
+					R_LOG_INFO ("hit hardware breakpoint %d at: %" PFMT64x,
 						drx_reg_idx, pc);
 				}
 				/* Couldn't find the break point. Nothing more to do... */
@@ -152,16 +149,15 @@ static int r_debug_bp_hit(RDebug *dbg, RRegItem *pc_ri, ut64 pc, RBreakpointItem
 	if (pc_off) {
 		pc -= pc_off;
 		if (!r_reg_set_value (dbg->reg, pc_ri, pc)) {
-			eprintf ("failed to set PC!\n");
+			R_LOG_ERROR ("failed to set PC");
 			return false;
 		}
 		if (!r_debug_reg_sync (dbg, R_REG_TYPE_GPR, true)) {
-			eprintf ("cannot set registers!\n");
+			R_LOG_ERROR ("cannot set registers");
 			return false;
 		}
 	}
 # endif
-
 	*pb = b;
 
 	/* if we are on a software stepping breakpoint, we hide what is going on... */
@@ -175,27 +171,26 @@ static int r_debug_bp_hit(RDebug *dbg, RRegItem *pc_ri, ut64 pc, RBreakpointItem
 
 	/* inform the user of what happened */
 	if (dbg->hitinfo) {
-		eprintf ("hit %spoint at: 0x%" PFMT64x "\n",
+		R_LOG_INFO ("hit %spoint at: 0x%" PFMT64x,
 			b->trace ? "trace" : "break", pc);
 	}
 
 	/* now that we've cleaned up after the breakpoint, call the other
 	 * potential breakpoint handlers
 	 */
-	if (dbg->coreb.core && dbg->coreb.bphit) {
-		dbg->coreb.bphit (dbg->coreb.core, b);
+	if (dbg->coreb.core && dbg->coreb.bpHit) {
+		dbg->coreb.bpHit (dbg->coreb.core, b);
 	}
 	return true;
 }
 
 /* enable all software breakpoints */
 static int r_debug_bps_enable(RDebug *dbg) {
-	/* restore all sw breakpoints. we are about to step/continue so these need
-	 * to be in place. */
+	// restore all breakpoints. before step/continue this needs to be in place
 	if (!r_bp_restore (dbg->bp, true)) {
 		return false;
 	}
-	/* done recoiling... */
+	// recoiling done
 	dbg->recoil_mode = R_DBG_RECOIL_NONE;
 	return true;
 }
@@ -282,7 +277,7 @@ R_API RBreakpointItem *r_debug_bp_add(RDebug *dbg, ut64 addr, int hw, bool watch
 			}
 			r_list_free (list);
 		} else {
-			//module holds the address
+			// module holds the address
 			addr = (ut64)r_num_math (dbg->num, module);
 			if (!addr) {
 				return NULL;
@@ -343,10 +338,16 @@ R_API RBreakpointItem *r_debug_bp_add(RDebug *dbg, ut64 addr, int hw, bool watch
 	return bpi;
 }
 
-static const char *r_debug_str_callback(RNum *userptr, ut64 off, int *ok) {
+static const char *str_callback(RNum *userptr, ut64 off, bool *ok) {
 	// RDebug *dbg = (RDebug *)userptr;
 	// TODO: implement the rnum callback for str or just get rid of it as we dont need it
 	return NULL;
+}
+
+static ut64 num_callback(RNum *userptr, const char *str, bool *ok) {
+	RDebug *dbg = (RDebug *)userptr;
+	// resolve using regnu
+	return r_debug_reg_get_err (dbg, str, ok, NULL);
 }
 
 R_API RDebug *r_debug_new(int hard) {
@@ -362,14 +363,15 @@ R_API RDebug *r_debug_new(int hard) {
 	dbg->main_pid = -1;
 	dbg->n_threads = 0;
 	dbg->trace_clone = 0;
-	dbg->egg = r_egg_new ();
-	r_egg_setup (dbg->egg, R_SYS_ARCH, R_SYS_BITS, R_SYS_ENDIAN, R_SYS_OS);
+	dbg->egg = NULL; // r_egg_new ();
+	// r_egg_setup (dbg->egg, R_SYS_ARCH, R_SYS_BITS, R_SYS_ENDIAN, R_SYS_OS);
 	dbg->trace_aftersyscall = true;
 	dbg->follow_child = false;
 	R_FREE (dbg->btalgo);
 	dbg->trace_execs = 0;
 	dbg->anal = NULL;
 	dbg->pid = -1;
+	dbg->snaps = r_list_newf ((RListFree)r_debug_snap_free);
 	dbg->bpsize = 1;
 	dbg->tid = -1;
 	dbg->tree = r_tree_new ();
@@ -379,8 +381,8 @@ R_API RDebug *r_debug_new(int hard) {
 	dbg->trace = r_debug_trace_new ();
 	dbg->cb_printf = (void *)printf;
 	dbg->reg = r_reg_new ();
-	dbg->num = r_num_new (r_debug_num_callback, r_debug_str_callback, dbg);
-	dbg->h = NULL;
+	dbg->num = r_num_new (num_callback, str_callback, dbg);
+	dbg->current = NULL;
 	dbg->threads = NULL;
 	dbg->hitinfo = 1;
 	/* TODO: needs a redesign? */
@@ -389,11 +391,13 @@ R_API RDebug *r_debug_new(int hard) {
 	dbg->q_regs = NULL;
 	dbg->call_frames = NULL;
 	dbg->main_arena_resolved = false;
+	dbg->glibc_version_resolved = false;
 	dbg->glibc_version = 231; /* default version ubuntu 20 */
+	dbg->glibc_version_d = 0; /* no default glibc version */
 	r_debug_signal_init (dbg);
 	if (hard) {
 		dbg->bp = r_bp_new ();
-		r_debug_plugin_init (dbg);
+		r_debug_init_plugins (dbg);
 		dbg->bp->iob.init = false;
 		dbg->bp->baddr = 0;
 	}
@@ -407,6 +411,7 @@ static int free_tracenodes_entry(RDebug *dbg, const char *k, const char *v) {
 }
 
 R_API void r_debug_tracenodes_reset(RDebug *dbg) {
+	R_RETURN_IF_FAIL (dbg);
 	sdb_foreach (dbg->tracenodes, (SdbForeachCallback)free_tracenodes_entry, dbg);
 	sdb_reset (dbg->tracenodes);
 }
@@ -421,18 +426,20 @@ R_API void r_debug_free(RDebug *dbg) {
 		r_list_free (dbg->maps_user);
 		r_list_free (dbg->threads);
 		r_num_free (dbg->num);
-		sdb_free (dbg->sgnls);
 		r_tree_free (dbg->tree);
 		sdb_foreach (dbg->tracenodes, (SdbForeachCallback)free_tracenodes_entry, dbg);
 		sdb_free (dbg->tracenodes);
-		r_list_free (dbg->plugins);
+		r_debug_fini_plugins (dbg);
 		r_list_free (dbg->call_frames);
 		free (dbg->btalgo);
+		r_debug_signal_fini (dbg);
 		r_debug_trace_free (dbg->trace);
+		r_list_free (dbg->snaps);
 		r_debug_session_free (dbg->session);
 		r_anal_op_free (dbg->cur_op);
 		dbg->trace = NULL;
-		r_egg_free (dbg->egg);
+		// we dont own the egg now
+		// r_egg_free (dbg->egg);
 		free (dbg->arch);
 		free (dbg->glob_libs);
 		free (dbg->glob_unlibs);
@@ -441,14 +448,16 @@ R_API void r_debug_free(RDebug *dbg) {
 }
 
 R_API bool r_debug_attach(RDebug *dbg, int pid) {
-	r_return_val_if_fail (dbg, false);
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	if (pid < 0) {
 		return false;
 	}
 	bool ret = false;
-	if (dbg->h && dbg->h->attach) {
-		ret = dbg->h->attach (dbg, pid);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->attach) {
+		ret = plugin->attach (dbg, pid);
 		if (ret) {
+			dbg->pid = pid;
 			dbg->tid = pid;
 			// dbg->pid = pid;
 			// r_debug_select (dbg, pid, ret);
@@ -460,51 +469,49 @@ R_API bool r_debug_attach(RDebug *dbg, int pid) {
 }
 
 /* stop execution of child process */
-R_API int r_debug_stop(RDebug *dbg) {
-	if (dbg && dbg->h && dbg->h->stop) {
-		return dbg->h->stop (dbg);
+R_API bool r_debug_stop(RDebug *dbg) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin->stop) {
+		return plugin->stop (dbg);
 	}
 	return false;
 }
 
 R_API bool r_debug_set_arch(RDebug *dbg, const char *arch, int bits) {
-	if (arch && dbg && dbg->h) {
-		switch (bits) {
-		case 16:
-			if (dbg->h->bits == 16) {
-				dbg->bits = R_SYS_BITS_16;
-			}
-			break;
-		case 27:
-			if (dbg->h->bits == 27) {
-				dbg->bits = R_SYS_BITS_27;
-			}
-			break;
-		case 32:
-			if (dbg->h->bits & R_SYS_BITS_32) {
-				dbg->bits = R_SYS_BITS_32;
-			}
-			break;
-		case 64:
-			dbg->bits = R_SYS_BITS_64;
-			break;
-		}
-		if (!dbg->h->bits) {
-			dbg->bits = dbg->h->bits;
-		} else if (!(dbg->h->bits & dbg->bits)) {
-			dbg->bits = dbg->h->bits & R_SYS_BITS_64;
-			if (!dbg->bits) {
-				dbg->bits = dbg->h->bits & R_SYS_BITS_32;
-			}
-			if (!dbg->bits) {
-				dbg->bits = R_SYS_BITS_32;
-			}
-		}
-		free (dbg->arch);
-		dbg->arch = strdup (arch);
-		return true;
+	R_RETURN_VAL_IF_FAIL (dbg && arch, false);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (!plugin) {
+		return false;
 	}
-	return false;
+	switch (bits) {
+	case 16:
+		if (R_SYS_BITS_CHECK (plugin->bits, 16)) {
+			dbg->bits = R_SYS_BITS_PACK (16);
+		}
+		break;
+	case 27:
+		if (R_SYS_BITS_CHECK (plugin->bits, 27)) {
+			dbg->bits = R_SYS_BITS_PACK (27);
+		}
+		break;
+	case 32:
+		if (R_SYS_BITS_CHECK (plugin->bits, 32)) {
+			dbg->bits = R_SYS_BITS_PACK (32);
+		}
+		break;
+	case 64:
+		dbg->bits = R_SYS_BITS_PACK (64);
+		break;
+	}
+	if (plugin->bits) {
+		if (R_SYS_BITS_CHECK (plugin->bits, bits)) {
+			dbg->bits = R_SYS_BITS_PACK (bits);
+		}
+	}
+	free (dbg->arch);
+	dbg->arch = strdup (arch);
+	return true;
 }
 
 /* Inject and execute shellcode
@@ -518,46 +525,35 @@ R_API bool r_debug_set_arch(RDebug *dbg, const char *arch, int bits) {
  *
  * XXX: This function will advance your seek to the end of the injected code.
  */
+#define USEBP false
 R_API bool r_debug_execute(RDebug *dbg, const ut8 *buf, int len, R_OUT ut64 *ret, bool restore, bool ignore_stack) {
-	ut8 stack_backup[4096];
-	ut8 *pc_backup = NULL, *reg_backup = NULL;
-	int reg_backup_sz;
-	RRegItem *ri_sp, *ri_pc, *ri_ret;
-	ut64 reg_sp, reg_pc, bp_addr;
-
-	r_return_val_if_fail (dbg && buf && len > 0, false);
+	R_RETURN_VAL_IF_FAIL (dbg && buf && len > 0, false);
+	ut8 stack_backup[1024];
 
 	if (r_debug_is_dead (dbg)) {
+		R_LOG_WARN ("Child is dead");
 		return false;
 	}
-
-	ri_pc = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_PC], R_REG_TYPE_GPR);
-	ri_sp = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_SP], R_REG_TYPE_GPR);
-
-	if (!ri_pc) {
-		R_LOG_ERROR ("r_debug_execute: Cannot get program counter");
-		return false;
-	}
-
-	if (restore && !ignore_stack && !ri_sp) {
+#if 0
+	if (restore && !ignore_stack) {
 		R_LOG_ERROR ("r_debug_execute: Cannot get stack pointer");
 		return false;
 	}
-
-	r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false);
-	reg_backup = r_reg_get_bytes (dbg->reg, R_REG_TYPE_ALL, &reg_backup_sz);
-
-	if (!reg_backup) {
-		R_LOG_ERROR ("Cannot get register arena bytes");
+#endif
+	if (!r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false)) {
+		R_LOG_ERROR ("Cannot sync registers");
+		return false;
+	}
+	r_reg_arena_push (dbg->reg);
+	ut64 reg_pc = r_reg_getv (dbg->reg, "PC");
+	ut64 reg_sp = r_reg_getv (dbg->reg, "SP");
+	if (reg_pc == UT64_MAX || reg_sp == UT64_MAX || !reg_pc || !reg_sp) {
+		R_LOG_ERROR ("Invalid pc/sp values");
 		return false;
 	}
 
-	reg_pc = r_reg_get_value (dbg->reg, ri_pc);
-	reg_sp = r_reg_get_value (dbg->reg, ri_sp);
-
-	pc_backup = malloc (len);
+	ut8 *pc_backup = calloc (1, len);
 	if (!pc_backup) {
-		free (reg_backup);
 		return false;
 	}
 
@@ -565,62 +561,77 @@ R_API bool r_debug_execute(RDebug *dbg, const ut8 *buf, int len, R_OUT ut64 *ret
 	dbg->iob.read_at (dbg->iob.io, reg_pc, pc_backup, len);
 	if (restore && !ignore_stack) {
 		/* Store bytes at stack */
-		dbg->iob.read_at (dbg->iob.io, reg_sp, stack_backup, 4096);
+		dbg->iob.read_at (dbg->iob.io, reg_sp, stack_backup, sizeof (stack_backup));
 	}
-
-	bp_addr = reg_pc + len;
+#if USEBP
+	ut64 bp_addr = reg_pc + len;
 	r_bp_add_sw (dbg->bp, bp_addr, dbg->bpsize, R_BP_PROT_EXEC);
-
+#endif
+	// ut64 v = r_reg_setv (dbg->reg, "PC", reg_pc);
 	dbg->iob.write_at (dbg->iob.io, reg_pc, buf, len);
-	r_debug_continue (dbg);
-	/* TODO: check if stopped in breakpoint or not */
-
-	/* Restore bytes at PC */
-	r_bp_del (dbg->bp, bp_addr);
-	dbg->iob.write_at (dbg->iob.io, reg_pc, pc_backup, len);
-
-	r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false);
-
-	/* Propagate return value */
 	if (ret) {
-		ri_ret = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_R0], R_REG_TYPE_GPR);
-		*ret = r_reg_get_value (dbg->reg, ri_ret);
-	}
-
-	if (restore) {
-		if (!ignore_stack) {
-			/* Restore stack */
-			dbg->iob.write_at (dbg->iob.io, reg_sp, stack_backup, 4096);
+		if (!r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false)) {
+			R_LOG_WARN ("Cannot read registers after executing the injected payload");
 		}
-		/* Restore registers */
-		r_reg_read_regs (dbg->reg, reg_backup, reg_backup_sz);
-	} else {
-		/* Restore PC */
-		r_reg_set_value (dbg->reg, ri_pc, reg_pc);
+		*ret = r_reg_getv (dbg->reg, "PC");
 	}
-	r_debug_reg_sync (dbg, R_REG_TYPE_GPR, true);
+#if 1
+	r_debug_step (dbg, 1);
+#else
+	r_debug_continue (dbg);
+#endif
+	if (dbg->coreb.core) {
+		ut64 v = r_reg_getv (dbg->reg, "rax");
+		dbg->coreb.cmdf (dbg->coreb.core, "'f dx.value=0x%08"PFMT64x, v);
+		R_LOG_INFO ("'f dx.value = 0x%08"PFMT64x, v);
+	}
+#if USEBP
+	/* Restore bytes at PC and remove the breakpoint reference */
+	r_bp_del (dbg->bp, bp_addr);
+#endif
+	/* Propagate return value */
+	if (!ignore_stack && reg_sp) {
+		/* Restore stack */
+		// eprintf ("WRITE STEACK 0x%llx\n", reg_sp);
+		dbg->iob.write_at (dbg->iob.io, reg_sp, stack_backup, 4096);
+	}
+	if (ret) {
+		if (!r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false)) {
+			R_LOG_WARN ("Cannot read registers after executing the injected payload");
+		}
+		*ret = r_reg_getv (dbg->reg, "PC");
+	}
+	// eprintf ("WRITE CODE 0x%llx\n", reg_pc);
+	dbg->iob.write_at (dbg->iob.io, reg_pc, pc_backup, len);
+	if (restore) {
+		r_reg_arena_pop (dbg->reg);
+		if (!r_debug_reg_sync (dbg, R_REG_TYPE_GPR, true)) {
+			R_LOG_ERROR ("Cannot restore registers");
+		}
+	}
 
 	free (pc_backup);
-	free (reg_backup);
 
 	return true;
 }
 
-R_API int r_debug_startv(struct r_debug_t *dbg, int argc, char **argv) {
+R_API bool r_debug_startv(struct r_debug_t *dbg, int argc, char **argv) {
 	/* TODO : r_debug_startv unimplemented */
 	return false;
 }
 
-R_API int r_debug_start(RDebug *dbg, const char *cmd) {
+R_API bool r_debug_start(RDebug *dbg, const char *cmd) {
 	/* TODO: this argc/argv parser is done in r_io */
 	// TODO: parse cmd and generate argc and argv
 	return false;
 }
 
-R_API int r_debug_detach(RDebug *dbg, int pid) {
-	int ret = 0;
-	if (dbg->h && dbg->h->detach) {
-		ret = dbg->h->detach (dbg, pid);
+R_API bool r_debug_detach(RDebug *dbg, int pid) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	bool ret = false;
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->detach) {
+		ret = -plugin->detach (dbg, pid);
 		if (dbg->pid == pid) {
 			dbg->pid = -1;
 			dbg->tid = -1;
@@ -630,7 +641,7 @@ R_API int r_debug_detach(RDebug *dbg, int pid) {
 }
 
 R_API bool r_debug_select(RDebug *dbg, int pid, int tid) {
-	r_return_val_if_fail (dbg, false);
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	if (pid < 0) {
 		return false;
 	}
@@ -649,15 +660,16 @@ R_API bool r_debug_select(RDebug *dbg, int pid, int tid) {
 	if (pid < 0 || tid < 0) {
 		return false;
 	}
-	if (dbg->h && dbg->h->select) {
-		if (!dbg->h->select (dbg, pid, tid)) {
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->select) {
+		if (!plugin->select (dbg, pid, tid)) {
 			return false;
 		}
 	}
 	dbg->pid = pid;
 	dbg->tid = tid;
-	if (dbg->tid != -1) {
-		char *pidcmd = r_str_newf ("pid %d", dbg->tid);
+	if (dbg->pid != -1) {
+		char *pidcmd = r_str_newf ("pid %d", dbg->pid);
 		if (pidcmd) {
 			free (r_io_system (dbg->iob.io, pidcmd));
 			free (pidcmd);
@@ -669,20 +681,16 @@ R_API bool r_debug_select(RDebug *dbg, int pid, int tid) {
 	// Synchronize with the current thread's data
 	if (dbg->coreb.core) {
 		RCore *core = (RCore *)dbg->coreb.core;
-
 		r_reg_arena_swap (core->dbg->reg, true);
 		r_debug_reg_sync (dbg, R_REG_TYPE_ALL, false);
-
-		core->offset = r_debug_reg_get (dbg, "PC");
+		core->addr = r_debug_reg_get (dbg, "PC");
 	}
-
-	dbg->main_arena_resolved = false;
 
 	return true;
 }
 
 // TODO type should be enum so we can ensure to not miss an item
-R_API const char *r_debug_reason_to_string(int type) {
+R_API const char *r_debug_reason_tostring(int type) {
 	switch (type) {
 	case R_DEBUG_REASON_ABORT: return "abort";
 	case R_DEBUG_REASON_BREAKPOINT: return "breakpoint";
@@ -729,7 +737,8 @@ R_API RDebugReasonType r_debug_stop_reason(RDebug *dbg) {
  *
  * Returns  R_DEBUG_REASON_*
  */
-R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp) {
+R_API RDebugReasonType r_debug_wait(RDebug *dbg, R_NULLABLE RBreakpointItem **bp) {
+	R_RETURN_VAL_IF_FAIL (dbg, R_DEBUG_REASON_ERROR);
 	RDebugReasonType reason = R_DEBUG_REASON_ERROR;
 	if (!dbg) {
 		return reason;
@@ -744,10 +753,11 @@ R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp) {
 	}
 
 	/* if our debugger plugin has wait */
-	if (dbg->h && dbg->h->wait) {
-		reason = dbg->h->wait (dbg, dbg->pid);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->wait) {
+		reason = plugin->wait (dbg, dbg->pid);
 		if (reason == R_DEBUG_REASON_DEAD) {
-			eprintf ("\n==> Process finished\n\n");
+			R_LOG_INFO ("==> Process finished");
 			REventDebugProcessFinished event = {
 				.pid = dbg->pid
 			};
@@ -784,7 +794,7 @@ R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp) {
 			ut64 pc;
 
 			/* get the program coounter */
-			pc_ri = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_PC], -1);
+			pc_ri = r_reg_get (dbg->reg, "PC", -1);
 			if (!pc_ri) { /* couldn't find PC?! */
 				R_LOG_ERROR ("Couldn't find the program counter!");
 				return R_DEBUG_REASON_ERROR;
@@ -818,7 +828,7 @@ R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp) {
 		if (reason == R_DEBUG_REASON_SIGNAL && dbg->reason.signum != -1) {
 			/* handle signal on continuations here */
 			int what = r_debug_signal_what (dbg, dbg->reason.signum);
-			const char *name = r_signal_to_string (dbg->reason.signum);
+			const char *name = r_signal_tostring (dbg->reason.signum);
 			const char *humn = r_signal_to_human (dbg->reason.signum);
 			if (name && strcmp ("SIGTRAP", name)) {
 				r_cons_printf ("[+] signal %d aka %s received %d (%s)\n",
@@ -829,7 +839,8 @@ R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp) {
 	return reason;
 }
 
-R_API int r_debug_step_soft(RDebug *dbg) {
+R_API bool r_debug_step_soft(RDebug *dbg) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	ut8 buf[32];
 	ut64 pc, sp, r;
 	ut64 next[2];
@@ -852,8 +863,8 @@ R_API int r_debug_step_soft(RDebug *dbg) {
 		return false;
 	}
 
-	pc = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
-	sp = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_SP]);
+	pc = r_debug_reg_get (dbg, "PC");
+	sp = r_debug_reg_get (dbg, "SP");
 
 	if (!dbg->iob.read_at) {
 		return false;
@@ -861,7 +872,7 @@ R_API int r_debug_step_soft(RDebug *dbg) {
 	if (!dbg->iob.read_at (dbg->iob.io, pc, buf, sizeof (buf))) {
 		return false;
 	}
-	if (!r_anal_op (dbg->anal, &op, pc, buf, sizeof (buf), R_ANAL_OP_MASK_BASIC)) {
+	if (!r_anal_op (dbg->anal, &op, pc, buf, sizeof (buf), R_ARCH_OP_MASK_BASIC)) {
 		return false;
 	}
 	if (op.type == R_ANAL_OP_TYPE_ILL) {
@@ -870,7 +881,7 @@ R_API int r_debug_step_soft(RDebug *dbg) {
 	switch (op.type) {
 	case R_ANAL_OP_TYPE_RET:
 		dbg->iob.read_at (dbg->iob.io, sp, (ut8 *)&sp_top, 8);
-		next[0] = (dbg->bits == R_SYS_BITS_32) ? sp_top.r32[0] : sp_top.r64;
+		next[0] = R_SYS_BITS_CHECK (dbg->bits, 64) ? sp_top.r64 : sp_top.r32[0];
 		br = 1;
 		break;
 	case R_ANAL_OP_TYPE_CJMP:
@@ -896,7 +907,7 @@ R_API int r_debug_step_soft(RDebug *dbg) {
 		if (!dbg->iob.read_at (dbg->iob.io, r, (ut8*)&memval, 8)) {
 			next[0] = op.addr + op.size;
 		} else {
-			next[0] = (dbg->bits == R_SYS_BITS_32) ? memval.r32[0] : memval.r64;
+			next[0] = R_SYS_BITS_CHECK (dbg->bits, 64) ? memval.r64 : memval.r32[0];
 		}
 		br = 1;
 		break;
@@ -910,7 +921,7 @@ R_API int r_debug_step_soft(RDebug *dbg) {
 		if (!dbg->iob.read_at (dbg->iob.io, r*op.scale + op.disp, (ut8*)&memval, 8)) {
 			next[0] = op.addr + op.size;
 		} else {
-			next[0] = (dbg->bits == R_SYS_BITS_32) ? memval.r32[0] : memval.r64;
+			next[0] = R_SYS_BITS_CHECK (dbg->bits, 64) ? memval.r64: memval.r32[0];
 		}
 		br = 1;
 		break;
@@ -927,7 +938,7 @@ R_API int r_debug_step_soft(RDebug *dbg) {
 			bpi->swstep = true;
 		}
 	}
-
+	// XXX this causes an stack exhaustion problem so it should be done by the caller
 	bool ret = r_debug_continue (dbg);
 
 	for (i = 0; i < br; i++) {
@@ -937,7 +948,8 @@ R_API int r_debug_step_soft(RDebug *dbg) {
 	return ret;
 }
 
-R_API int r_debug_step_hard(RDebug *dbg, RBreakpointItem **pb) {
+R_API bool r_debug_step_hard(RDebug *dbg, RBreakpointItem **pb) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	RDebugReasonType reason;
 
 	dbg->reason.type = R_DEBUG_REASON_STEP;
@@ -958,8 +970,8 @@ R_API int r_debug_step_hard(RDebug *dbg, RBreakpointItem **pb) {
 			return true;
 		}
 	}
-
-	if (!dbg->h->step (dbg)) {
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && !plugin->step (dbg)) {
 		return false;
 	}
 
@@ -991,6 +1003,7 @@ R_API int r_debug_step_hard(RDebug *dbg, RBreakpointItem **pb) {
 }
 
 R_API int r_debug_step(RDebug *dbg, int steps) {
+	R_RETURN_VAL_IF_FAIL (dbg, 0);
 	RBreakpointItem *bp = NULL;
 	int ret, steps_taken = 0;
 
@@ -999,14 +1012,15 @@ R_API int r_debug_step(RDebug *dbg, int steps) {
 		steps = 1;
 	}
 
-	if (!dbg || !dbg->h) {
-		return steps_taken;
-	}
-
 	if (r_debug_is_dead (dbg)) {
 		return steps_taken;
 	}
 
+	// R2_590 - add a var in RDebug.esil_step_cmd instead of pulling config on every stel
+	const char *cmd_step = dbg->coreb.cfgGet (dbg->coreb.core, "cmd.step");
+	if (R_STR_ISEMPTY (cmd_step)) {
+		cmd_step = NULL;
+	}
 	dbg->reason.type = R_DEBUG_REASON_STEP;
 
 	if (dbg->session) {
@@ -1024,17 +1038,18 @@ R_API int r_debug_step(RDebug *dbg, int steps) {
 				R_LOG_ERROR ("trace_ins_before: failed");
 			}
 		}
-
 		if (dbg->swstep) {
 			ret = r_debug_step_soft (dbg);
 		} else {
 			ret = r_debug_step_hard (dbg, &bp);
 		}
+		if (cmd_step && dbg->coreb.cmd) {
+			dbg->coreb.cmd (dbg->coreb.core, ".e cmd.step @r:PC");
+		}
 		if (!ret) {
 			R_LOG_ERROR ("Stepping failed!");
 			return steps_taken;
 		}
-
 		if (dbg->session && dbg->recoil_mode == R_DBG_RECOIL_NONE) {
 			if (!r_debug_trace_ins_after (dbg)) {
 				R_LOG_ERROR ("trace_ins_after: failed");
@@ -1042,7 +1057,6 @@ R_API int r_debug_step(RDebug *dbg, int steps) {
 			dbg->session->reasontype = dbg->reason.type;
 			dbg->session->bp = bp;
 		}
-
 		dbg->steps++;
 		dbg->reason.type = R_DEBUG_REASON_STEP;
 	}
@@ -1062,6 +1076,7 @@ static bool isStepOverable(ut64 opType) {
 }
 
 R_API int r_debug_step_over(RDebug *dbg, int steps) {
+	R_RETURN_VAL_IF_FAIL (dbg, -1);
 	RAnalOp op;
 	ut64 buf_pc, pc, ins_size;
 	ut8 buf[DBG_BUF_SIZE];
@@ -1075,14 +1090,15 @@ R_API int r_debug_step_over(RDebug *dbg, int steps) {
 		steps = 1;
 	}
 
-	if (dbg->h && dbg->h->step_over) {
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->step_over) {
 		for (; steps_taken < steps; steps_taken++) {
 			if (dbg->session && dbg->recoil_mode == R_DBG_RECOIL_NONE) {
 				dbg->session->cnum++;
 				dbg->session->maxcnum++;
 				r_debug_trace_ins_before (dbg);
 			}
-			if (!dbg->h->step_over (dbg)) {
+			if (!plugin->step_over (dbg)) {
 				return steps_taken;
 			}
 			if (dbg->session && dbg->recoil_mode == R_DBG_RECOIL_NONE) {
@@ -1097,18 +1113,18 @@ R_API int r_debug_step_over(RDebug *dbg, int steps) {
 	}
 
 	// Initial refill
-	buf_pc = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
+	buf_pc = r_debug_reg_get (dbg, "PC");
 	dbg->iob.read_at (dbg->iob.io, buf_pc, buf, sizeof (buf));
 
 	for (; steps_taken < steps; steps_taken++) {
-		pc = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
+		pc = r_debug_reg_get (dbg, "PC");
 		// Try to keep the buffer full
 		if (pc - buf_pc > sizeof (buf)) {
 			buf_pc = pc;
 			dbg->iob.read_at (dbg->iob.io, buf_pc, buf, sizeof (buf));
 		}
 		// Analyze the opcode
-		if (!r_anal_op (dbg->anal, &op, pc, buf + (pc - buf_pc), sizeof (buf) - (pc - buf_pc), R_ANAL_OP_MASK_BASIC)) {
+		if (!r_anal_op (dbg->anal, &op, pc, buf + (pc - buf_pc), sizeof (buf) - (pc - buf_pc), R_ARCH_OP_MASK_BASIC)) {
 			R_LOG_ERROR ("debug-step-over: Decode error at %"PFMT64x, pc);
 			return steps_taken;
 		}
@@ -1139,6 +1155,7 @@ R_API int r_debug_step_over(RDebug *dbg, int steps) {
 }
 
 R_API bool r_debug_goto_cnum(RDebug *dbg, ut32 cnum) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	if (cnum > dbg->session->maxcnum) {
 		R_LOG_ERROR ("out of cnum range");
 		return false;
@@ -1150,6 +1167,7 @@ R_API bool r_debug_goto_cnum(RDebug *dbg, ut32 cnum) {
 }
 
 R_API int r_debug_step_back(RDebug *dbg, int steps) {
+	R_RETURN_VAL_IF_FAIL (dbg, -1);
 	if (steps > dbg->session->cnum) {
 		steps = dbg->session->cnum;
 	}
@@ -1160,29 +1178,29 @@ R_API int r_debug_step_back(RDebug *dbg, int steps) {
 }
 
 R_API int r_debug_step_cnum(RDebug *dbg, int steps) {
+	R_RETURN_VAL_IF_FAIL (dbg, -1);
 	if (steps > dbg->session->maxcnum - dbg->session->cnum) {
 		steps = dbg->session->maxcnum - dbg->session->cnum;
 	}
-
 	r_debug_goto_cnum (dbg, dbg->session->cnum + steps);
-
 	return steps;
 }
 
 R_API int r_debug_continue_kill(RDebug *dbg, int sig) {
+	R_RETURN_VAL_IF_FAIL (dbg, -1);
 	RDebugReasonType reason = R_DEBUG_REASON_NONE;
 	int ret = 0;
 	RBreakpointItem *bp = NULL;
 
 	if (!dbg) {
-		return 0;
+		return -1;
 	}
 
 	// If the debugger is not at the end of the changes
 	// Go to the end or the next breakpoint in the changes
 	if (dbg->session && dbg->session->cnum != dbg->session->maxcnum) {
 		bool has_bp = false;
-		RRegItem *ripc = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_PC], R_REG_TYPE_GPR);
+		RRegItem *ripc = r_reg_get (dbg->reg, "PC", R_REG_TYPE_GPR);
 		RVector *vreg = ht_up_find (dbg->session->registers, ripc->offset | (ripc->arena << 16), NULL);
 		RDebugChangeReg *reg;
 		r_vector_foreach_prev (vreg, reg) {
@@ -1205,6 +1223,7 @@ repeat:
 	if (r_debug_is_dead (dbg)) {
 		return 0;
 	}
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
 	if (dbg->session && dbg->trace_continue) {
 		while (!r_cons_is_breaked ()) {
 			if (r_debug_step (dbg, 1) != 1) {
@@ -1216,13 +1235,13 @@ repeat:
 		}
 		reason = dbg->session->reasontype;
 		bp = dbg->session->bp;
-	} else if (dbg->h && dbg->h->cont) {
+	} else if (plugin && plugin->cont) {
 		/* handle the stage-2 of breakpoints */
 		if (!r_debug_recoil (dbg, R_DBG_RECOIL_CONTINUE)) {
 			return 0;
 		}
 		/* tell the inferior to go! */
-		ret = dbg->h->cont (dbg, dbg->pid, dbg->tid, sig);
+		ret = plugin->cont (dbg, dbg->pid, dbg->tid, sig);
 		//XXX(jjd): why? //dbg->reason.signum = 0;
 		reason = r_debug_wait (dbg, &bp);
 	} else {
@@ -1243,7 +1262,7 @@ repeat:
 	}
 	if (reason == R_DEBUG_REASON_BREAKPOINT &&
 	   ((bp && !bp->enabled) || (!bp && !r_cons_is_breaked () && dbg->coreb.core &&
-					dbg->coreb.cfggeti (dbg->coreb.core, "dbg.bpsysign")))) {
+					dbg->coreb.cfgGetI (dbg->coreb.core, "dbg.bpsysign")))) {
 		goto repeat;
 	}
 
@@ -1277,7 +1296,7 @@ repeat:
 	if (reason != R_DEBUG_REASON_DEAD) {
 		ret = dbg->tid;
 	}
-#if __WINDOWS__
+#if R2__WINDOWS__
 	if (reason == R_DEBUG_REASON_NEW_LIB ||
 		reason == R_DEBUG_REASON_EXIT_LIB ||
 		reason == R_DEBUG_REASON_NEW_TID ||
@@ -1287,7 +1306,7 @@ repeat:
 	}
 #endif
 	if (reason == R_DEBUG_REASON_EXIT_PID) {
-#if __WINDOWS__
+#if R2__WINDOWS__
 		dbg->pid = -1;
 #elif __linux__
 		r_debug_bp_update (dbg);
@@ -1321,7 +1340,7 @@ repeat:
 		int what = r_debug_signal_what (dbg, dbg->reason.signum);
 		if (what & R_DBG_SIGNAL_CONT) {
 			sig = dbg->reason.signum;
-			eprintf ("Continue into the signal %d handler\n", sig);
+			R_LOG_INFO ("Continue into the signal %d handler", sig);
 			goto repeat;
 		} else if (what & R_DBG_SIGNAL_SKIP) {
 			// skip signal. requires skipping one instruction
@@ -1329,20 +1348,20 @@ repeat:
 			RAnalOp op = {0};
 			ut64 pc = r_debug_reg_get (dbg, "PC");
 			dbg->iob.read_at (dbg->iob.io, pc, buf, sizeof (buf));
-			r_anal_op (dbg->anal, &op, pc, buf, sizeof (buf), R_ANAL_OP_MASK_BASIC);
+			r_anal_op (dbg->anal, &op, pc, buf, sizeof (buf), R_ARCH_OP_MASK_BASIC);
 			if (op.size > 0) {
-				const char *signame = r_signal_to_string (dbg->reason.signum);
+				const char *signame = r_signal_tostring (dbg->reason.signum);
 				r_debug_reg_set (dbg, "PC", pc+op.size);
-				eprintf ("Skip signal %d handler %s\n",
+				R_LOG_INFO ("Skip signal %d handler %s",
 					dbg->reason.signum, signame);
 				goto repeat;
 			} else {
 				ut64 pc = r_debug_reg_get (dbg, "PC");
-				eprintf ("Stalled with an exception at 0x%08"PFMT64x"\n", pc);
+				R_LOG_INFO ("Stalled with an exception at 0x%08"PFMT64x, pc);
 			}
 		}
 	}
-#if __WINDOWS__
+#if R2__WINDOWS__
 	r_cons_break_pop ();
 #endif
 
@@ -1362,26 +1381,27 @@ repeat:
 }
 
 R_API int r_debug_continue(RDebug *dbg) {
-	if (dbg->pid < 0) {
-		return -1;
-	}
-	return r_debug_continue_kill (dbg, 0); //dbg->reason.signum);
+	R_RETURN_VAL_IF_FAIL (dbg, -1);
+	return r_debug_continue_kill (dbg, 0);
 }
 
-#if __WINDOWS__
-R_API int r_debug_continue_pass_exception(RDebug *dbg) {
+R_API int r_debug_continue_with_signal(RDebug *dbg) {
+	R_RETURN_VAL_IF_FAIL (dbg, -1);
+#if R2__WINDOWS__
 	return r_debug_continue_kill (dbg, DBG_EXCEPTION_NOT_HANDLED);
-}
+#else
+	return r_debug_continue_kill (dbg, dbg->reason.signum);
 #endif
+}
 
-R_API int r_debug_continue_until_nontraced(RDebug *dbg) {
-	eprintf ("TODO\n");
+R_API bool r_debug_continue_until_nontraced(RDebug *dbg) {
+	R_LOG_TODO ("not implemented");
 	return false;
 }
 
-R_API int r_debug_continue_until_optype(RDebug *dbg, int type, int over) {
-	int ret, n = 0;
-	ut64 pc, buf_pc = 0;
+R_API bool r_debug_continue_until_optype(RDebug *dbg, int type, bool over) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	int n = 0;
 	RAnalOp op;
 	ut8 buf[DBG_BUF_SIZE];
 
@@ -1390,7 +1410,7 @@ R_API int r_debug_continue_until_optype(RDebug *dbg, int type, int over) {
 	}
 
 	if (!dbg->anal || !dbg->reg) {
-		eprintf ("Undefined pointer at dbg->anal\n");
+		R_LOG_ERROR ("Undefined pointer at dbg->anal");
 		return false;
 	}
 
@@ -1398,7 +1418,7 @@ R_API int r_debug_continue_until_optype(RDebug *dbg, int type, int over) {
 	r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false);
 
 	// Initial refill
-	buf_pc = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
+	ut64 buf_pc = r_debug_reg_get (dbg, "PC");
 	dbg->iob.read_at (dbg->iob.io, buf_pc, buf, sizeof (buf));
 
 	// step first, we don't want to check current optype
@@ -1407,22 +1427,30 @@ R_API int r_debug_continue_until_optype(RDebug *dbg, int type, int over) {
 			break;
 		}
 
-		pc = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
+		ut64 pc = r_debug_reg_get (dbg, "PC");
 		// Try to keep the buffer full
 		if (pc - buf_pc > sizeof (buf)) {
 			buf_pc = pc;
 			dbg->iob.read_at (dbg->iob.io, buf_pc, buf, sizeof (buf));
 		}
 		// Analyze the opcode
-		if (!r_anal_op (dbg->anal, &op, pc, buf + (pc - buf_pc), sizeof (buf) - (pc - buf_pc), R_ANAL_OP_MASK_BASIC)) {
+		if (!r_anal_op (dbg->anal, &op, pc, buf + (pc - buf_pc), sizeof (buf) - (pc - buf_pc), R_ARCH_OP_MASK_BASIC)) {
 			R_LOG_ERROR ("Decode error at %"PFMT64x, pc);
 			return false;
 		}
 		if (op.type == type) {
+			switch (type) {
+			case R_ANAL_OP_TYPE_CALL:
+			case R_ANAL_OP_TYPE_UCALL:
+				if (over) {
+					r_debug_step_over (dbg, 1);
+				}
+				break;
+			}
 			break;
 		}
 		// Step over and repeat
-		ret = over
+		int ret = over
 			? r_debug_step_over (dbg, 1)
 			: r_debug_step (dbg, 1);
 
@@ -1432,11 +1460,10 @@ R_API int r_debug_continue_until_optype(RDebug *dbg, int type, int over) {
 		}
 		n++;
 	}
-
 	return n;
 }
 
-static int r_debug_continue_until_internal(RDebug *dbg, ut64 addr, bool block) {
+static bool r_debug_continue_until_internal(RDebug *dbg, ut64 addr, bool block) {
 	if (r_debug_is_dead (dbg)) {
 		return false;
 	}
@@ -1452,7 +1479,7 @@ static int r_debug_continue_until_internal(RDebug *dbg, ut64 addr, bool block) {
 		if (r_debug_is_dead (dbg) || dbg->reason.type) {
 			break;
 		}
-		ut64 pc = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
+		ut64 pc = r_debug_reg_get (dbg, "PC");
 		if (pc == addr) {
 			break;
 		}
@@ -1468,11 +1495,13 @@ static int r_debug_continue_until_internal(RDebug *dbg, ut64 addr, bool block) {
 	return true;
 }
 
-R_API int r_debug_continue_until(RDebug *dbg, ut64 addr) {
+R_API bool r_debug_continue_until(RDebug *dbg, ut64 addr) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	return r_debug_continue_until_internal (dbg, addr, true);
 }
 
-R_API int r_debug_continue_until_nonblock(RDebug *dbg, ut64 addr) {
+R_API bool r_debug_continue_until_nonblock(RDebug *dbg, ut64 addr) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	return r_debug_continue_until_internal (dbg, addr, false);
 }
 
@@ -1480,7 +1509,7 @@ R_API bool r_debug_continue_back(RDebug *dbg) {
 	int cnum;
 	bool has_bp = false;
 
-	RRegItem *ripc = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_PC], R_REG_TYPE_GPR);
+	RRegItem *ripc = r_reg_get (dbg->reg, "PC", R_REG_TYPE_GPR);
 	RVector *vreg = ht_up_find (dbg->session->registers, ripc->offset | (ripc->arena << 16), NULL);
 	if (!vreg) {
 		R_LOG_ERROR ("cannot find PC change vector");
@@ -1494,7 +1523,7 @@ R_API bool r_debug_continue_back(RDebug *dbg) {
 		has_bp = r_bp_get_in (dbg->bp, reg->data, R_BP_PROT_EXEC);
 		if (has_bp) {
 			cnum = reg->cnum;
-			eprintf ("hit breakpoint at: 0x%" PFMT64x " cnum: %d\n", reg->data, reg->cnum);
+			R_LOG_INFO ("hit breakpoint at: 0x%" PFMT64x " cnum: %d", reg->data, reg->cnum);
 			break;
 		}
 	}
@@ -1524,29 +1553,34 @@ static int show_syscall(RDebug *dbg, const char *sysreg) {
 		sysname = "unknown";
 		args = 3;
 	}
-	eprintf ("--> %s 0x%08"PFMT64x" syscall %d %s (", sysreg,
+	RStrBuf *sb = r_strbuf_newf ("--> %s 0x%08"PFMT64x" syscall %d %s (", sysreg,
 			r_debug_reg_get (dbg, "PC"), reg, sysname);
-	for (i=0; i<args; i++) {
-		ut64 val;
-		snprintf (regname, sizeof (regname)-1, "A%d", i);
-		val = r_debug_reg_get (dbg, regname);
-		if (((st64)val<0) && ((st64)val>-0xffff)) {
-			eprintf ("%"PFMT64d"%s", val, (i+1==args)?"":" ");
+	for (i = 0; i < args; i++) {
+		snprintf (regname, sizeof (regname) - 1, "A%d", i);
+		ut64 val = r_debug_reg_get (dbg, regname);
+		if (((st64)val < 0) && ((st64)val>-0xffff)) {
+			r_strbuf_appendf (sb, "%"PFMT64d"%s", val, (i+1==args)?"":" ");
 		} else {
-			eprintf ("0x%"PFMT64x"%s", val, (i+1==args)?"":" ");
+			r_strbuf_appendf (sb, "0x%"PFMT64x"%s", val, (i+1==args)?"":" ");
 		}
 	}
-	eprintf (")\n");
+	r_strbuf_append (sb, ")\n");
+	char *s = r_strbuf_drain (sb);
+	R_LOG_INFO ("%s", s);
+	free (s);
 	r_syscall_item_free (si);
 	return reg;
 }
 
+// continue execution until a syscall is found, then return its syscall number or -1 on error
 R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc) {
-	int i, err, reg, ret = false;
-	if (!dbg || !dbg->h || r_debug_is_dead (dbg)) {
-		return false;
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	int i, reg;
+	if (!dbg->current || r_debug_is_dead (dbg)) {
+		return -1;
 	}
-	if (!dbg->h->contsc) {
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && !plugin->contsc) {
 		/* user-level syscall tracing */
 		r_debug_continue_until_optype (dbg, R_ANAL_OP_TYPE_SWI, 0);
 		return show_syscall (dbg, "A0");
@@ -1556,6 +1590,7 @@ R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc) {
 		R_LOG_ERROR ("--> cannot read registers");
 		return -1;
 	}
+	bool err;
 	reg = (int)r_debug_reg_get_err (dbg, "SN", &err, NULL);
 	if (err) {
 		R_LOG_ERROR ("Cannot find 'sn' register for current arch-os");
@@ -1574,7 +1609,7 @@ R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc) {
 		 * return value after... */
 		r_debug_step (dbg, 1);
 #endif
-		dbg->h->contsc (dbg, dbg->pid, 0); // TODO handle return value
+		r_debug_contsc (dbg, 0); // TODO handle return value
 		// wait until continuation
 		reason = r_debug_wait (dbg, NULL);
 		if (reason == R_DEBUG_REASON_DEAD || r_debug_is_dead (dbg)) {
@@ -1582,18 +1617,18 @@ R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc) {
 		}
 #if 0
 		if (reason != R_DEBUG_REASON_STEP) {
-			eprintf ("astep\n");
+			R_LOG_INFO ("astep");
 			break;
 		}
 #endif
 		if (!r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false)) {
-			eprintf ("--> cannot sync regs, process is probably dead\n");
+			R_LOG_ERROR ("cannot sync regs, process is probably dead");
 			return -1;
 		}
 		reg = show_syscall (dbg, "SN");
 
-		if (dbg->coreb.core && dbg->coreb.syshit) {
-			dbg->coreb.syshit (dbg->coreb.core);
+		if (dbg->coreb.core && dbg->coreb.sysHit) {
+			dbg->coreb.sysHit (dbg->coreb.core);
 		}
 
 		if (n_sc == -1) {
@@ -1609,73 +1644,83 @@ R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc) {
 		}
 		// TODO: must use r_core_cmd(as)..import code from rcore
 	}
-	return ret;
+	return -1;
 }
 
 R_API int r_debug_continue_syscall(RDebug *dbg, int sc) {
 	return r_debug_continue_syscalls (dbg, &sc, 1);
 }
 
-// TODO: remove from here? this is code injection!
-R_API int r_debug_syscall(RDebug *dbg, int num) {
-	bool ret = true;
-	if (dbg->h->contsc) {
-		ret = dbg->h->contsc (dbg, dbg->pid, num);
+// TODO: bad name, contsc wtf
+R_API bool r_debug_contsc(RDebug *dbg, int num) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	bool ret = true; // false?
+	if (plugin && plugin->contsc) {
+		ret = plugin->contsc (dbg, dbg->pid, num);
 	}
-	eprintf ("TODO: show syscall information\n");
+	R_LOG_TODO ("show syscall information");
 	/* r2rc task? ala inject? */
-	return (int)ret;
+	return ret;
 }
 
-R_API int r_debug_kill(RDebug *dbg, int pid, int tid, int sig) {
+R_API bool r_debug_kill(RDebug *dbg, int pid, int tid, int sig) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	if (r_debug_is_dead (dbg)) {
 		return false;
 	}
-	if (dbg->h && dbg->h->kill) {
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->kill) {
 		if (pid > 0) {
-			return dbg->h->kill (dbg, pid, tid, sig);
+			return plugin->kill (dbg, pid, tid, sig);
 		}
 		return -1;
 	}
-	eprintf ("Backend does not implement kill()\n");
+	R_LOG_WARN ("this debugger backend does not implement kill");
 	return false;
 }
 
 R_API RList *r_debug_frames(RDebug *dbg, ut64 at) {
-	if (dbg && dbg->h && dbg->h->frames) {
-		return dbg->h->frames (dbg, at);
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->frames) {
+		return plugin->frames (dbg, at);
 	}
 	return NULL;
 }
 
 /* TODO: Implement fork and clone */
 R_API int r_debug_child_fork(RDebug *dbg) {
-	//if (dbg && dbg->h && dbg->h->frames)
-		//return dbg->h->frames (dbg);
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	// if (dbg && dbg->current && dbg->current->plugin.frames)
+	// return dbg->current->plugin.frames (dbg);
 	return 0;
 }
 
 R_API int r_debug_child_clone(RDebug *dbg) {
-	//if (dbg && dbg->h && dbg->h->frames)
-		//return dbg->h->frames (dbg);
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	// if (dbg && dbg->current && dbg->current->plugin.frames)
+	// return dbg->current->plugin.frames (dbg);
 	return 0;
 }
 
 R_API bool r_debug_is_dead(RDebug *dbg) {
-	if (!dbg->h) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (!plugin) {
 		return false;
 	}
 	// workaround for debug.io.. should be generic
-	if (!strcmp (dbg->h->name, "io")) {
+	if (!strcmp (plugin->meta.name, "io")) {
 		return false;
 	}
-	bool is_dead = (dbg->pid < 0 && strncmp (dbg->h->name, "gdb", 3)) || (dbg->reason.type == R_DEBUG_REASON_DEAD);
-	if (dbg->pid > 0 && dbg->h && dbg->h->kill) {
-		is_dead = !dbg->h->kill (dbg, dbg->pid, false, 0);
+	bool is_dead = (dbg->pid < 0 && strncmp (plugin->meta.name, "gdb", 3)) || (dbg->reason.type == R_DEBUG_REASON_DEAD);
+	if (dbg->pid > 0 && plugin && plugin->kill) {
+		is_dead = !plugin->kill (dbg, dbg->pid, false, 0);
 	}
 #if 0
-	if (!is_dead && dbg->h && dbg->h->kill) {
-		is_dead = !dbg->h->kill (dbg, dbg->pid, false, 0);
+	if (!is_dead && dbg->current && dbg->current->plugin.kill) {
+		is_dead = !dbg->current->plugin.kill (dbg, dbg->pid, false, 0);
 	}
 #endif
 	if (is_dead) {
@@ -1684,38 +1729,47 @@ R_API bool r_debug_is_dead(RDebug *dbg) {
 	return is_dead;
 }
 
-R_API int r_debug_map_protect(RDebug *dbg, ut64 addr, int size, int perms) {
-	if (dbg && dbg->h && dbg->h->map_protect) {
-		return dbg->h->map_protect (dbg, addr, size, perms);
+R_API bool r_debug_map_protect(RDebug *dbg, ut64 addr, int size, int perms) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->map_protect) {
+		return plugin->map_protect (dbg, addr, size, perms);
 	}
 	return false;
 }
 
 R_API void r_debug_drx_list(RDebug *dbg) {
-	if (dbg && dbg->h && dbg->h->drx) {
-		dbg->h->drx (dbg, 0, 0, 0, 0, 0, DRX_API_LIST);
+	R_RETURN_IF_FAIL (dbg);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->drx) {
+		plugin->drx (dbg, 0, 0, 0, 0, 0, DRX_API_LIST);
 	}
 }
 
-R_API int r_debug_drx_set(RDebug *dbg, int idx, ut64 addr, int len, int rwx, int g) {
-	if (dbg && dbg->h && dbg->h->drx) {
-		return dbg->h->drx (dbg, idx, addr, len, rwx, g, DRX_API_SET_BP);
+R_API bool r_debug_drx_set(RDebug *dbg, int idx, ut64 addr, int len, int rwx, int g) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->drx) {
+		return plugin->drx (dbg, idx, addr, len, rwx, g, DRX_API_SET_BP);
 	}
 	return false;
 }
 
-R_API int r_debug_drx_unset(RDebug *dbg, int idx) {
-	if (dbg && dbg->h && dbg->h->drx) {
-		return dbg->h->drx (dbg, idx, 0, -1, 0, 0, DRX_API_REMOVE_BP);
+R_API bool r_debug_drx_unset(RDebug *dbg, int idx) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->drx) {
+		return plugin->drx (dbg, idx, 0, -1, 0, 0, DRX_API_REMOVE_BP);
 	}
 	return false;
 }
 
 R_API ut64 r_debug_get_baddr(RDebug *dbg, const char *file) {
+	R_RETURN_VAL_IF_FAIL (dbg, 0LL);
 	if (!dbg || !dbg->iob.io || !dbg->iob.io->desc) {
 		return 0LL;
 	}
-	if (!strcmp (dbg->iob.io->desc->plugin->name, "gdb")) {		//this is very bad
+	if (!strcmp (dbg->iob.io->desc->plugin->meta.name, "gdb")) { // this is very bad
 		// Tell gdb that we want baddr, not full mem map
 		dbg->iob.system (dbg->iob.io, "baddr");
 	}
@@ -1727,7 +1781,7 @@ R_API ut64 r_debug_get_baddr(RDebug *dbg, const char *file) {
 	if (!r_debug_attach (dbg, pid)) {
 		return 0LL;
 	}
-#if __WINDOWS__
+#if R2__WINDOWS__
 	ut64 base;
 	bool ret = r_io_desc_get_base (dbg->iob.io->desc, &base);
 	if (ret) {
@@ -1740,7 +1794,7 @@ R_API ut64 r_debug_get_baddr(RDebug *dbg, const char *file) {
 	r_debug_map_sync (dbg);
 	char *abspath = r_sys_pid_to_path (pid);
 	if (file) {
-#if !__WINDOWS__
+#if !R2__WINDOWS__
 		if (!abspath) {
 			abspath = r_file_abspath (file);
 		}
@@ -1769,13 +1823,16 @@ R_API ut64 r_debug_get_baddr(RDebug *dbg, const char *file) {
 }
 
 R_API int r_debug_cmd(RDebug *dbg, const char *s) {
-	if (dbg->h && dbg->h->cmd) {
-		return dbg->h->cmd (dbg, s);
+	R_RETURN_VAL_IF_FAIL (dbg, 0);
+	RDebugPlugin *plugin = R_UNWRAP3 (dbg, current, plugin);
+	if (plugin && plugin->cmd) {
+		return plugin->cmd (dbg, s);
 	}
 	return 0;
 }
 
 R_API void r_debug_bp_rebase(RDebug *dbg, ut64 old_base, ut64 new_base) {
+	R_RETURN_IF_FAIL (dbg);
 	RBreakpointItem *bp;
 	RListIter *iter;
 	ut64 diff = new_base - old_base;

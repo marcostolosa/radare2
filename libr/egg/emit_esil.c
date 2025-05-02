@@ -108,7 +108,7 @@ static void emit_arg(REgg *egg, int xs, int num, const char *str) {
 	case 0:
 		if (strchr (str, ',')) {
 			// r_egg_printf (egg, ".  str r0, [%s]\n", str);
-			strncpy (lastargs[num - 1], str, sizeof(lastargs[0]) - 1);
+			strncpy (lastargs[num - 1], str, sizeof (lastargs[0]) - 1);
 		} else {
 			if (!atoi (str)) {
 				R_LOG_WARN ("probably a bug?");
@@ -125,7 +125,7 @@ static void emit_arg(REgg *egg, int xs, int num, const char *str) {
 		if (d) {
 			r_egg_printf (egg, "  add "R_BP ", %d\n", d);
 		}
-		r_egg_printf (egg, "  push {"R_BP "}\n");
+		r_egg_printf (egg, "  push { "R_BP " }\n");
 		if (d) {
 			r_egg_printf (egg, "  sub "R_BP ", %d\n", d);
 		}

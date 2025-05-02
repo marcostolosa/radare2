@@ -1,8 +1,17 @@
 #include <r_util.h>
 #include "minunit.h"
 
-//TODO test r_str_chop_path
+bool test_r_file(void) {
+	char *s = r_file_new ("/foo", "bar", NULL);
+	mu_assert_streq (s, "/foo/bar", "error, invalid path");
+	free (s);
+	s = r_file_new ("/foo/", "bar", NULL);
+	mu_assert_streq (s, "/foo/bar", "error, invalid path");
+	free (s);
+	mu_end;
+}
 
+//TODO test r_str_chop_path
 bool test_r_str_wrap(void) {
 	char *s = r_str_wrap ("hello world\nhow are you\n", 5);
 	char *res = strdup ("hello \nworld\nhow ar\ne you\n");
@@ -75,6 +84,7 @@ bool test_r_str_rwx(void) {
 	int rw =  r_str_rwx ("rw-");
 	int rx = r_str_rwx ("rx");
 	int none = r_str_rwx ("---");
+	int invalid = r_str_rwx ("invalid");
 	int number = r_str_rwx ("999");
 	int rx_number = r_str_rwx ("5");
 	int rwx_number = r_str_rwx ("7");
@@ -82,13 +92,12 @@ bool test_r_str_rwx(void) {
 	mu_assert_eq (rw, 6, "rw");
 	mu_assert_eq (rx, 5, "rx");
 	mu_assert_eq (none, 0, "no permissions");
-	mu_assert_eq (number, 0, "large input number string");
+	mu_assert_eq (invalid, -1, "invalid permissions string");
+	mu_assert_eq (number, -1, "large input number string");
 	mu_assert_eq (rx_number, 5, "rx number");
 	mu_assert_eq (rwx_number, 7, "rwx number");
 	mu_end;
 }
-
-//TODO test r_str_binstr2bin
 
 bool test_r_str_rwx_i(void) {
 	const char* rwx = r_str_rwx_i (7);
@@ -118,13 +127,12 @@ bool test_r_str_trim(void) {
 	free (two);
 	mu_end;
 }
-//TODO find a way to test r_str_home.
 
 bool test_r_str_bool(void) {
-	const char* one = r_str_bool(1);
-	const char* zero = r_str_bool(0);
-	const char* fifty = r_str_bool(50);
-	const char* negative = r_str_bool(-1);
+	const char* one = r_str_bool (1);
+	const char* zero = r_str_bool (0);
+	const char* fifty = r_str_bool (50);
+	const char* negative = r_str_bool (-1);
 	mu_assert_streq (one, "true", "one");
 	mu_assert_streq (zero, "false", "zero");
 	mu_assert_streq (fifty, "true", "large positive value");
@@ -164,6 +172,29 @@ bool test_r_str_split(void) {
 	mu_assert_streq (hello, "hello", "first string in split");
 	mu_assert_streq (world, "world", "second string in split");
 	free (hi);
+	mu_end;
+}
+
+bool test_r_str_split_list(void) {
+#if 0
+> "".split("\n")
+[ '' ]
+> "\n".split("\n")
+[ '', '' ]
+>
+#endif
+	{
+		char* hi = strdup ("");
+		RList *r = r_str_split_list (hi, "\n", 0);
+		mu_assert_eq (r_list_length (r), 1, "split empty");
+		free (hi);
+	}
+	{
+		char* hi = strdup ("\n");
+		RList *r = r_str_split_list (hi, "\n", 0);
+		mu_assert_eq (r_list_length (r), 2, "split newline");
+		free (hi);
+	}
 	mu_end;
 }
 
@@ -355,7 +386,7 @@ bool test_r_str_escape_sh(void) {
 	escaped = r_str_escape_sh ("Hello, \\World\\");
 	mu_assert_streq (escaped, "Hello, \\\\World\\\\", "escaped backspace");
 	free (escaped);
-#if __UNIX__
+#if R2__UNIX__
 	escaped = r_str_escape_sh ("Hello, $(World)");
 	mu_assert_streq (escaped, "Hello, \\$(World)", "escaped $(command)");
 	free (escaped);
@@ -478,7 +509,7 @@ bool test_r_str_str_xy(void) {
 	mu_assert_eq (x, 0, "x of fourth occurrence");
 	mu_assert_eq (y, 2, "y of fourth occurrence");
 	next = r_str_str_xy (canvas, "World", next, &x, &y);
-	mu_assert_null (next, "no more occurences");
+	mu_assert_null (next, "no more occurrences");
 	mu_end;
 }
 
@@ -503,13 +534,165 @@ bool test_r_str_encoded_json(void) {
 	free ((void *)stripped);
 
 	const char *none = r_str_encoded_json (invalidJsonString, len, PJ_ENCODING_STR_DEFAULT);
-	mu_assert_streq (none, "This is my \\xe2 sample © string\\n", "default encoding");
+	mu_assert_streq (none, "This is my \\u00e2 sample © string\\n", "default encoding");
 	free ((void *)none);
 
 	mu_end;
 }
 
-bool all_tests () {
+bool test_r_str_tok_r (void) {
+	{
+		char str[] = "";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, ",", &rest);
+		mu_assert_eq(token, NULL, "token unexpectedly is not NULL");
+	}
+
+	{
+		char str[] = "This is hello world";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, " ", &rest);
+		mu_assert_streq(token, "This", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, " ", &rest);
+		mu_assert_streq(token, "is", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, " ", &rest);
+		mu_assert_streq(token, "hello", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, " ", &rest);
+		mu_assert_streq(token, "world", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, " ", &rest);
+		mu_assert_eq(token, NULL, "token unexpectedly is not NULL");
+	}
+	
+	{
+		char str[] = "111,222,333";
+		char *rest = NULL;
+		char *token = NULL;
+		
+		token = r_str_tok_r(str, ",", &rest);
+		mu_assert_streq(token, "111", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ",", &rest);
+		mu_assert_streq(token, "222", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ",", &rest);
+		mu_assert_streq(token, "333", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ",", &rest);
+		mu_assert_eq(token, NULL, "token unexpectedly is not NULL");
+	}
+
+	{
+		char str[] = "111, 222, 333";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, ", ", &rest);
+		mu_assert_streq(token, "111", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ", ", &rest);
+		mu_assert_streq(token, "222", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ", ", &rest);
+		mu_assert_streq(token, "333", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ", ", &rest);
+		mu_assert_eq(token, NULL, "token unexpectedly is not NULL");
+	}
+
+	{
+		char str[] = "This is hello world";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, ";", &rest);
+		mu_assert_streq(token, "This is hello world", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ";", &rest);
+		mu_assert_eq(token, NULL, "token unexpectedly is not NULL");
+	}
+
+	{
+		char str[] = "This,is;hello-world";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, ",", &rest);
+		mu_assert_streq(token, "This", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ";", &rest);
+		mu_assert_streq(token, "is", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, "-", &rest);
+		mu_assert_streq(token, "hello", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ";", &rest);
+		mu_assert_streq(token, "world", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ";", &rest);
+		mu_assert_eq(token, NULL, "token unexpectedly is not NULL");
+	}
+
+	mu_end;
+}
+
+bool test_r_mem_from_binstring(void) {
+	int rc;
+	ut8 res[256];
+	const char *one = (const char*)res;
+
+	rc = r_mem_from_binstring ("0100100001100101011011000110110001101111001000000111010001101000011001010111001001100101", res, sizeof (res));
+	mu_assert_eq (rc, 11, "rc one");
+	mu_assert_streq (one, "Hello there", "one");
+
+	rc = r_mem_from_binstring ("011100110111010101110000011001010111001000100000011000110110111101101111011011000010000001101101011001010111001101110011011000010110011101100101", res, sizeof (res));
+	mu_assert_streq (one, "super cool message", "two");
+
+	rc = r_mem_from_binstring ("          00100000001000000010000000100000001000000111001101110100011000010111001001110100011100110010000001110111011010010111010001101000001000000111001101110000011000010110001101100101", res, sizeof (res));
+	mu_assert_streq (one, "     starts with space", "three");
+	rc = r_mem_from_binstring ("           00100000001000000010000000100000001000000111001101110100011000010111001001110100011100110010000001110111011010010111010001101000001000000111001101110000011000010110001101100101", res, sizeof (res));
+	mu_assert_streq (one, "     starts with space", "three");
+
+	rc = r_mem_from_binstring ("01100110011010010110111001100100011100110010000001101110011011110111010000100000011000100110100101101110abcdef", res, sizeof (res));
+	mu_assert_streq (one, "finds not bin", "four");
+	mu_end;
+	return true;
+}
+
+bool test_r_mem_to_binstring(void) {
+	char *one = r_mem_to_binstring ((const ut8*)"Hello there", -1);
+	char *two = r_mem_to_binstring ((const ut8*)"super cool message", -1);
+	char *three = r_mem_to_binstring ((const ut8*)"     starts with space", -1);
+	char *four = r_mem_to_binstring ((const ut8*)"super secret!?", -1);
+	mu_assert_streq (one, "0100100001100101011011000110110001101111001000000111010001101000011001010111001001100101", "one");
+	mu_assert_streq (two, "011100110111010101110000011001010111001000100000011000110110111101101111011011000010000001101101011001010111001101110011011000010110011101100101", "two");
+	mu_assert_streq (three, "00100000001000000010000000100000001000000111001101110100011000010111001001110100011100110010000001110111011010010111010001101000001000000111001101110000011000010110001101100101", "three");
+	mu_assert_streq (four, "0111001101110101011100000110010101110010001000000111001101100101011000110111001001100101011101000010000100111111", "four");
+	free (one);
+	free (two);
+	free (three);
+	free (four);
+	mu_end;
+}
+
+bool test_r_str_ndup_zero_len (void) {
+	char str[] = "deadbeef";
+
+	mu_assert_null (R_STR_NDUP (str, 0), "uppercase yields NULL");
+	mu_assert_streq (r_str_ndup (str, 0), "", "lowercase yields empty string");
+
+	mu_end;
+}
+
+bool all_tests(void) {
+	mu_run_test (test_r_file);
 	mu_run_test (test_r_str_wrap);
 	mu_run_test (test_r_str_newf);
 	mu_run_test (test_r_str_replace_char_once);
@@ -522,6 +705,7 @@ bool all_tests () {
 	mu_run_test (test_r_str_trim);
 	mu_run_test (test_r_str_case);
 	mu_run_test (test_r_str_split);
+	mu_run_test (test_r_str_split_list);
 	mu_run_test (test_r_str_tokenize);
 	mu_run_test (test_r_str_char_count);
 	mu_run_test (test_r_str_word_count);
@@ -541,6 +725,10 @@ bool all_tests () {
 	mu_run_test (test_r_str_format_msvc_argv);
 	mu_run_test (test_r_str_str_xy);
 	mu_run_test (test_r_str_encoded_json);
+	mu_run_test (test_r_str_tok_r);
+	mu_run_test (test_r_mem_from_binstring);
+	mu_run_test (test_r_mem_to_binstring);
+	mu_run_test (test_r_str_ndup_zero_len);
 	return tests_passed != tests_run;
 }
 

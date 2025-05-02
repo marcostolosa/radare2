@@ -22,14 +22,13 @@ static bool test_parse_dwarf_types(void) {
 	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/pe/vista-glass.exe", &opt);
 	// TODO fix, how to correctly promote binary info to the RAnal in unit tests?
-	free (anal->config->cpu);
-	anal->config->cpu = strdup ("x86");
+	anal->config->arch = strdup ("x86");
 	anal->config->bits = 32;
 	mu_assert ("pe/vista-glass.exe binary could not be opened", res);
 	mu_assert_notnull (anal->sdb_types, "Couldn't create new RAnal.sdb_types");
 	RBinDwarfDebugAbbrev *abbrevs = r_bin_dwarf_parse_abbrev (bin, MODE);
 	mu_assert_notnull (abbrevs, "Couldn't parse Abbreviations");
-	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (abbrevs, bin, MODE);
+	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (bin, abbrevs, MODE);
 	mu_assert_notnull (info, "Couldn't parse debug_info section");
 
 	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bin, 4);
@@ -84,20 +83,19 @@ static bool test_dwarf_function_parsing_cpp(void) {
 	RIO *io = r_io_new ();
 	mu_assert_notnull (io, "Couldn't create new RIO");
 	RAnal *anal = r_anal_new ();
+	anal->config->arch = strdup ("x86");
+	anal->config->bits = 64;
 	mu_assert_notnull (anal, "Couldn't create new RAnal");
 	r_io_bind (io, &bin->iob);
 	anal->binb.demangle = r_bin_demangle;
 
 	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/elf/dwarf4_many_comp_units.elf", &opt);
-	// TODO fix, how to correctly promote binary info to the RAnal in unit tests?
-	anal->config->cpu = strdup ("x86");
-	anal->config->bits = 64;
 	mu_assert ("elf/dwarf4_many_comp_units.elf binary could not be opened", res);
 	mu_assert_notnull (anal->sdb_types, "Couldn't create new RAnal.sdb_types");
 	RBinDwarfDebugAbbrev *abbrevs = r_bin_dwarf_parse_abbrev (bin, MODE);
 	mu_assert_notnull (abbrevs, "Couldn't parse Abbreviations");
-	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (abbrevs, bin, MODE);
+	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (bin, abbrevs, MODE);
 	mu_assert_notnull (info, "Couldn't parse debug_info section");
 	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bin, 8);
 
@@ -140,20 +138,20 @@ static bool test_dwarf_function_parsing_go(void) {
 	RIO *io = r_io_new ();
 	mu_assert_notnull (io, "Couldn't create new RIO");
 	RAnal *anal = r_anal_new ();
+	// TODO fix, how to correctly promote binary info to the RAnal in unit tests?
+	anal->config->arch = strdup ("x86");
+	anal->config->bits = 64;
 	mu_assert_notnull (anal, "Couldn't create new RAnal");
 	r_io_bind (io, &bin->iob);
 	anal->binb.demangle = r_bin_demangle;
 
 	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/elf/dwarf_go_tree", &opt);
-	// TODO fix, how to correctly promote binary info to the RAnal in unit tests?
-	anal->config->cpu = strdup ("x86");
-	anal->config->bits = 64;
 	mu_assert ("bins/elf/dwarf_go_tree", res);
 	mu_assert_notnull (anal->sdb_types, "Couldn't create new RAnal.sdb_types");
 	RBinDwarfDebugAbbrev *abbrevs = r_bin_dwarf_parse_abbrev (bin, MODE);
 	mu_assert_notnull (abbrevs, "Couldn't parse Abbreviations");
-	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (abbrevs, bin, MODE);
+	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (bin, abbrevs, MODE);
 	mu_assert_notnull (info, "Couldn't parse debug_info section");
 	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bin, 8);
 
@@ -194,6 +192,8 @@ static bool test_dwarf_function_parsing_rust(void) {
 	RIO *io = r_io_new ();
 	mu_assert_notnull (io, "Couldn't create new RIO");
 	RAnal *anal = r_anal_new ();
+	anal->config->arch = strdup ("x86");
+	anal->config->bits = 64;
 	mu_assert_notnull (anal, "Couldn't create new RAnal");
 	r_io_bind (io, &bin->iob);
 	anal->binb.demangle = r_bin_demangle;
@@ -202,13 +202,11 @@ static bool test_dwarf_function_parsing_rust(void) {
 	bool res = r_bin_open (bin, "bins/elf/dwarf_rust_bubble", &opt);
 	// TODO fix, how to correctly promote binary info to the RAnal in unit tests?
 	free (anal->config->cpu);
-	anal->config->cpu = strdup ("x86");
-	anal->config->bits = 64;
 	mu_assert ("bins/elf/dwarf_rust_bubble", res);
 	mu_assert_notnull (anal->sdb_types, "Couldn't create new RAnal.sdb_types");
 	RBinDwarfDebugAbbrev *abbrevs = r_bin_dwarf_parse_abbrev (bin, MODE);
 	mu_assert_notnull (abbrevs, "Couldn't parse Abbreviations");
-	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (abbrevs, bin, MODE);
+	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (bin, abbrevs, MODE);
 	mu_assert_notnull (info, "Couldn't parse debug_info section");
 	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bin, 8);
 
@@ -249,8 +247,8 @@ static bool test_dwarf_function_parsing_rust(void) {
 int all_tests(void) {
 	mu_run_test (test_parse_dwarf_types);
 	mu_run_test (test_dwarf_function_parsing_cpp);
-	mu_run_test (test_dwarf_function_parsing_go);
 	mu_run_test (test_dwarf_function_parsing_rust);
+	mu_run_test (test_dwarf_function_parsing_go);
 	return tests_passed != tests_run;
 }
 

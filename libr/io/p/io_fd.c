@@ -1,10 +1,10 @@
-/* radare - LGPL - Copyright 2020-2022 - pancake */
+/* radare - LGPL - Copyright 2020-2024 - pancake */
 
 #include <r_io.h>
 #include <r_lib.h>
 #include <sys/types.h>
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 #define FDURI "handle://"
 #else
 #define FDURI "fd://"
@@ -69,12 +69,12 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 	RIOFdata *fdd = R_NEW0 (RIOFdata);
 	if (fdd) {
 		fdd->fd = r_num_math (NULL, pathname + strlen (FDURI));
-#if __WINDOWS__
+#if R2__WINDOWS__
 		fdd->fd = _open_osfhandle (fdd->fd, 0);
 #endif
 		if (fdd->fd < 0) {
 			free (fdd);
-			eprintf ("Invalid filedescriptor.\n");
+			R_LOG_ERROR ("Invalid filedescriptor");
 			return NULL;
 		}
 	}
@@ -82,15 +82,17 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 }
 
 RIOPlugin r_io_plugin_fd = {
-#if __WINDOWS__
-	.name = "handle",
-	.desc = "Local process file handle IO",
+	.meta = {
+#if R2__WINDOWS__
+		.name = "handle",
+		.desc = "Local process file handle IO",
 #else
-	.name = "fd",
-	.desc = "Local process filedescriptor IO",
+		.name = "fd",
+		.desc = "Local process filedescriptor IO",
 #endif
+		.license = "MIT",
+	},
 	.uris = FDURI,
-	.license = "MIT",
 	.open = __open,
 	.close = __close,
 	.read = __read,

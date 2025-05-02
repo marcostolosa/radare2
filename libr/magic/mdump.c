@@ -34,17 +34,12 @@
 #if !USE_LIB_MAGIC
 
 #include "file.h"
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-#include <stdarg.h>
-#include <stdlib.h>
-#include <time.h>
+#include <r_util.h>
 
-#define SZOF(a)	(sizeof(a) / sizeof(a[0]))
+#define SZOF(a)	(sizeof (a) / sizeof (a[0]))
 
 #ifndef COMPILE_ONLY
-void file_mdump(struct r_magic *m) {
+void __magic_file_mdump(RMagic *ms, struct r_magic *m) {
 	char pp[ASCTIME_BUF_MAXLEN];
 
 	(void) eprintf ("[%u", m->lineno);
@@ -53,8 +48,8 @@ void file_mdump(struct r_magic *m) {
 	if (m->flag & INDIR) {
 		(void) eprintf ("(%s,",
 			       /* Note: type is unsigned */
-			       (m->in_type < file_nnames) ?
-					magic_file_names[m->in_type] : "*bad*");
+			       (m->in_type < FILE_NAMES_SIZE) ?
+					ms->magic_file_names[m->in_type] : "*bad*");
 		if (m->in_op & FILE_OPINVERSE)
 			(void) fputc('~', stderr);
 		(void) eprintf ("%c%u),",
@@ -64,7 +59,7 @@ void file_mdump(struct r_magic *m) {
 	}
 	(void) eprintf (" %s%s", (m->flag & UNSIGNED) ? "u" : "",
 		       /* Note: type is unsigned */
-		       (m->type < file_nnames) ? magic_file_names[m->type] : "*bad*");
+		       (m->type < FILE_NAMES_SIZE) ? ms->magic_file_names[m->type] : "*bad*");
 	if (m->mask_op & FILE_OPINVERSE)
 		(void) fputc('~', stderr);
 
@@ -121,33 +116,33 @@ void file_mdump(struct r_magic *m) {
 		case FILE_BESTRING16:
 		case FILE_LESTRING16:
 		case FILE_SEARCH:
-			file_showstr(stderr, m->value.s, (size_t)m->vallen);
+			__magic_file_showstr(stderr, m->value.s, (size_t)m->vallen);
 			break;
 		case FILE_DATE:
 		case FILE_LEDATE:
 		case FILE_BEDATE:
 		case FILE_MEDATE:
 			(void)eprintf ("%s,",
-			    file_fmttime (m->value.l, 1, pp));
+			    __magic_file_fmttime (m->value.l, 1, pp));
 			break;
 		case FILE_LDATE:
 		case FILE_LELDATE:
 		case FILE_BELDATE:
 		case FILE_MELDATE:
 			(void)eprintf ("%s,",
-			    file_fmttime (m->value.l, 0, pp));
+			    __magic_file_fmttime (m->value.l, 0, pp));
 			break;
 		case FILE_QDATE:
 		case FILE_LEQDATE:
 		case FILE_BEQDATE:
 			(void)eprintf ("%s,",
-			    file_fmttime ((ut32)m->value.q, 1, pp));
+			    __magic_file_fmttime ((ut32)m->value.q, 1, pp));
 			break;
 		case FILE_QLDATE:
 		case FILE_LEQLDATE:
 		case FILE_BEQLDATE:
 			(void)eprintf ("%s,",
-			    file_fmttime ((ut32)m->value.q, 0, pp));
+			    __magic_file_fmttime ((ut32)m->value.q, 0, pp));
 			break;
 		case FILE_FLOAT:
 		case FILE_BEFLOAT:
@@ -172,23 +167,22 @@ void file_mdump(struct r_magic *m) {
 #endif
 
 /*VARARGS*/
-void file_magwarn(struct r_magic_set *ms, const char *f, ...) {
+void __magic_file_magwarn(RMagic *ms, const char *f, ...) {
 	va_list va;
-
-	/* cuz we use stdout for most, stderr here */
-	(void) fflush(stdout);
-
-	if (ms->file)
-		(void) eprintf ("%s, %lu: ", ms->file,
-		    (unsigned long)ms->line);
-	(void) eprintf ("Warning: ");
-	va_start(va, f);
-	(void) vfprintf (stderr, f, va);
-	va_end(va);
-	(void) fputc('\n', stderr);
+	RStrBuf *sb = r_strbuf_new ("");
+	if (R_STR_ISNOTEMPTY (ms->file)) {
+		r_strbuf_appendf (sb, "%s, %lu: ",
+			ms->file, (unsigned long)ms->line);
+	}
+	va_start (va, f);
+	r_strbuf_vappendf (sb, f, va);
+	va_end (va);
+	char *msg = r_strbuf_drain (sb);
+	R_LOG_WARN ("%s", msg);
+	free (msg);
 }
 
-const char *file_fmttime(ut32 v, int local, char *pp) {
+const char *__magic_file_fmttime(ut32 v, int local, char *pp) {
 	time_t t = (time_t)v;
 
 	if (local) {

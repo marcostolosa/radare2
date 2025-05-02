@@ -1,24 +1,9 @@
-/* radare - LGPL - Copyright 2020-2022 - pancake, thestr4ng3r */
+/* radare - LGPL - Copyright 2020-2024 - pancake, thestr4ng3r */
 
 #ifndef RADARE2_R2R_H
 #define RADARE2_R2R_H
 
 #include <r_util.h>
-
-#if __i386__
-#define R2R_ARCH "x86"
-#elif __x86_64__
-#define R2R_ARCH "x64"
-#elif __arm64__ || __aarch64__
-#define R2R_ARCH "arm64"
-#elif __arm__
-#define R2R_ARCH "arm"
-#elif __mips__
-#define R2R_ARCH "mips"
-#else
-#define R2R_ARCH "unknown"
-#endif
-#define R2R_ARCH_OS R_SYS_OS "-"R_SYS_ARCH
 
 typedef struct r2r_cmd_test_string_record {
 	char *value;
@@ -42,13 +27,18 @@ typedef struct r2r_cmd_test_t {
 	R2RCmdTestStringRecord name;
 	R2RCmdTestStringRecord file;
 	R2RCmdTestStringRecord args;
+	R2RCmdTestStringRecord require;
 	R2RCmdTestStringRecord source;
 	R2RCmdTestStringRecord cmds;
+	R2RCmdTestNumRecord repeat;
 	R2RCmdTestStringRecord expect;
 	R2RCmdTestStringRecord expect_err;
 	R2RCmdTestStringRecord regexp_out;
 	R2RCmdTestStringRecord regexp_err;
+	R2RCmdTestStringRecord env;
 	R2RCmdTestBoolRecord broken;
+	R2RCmdTestBoolRecord oldabi;
+	R2RCmdTestBoolRecord newabi;
 	R2RCmdTestNumRecord timeout;
 	ut64 run_line;
 	bool load_plugins;
@@ -59,6 +49,8 @@ typedef struct r2r_cmd_test_t {
 	macro_str ("NAME", name) \
 	macro_str ("FILE", file) \
 	macro_str ("ARGS", args) \
+	macro_str ("REQUIRE", require) \
+	macro_int ("REPEAT", repeat) \
 	macro_int ("TIMEOUT", timeout) \
 	macro_str ("SOURCE", source) \
 	macro_str ("CMDS", cmds) \
@@ -66,7 +58,10 @@ typedef struct r2r_cmd_test_t {
 	macro_str ("EXPECT_ERR", expect_err) \
 	macro_str ("REGEXP_OUT", regexp_out) \
 	macro_str ("REGEXP_ERR", regexp_err) \
-	macro_bool ("BROKEN", broken)
+	macro_str ("ENV", env) \
+	macro_bool ("BROKEN", broken) \
+	macro_bool ("OLDABI", oldabi) \
+	macro_bool ("NEWABI", newabi) \
 
 typedef enum r2r_asm_test_mode_t {
 	R2R_ASM_TEST_MODE_ASSEMBLE = 1,
@@ -86,6 +81,11 @@ typedef struct r2r_asm_test_t {
 	ut8 *bytes;
 	size_t bytes_size;
 } R2RAsmTest;
+
+typedef struct r2r_test_to_skip_t {
+	const char *dir;
+	const char *name;
+} R2RTestToSkip;
 
 typedef struct r2r_json_test_t {
 	ut64 line;
@@ -126,6 +126,11 @@ typedef struct r2r_run_config_t {
 	const char *rasm2_cmd;
 	const char *json_test_file;
 	ut64 timeout_ms;
+	int shallow;
+	bool skip_cmd;
+	bool skip_fuzz;
+	bool skip_asm;
+	bool skip_json;
 } R2RRunConfig;
 
 typedef struct r2r_process_output_t {
@@ -155,6 +160,7 @@ typedef struct r2r_test_result_info_t {
 	R2RTestResult result;
 	bool timeout;
 	bool run_failed; // something went seriously wrong (e.g. r2 not found)
+	bool run_skipped; // run was skipped due to e.g. R2R_SHALLOW
 	ut64 time_elapsed;
 	union {
 		R2RProcessOutput *proc_out; // for test->type == R2R_TEST_TYPE_CMD, R2R_TEST_TYPE_JSON or R2R_TEST_TYPE_FUZZ
@@ -209,5 +215,6 @@ R_API char *r2r_test_name(R2RTest *test);
 R_API bool r2r_test_broken(R2RTest *test);
 R_API R2RTestResultInfo *r2r_run_test(R2RRunConfig *config, R2RTest *test);
 R_API void r2r_test_result_info_free(R2RTestResultInfo *result);
+R_IPI const char *getarchos(void);
 
 #endif //RADARE2_R2R_H

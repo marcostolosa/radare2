@@ -21,7 +21,7 @@ struct parse_ctx {
 };
 
 static bool append(libgdbr_t *g, const char ch) {
-	r_return_val_if_fail (g, -1);
+	R_RETURN_VAL_IF_FAIL (g, -1);
 	if (g->data_len == g->data_max - 1) {
 		int newsize = g->data_max * 2;
 		if (newsize < 1) {
@@ -29,7 +29,7 @@ static bool append(libgdbr_t *g, const char ch) {
 		}
 		char *ptr = realloc (g->data, newsize);
 		if (!ptr) {
-			eprintf ("%s: Failed to reallocate buffer\n",
+			R_LOG_ERROR ("%s: Failed to reallocate buffer",
 				 __func__);
 			return false;
 		}
@@ -41,7 +41,7 @@ static bool append(libgdbr_t *g, const char ch) {
 }
 
 static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
-	r_return_val_if_fail (g, -1);
+	R_RETURN_VAL_IF_FAIL (g, -1);
 	int i = 0;
 	int j = 0;
 	bool first = true;
@@ -54,7 +54,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 				continue;
 			}
 			if (ctx->sum != '#') {
-				eprintf ("%s: Invalid checksum\n", __func__);
+				R_LOG_ERROR ("%s: Invalid checksum", __func__);
 				return -1;
 			}
 			if (i != len - 1) {
@@ -66,7 +66,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 					g->read_buff[g->read_len] = '\0';
 					return 0;
 				}
-				eprintf ("%s: Garbage at end of packet: %s (%s)\n",
+				R_LOG_ERROR ("%s: Garbage at end of packet: %s (%s)",
 					 __func__, g->read_buff + i + 1, g->read_buff + i + 1);
 			}
 			g->read_len = 0;
@@ -82,7 +82,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 		}
 		if (ctx->flags & DUP) {
 			if (cur < 32 || cur > 126) {
-				eprintf ("%s: Invalid repeat count: %d\n",
+				R_LOG_ERROR ("%s: Invalid repeat count: %d",
 					 __func__, cur);
 				return -1;
 			}
@@ -98,7 +98,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 		switch (cur) {
 		case '$':
 			if (ctx->flags & HEADER) {
-				eprintf ("%s: More than one $\n", __func__);
+				R_LOG_ERROR ("%s: More than one $", __func__);
 				return -1;
 			}
 			ctx->flags |= HEADER;
@@ -114,7 +114,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 			break;
 		case '*':
 			if (first) {
-				eprintf ("%s: Invalid repeat\n", __func__);
+				R_LOG_ERROR ("%s: Invalid repeat", __func__);
 				return -1;
 			}
 			ctx->flags |= DUP;
@@ -123,9 +123,8 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 		case '-':
 			if (!(ctx->flags & HEADER)) {
 				/* TODO: Handle acks/nacks */
-				if (g->server_debug && !g->no_ack) {
-					eprintf ("[received '%c' (0x%x)]\n", cur,
-						 (int) cur);
+				if (!g->no_ack) {
+					R_LOG_DEBUG ("[received '%c' (0x%x)]", cur, (int) cur);
 				}
 				break;
 			}
@@ -142,7 +141,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 }
 
 int read_packet(libgdbr_t *g, bool vcont) {
-	r_return_val_if_fail (g, -1);
+	R_RETURN_VAL_IF_FAIL (g, -1);
 	struct parse_ctx ctx = {0};
 	int ret, i;
 	g->data_len = 0;
@@ -150,10 +149,8 @@ int read_packet(libgdbr_t *g, bool vcont) {
 		if (unpack (g, &ctx, g->read_len) == 0) {
 			// TODO: Evaluate if partial packets are clubbed
 			g->data[g->data_len] = '\0';
-			if (g->server_debug) {
-				eprintf ("getpkt (\"%s\");  %s\n", g->data,
-					 g->no_ack ? "[no ack sent]" : "[sending ack]");
-			}
+			R_LOG_DEBUG ("getpkt (\"%s\");  %s", g->data,
+					g->no_ack ? "[no ack sent]" : "[sending ack]");
 			return 0;
 		}
 	}
@@ -168,20 +165,18 @@ int read_packet(libgdbr_t *g, bool vcont) {
 		}
 		int sz = r_socket_read (g->sock, (void *)g->read_buff, g->read_max - 1);
 		if (sz <= 0) {
-			eprintf ("%s: read failed\n", __func__);
+			R_LOG_ERROR ("%s: read failed", __func__);
 			return -1;
 		}
 		ret = unpack (g, &ctx, sz);
 		if (ret < 0) {
-			eprintf ("%s: unpack failed\n", __func__);
+			R_LOG_ERROR ("%s: unpack failed", __func__);
 			return -1;
 		}
 		if (!ret) {
 			g->data[g->data_len] = '\0';
-			if (g->server_debug) {
-				eprintf ("getpkt (\"%s\");  %s\n", g->data,
-					 g->no_ack ? "[no ack sent]" : "[sending ack]");
-			}
+			R_LOG_DEBUG ("getpkt (\"%s\");  %s", g->data,
+					g->no_ack ? "[no ack sent]" : "[sending ack]");
 			return 0;
 		}
 	}
@@ -189,24 +184,22 @@ int read_packet(libgdbr_t *g, bool vcont) {
 }
 
 int send_packet(libgdbr_t *g) {
-	r_return_val_if_fail (g, -1);
-	if (g->server_debug) {
-		g->send_buff[g->send_len] = '\0';
-		eprintf ("putpkt (\"%s\");  %s\n", g->send_buff,
-			 g->no_ack ? "[noack mode]" : "[looking for ack]");
-	}
+	R_RETURN_VAL_IF_FAIL (g, -1);
+	g->send_buff[g->send_len] = '\0';
+	R_LOG_DEBUG ("putpkt (\"%s\");  %s", g->send_buff,
+			g->no_ack ? "[noack mode]" : "[looking for ack]");
 	return r_socket_write (g->sock, g->send_buff, g->send_len);
 }
 
 int pack(libgdbr_t *g, const char *msg) {
-	r_return_val_if_fail (g && msg, -1);
+	R_RETURN_VAL_IF_FAIL (g && msg, -1);
 	int run_len;
 	size_t msg_len;
 	const char *src;
 	char prev;
 	msg_len = strlen (msg);
 	if (msg_len > g->send_max + 5) {
-		eprintf ("%s: message too long: %s", __func__, msg);
+		R_LOG_ERROR ("%s: message too long: %s", __func__, msg);
 		return -1;
 	}
 	if (!g->send_buff) {
@@ -219,7 +212,7 @@ int pack(libgdbr_t *g, const char *msg) {
 		if (*src == '#' || *src == '$' || *src == '}') {
 			msg_len += 1;
 			if (msg_len > g->send_max + 5) {
-				eprintf ("%s: message too long: %s", __func__, msg);
+				R_LOG_ERROR ("%s: message too long: %s", __func__, msg);
 				return -1;
 			}
 			g->send_buff[g->send_len++] = '}';

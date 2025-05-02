@@ -24,8 +24,14 @@ R_LIB_VERSION (r_magic);
 #undef R_API
 #define R_API
 
-R_API RMagic* r_magic_new(int flags) { return magic_open(flags); }
-R_API void r_magic_free(RMagic* m) { if(m) { magic_close(m); } }
+R_API RMagic* r_magic_new(int flags) {
+	return magic_open (flags);
+}
+R_API void r_magic_free(RMagic* m) {
+	if (m) {
+		magic_close (m);
+	}
+}
 R_API const char *r_magic_file(RMagic* m, const char *f) { return magic_file(m, f); }
 R_API const char *r_magic_descriptor(RMagic* m, int fd) { return magic_descriptor(m, fd); }
 R_API const char *r_magic_buffer(RMagic* m, const void *b, size_t s) { return magic_buffer(m, b, s); }
@@ -59,7 +65,7 @@ static void free_mlist(struct mlist *mlist) {
 	for (ml = mlist->next; ml != mlist;) {
 		struct mlist *next = ml->next;
 		struct r_magic *mg = ml->magic;
-		file_delmagic (mg, ml->mapped, ml->nmagic);
+		__magic_file_delmagic (mg, ml->mapped, ml->nmagic);
 		free (ml);
 		ml = next;
 	}
@@ -69,21 +75,21 @@ static void free_mlist(struct mlist *mlist) {
 static int info_from_stat(RMagic *ms, unsigned short md) {
 	/* We cannot open it, but we were able to stat it. */
 	if (md & 0222) {
-		if (file_printf (ms, "writable, ") == -1) {
+		if (__magic_file_printf (ms, "writable, ") == -1) {
 			return -1;
 		}
 	}
 	if (md & 0111) {
-		if (file_printf (ms, "executable, ") == -1) {
+		if (__magic_file_printf (ms, "executable, ") == -1) {
 			return -1;
 		}
 	}
 	if (S_ISREG (md)) {
-		if (file_printf (ms, "regular file, ") == -1) {
+		if (__magic_file_printf (ms, "regular file, ") == -1) {
 			return -1;
 		}
 	}
-	if (file_printf (ms, "no read permission") == -1) {
+	if (__magic_file_printf (ms, "no read permission") == -1) {
 		return -1;
 	}
 	return 0;
@@ -111,11 +117,11 @@ static const char *file_or_fd(RMagic *ms, const char *inname, int fd) {
 		return NULL;
 	}
 
-	if (file_reset (ms) == -1) {
+	if (__magic_file_reset (ms) == -1) {
 		goto done;
 	}
 
-	switch (file_fsmagic (ms, inname, &sb)) {
+	switch (__magic_file_fsmagic (ms, inname, &sb)) {
 	case -1: goto done;		/* error */
 	case 0:	break;			/* nothing found */
 	default: rv = 0; goto done;	/* matched it and printed type */
@@ -129,7 +135,7 @@ static const char *file_or_fd(RMagic *ms, const char *inname, int fd) {
 		int flags = O_RDONLY | O_BINARY;
 
 		if (stat (inname, &sb) == 0 && S_ISFIFO (sb.st_mode)) {
-#if O_NONBLOCK
+#ifdef O_NONBLOCK
 			flags |= O_NONBLOCK;
 #endif
 			ispipe = true;
@@ -178,7 +184,7 @@ static const char *file_or_fd(RMagic *ms, const char *inname, int fd) {
 	} else {
 #endif
 		if ((nbytes = read(fd, (char *)buf, HOWMANY)) == -1) {
-			file_error(ms, errno, "cannot read `%s'", inname);
+			__magic_file_error(ms, errno, "cannot read `%s'", inname);
 			goto done;
 		}
 #ifdef O_NONBLOCK
@@ -186,17 +192,19 @@ static const char *file_or_fd(RMagic *ms, const char *inname, int fd) {
 #endif
 
 	(void)memset (buf + nbytes, 0, SLOP); /* NUL terminate */
-	if (file_buffer (ms, fd, inname, buf, (size_t)nbytes) == -1) {
+	if (__magic_file_buffer (ms, fd, inname, buf, (size_t)nbytes) == -1) {
 		goto done;
 	}
 	rv = 0;
 done:
 	free (buf);
 	close_and_restore (ms, inname, fd, &sb);
-	return rv == 0 ? file_getbuffer(ms) : NULL;
+	return rv == 0 ? __magic_file_getbuffer(ms) : NULL;
 }
 
 /* API */
+
+extern void init_file_tables(RMagic *m);
 
 // TODO: reinitialize all the time
 R_API RMagic* r_magic_new(int flags) {
@@ -204,6 +212,7 @@ R_API RMagic* r_magic_new(int flags) {
 	if (!ms) {
 		return NULL;
 	}
+	init_file_tables (ms);
 	r_magic_setflags (ms, flags);
 	ms->o.buf = ms->o.pbuf = NULL;
 	ms->c.li = malloc ((ms->c.len = 10) * sizeof (*ms->c.li));
@@ -211,7 +220,7 @@ R_API RMagic* r_magic_new(int flags) {
 		free (ms);
 		return NULL;
 	}
-	file_reset (ms);
+	__magic_file_reset (ms);
 	ms->mlist = NULL;
 	ms->file = "unknown";
 	ms->line = 0;
@@ -230,7 +239,7 @@ R_API void r_magic_free(RMagic *ms) {
 
 R_API bool r_magic_load_buffer(RMagic* ms, const ut8 *magicdata, size_t magicdata_size) {
 	if (magicdata_size > 0 && *magicdata == '#') {
-		struct mlist *ml = file_apprentice (ms, (const char *)magicdata, magicdata_size, FILE_LOAD);
+		struct mlist *ml = __magic_file_apprentice (ms, (const char *)magicdata, magicdata_size, FILE_LOAD);
 		if (ml) {
 			free_mlist (ms->mlist);
 			ms->mlist = ml;
@@ -243,7 +252,7 @@ R_API bool r_magic_load_buffer(RMagic* ms, const ut8 *magicdata, size_t magicdat
 }
 
 R_API bool r_magic_load(RMagic* ms, const char *magicfile) {
-	struct mlist *ml = file_apprentice (ms, magicfile, strlen (magicfile), FILE_LOAD);
+	struct mlist *ml = __magic_file_apprentice (ms, magicfile, strlen (magicfile), FILE_LOAD);
 	if (ml) {
 		free_mlist (ms->mlist);
 		ms->mlist = ml;
@@ -253,13 +262,13 @@ R_API bool r_magic_load(RMagic* ms, const char *magicfile) {
 }
 
 R_API bool r_magic_compile(RMagic *ms, const char *magicfile) {
-	struct mlist *ml = file_apprentice (ms, magicfile, strlen (magicfile), FILE_COMPILE);
+	struct mlist *ml = __magic_file_apprentice (ms, magicfile, strlen (magicfile), FILE_COMPILE);
 	free_mlist (ml);
 	return ml;
 }
 
 R_API bool r_magic_check(RMagic *ms, const char *magicfile) {
-	struct mlist *ml = file_apprentice (ms, magicfile, strlen (magicfile), FILE_CHECK);
+	struct mlist *ml = __magic_file_apprentice (ms, magicfile, strlen (magicfile), FILE_CHECK);
 	free_mlist (ml);
 	return ml;
 }
@@ -273,13 +282,13 @@ R_API const char *r_magic_file(RMagic *ms, const char *inname) {
 }
 
 R_API const char *r_magic_buffer(RMagic *ms, const void *buf, size_t nb) {
-	if (file_reset (ms) == -1) {
+	if (__magic_file_reset (ms) == -1) {
 		return NULL;
 	}
-	if (file_buffer (ms, -1, NULL, buf, nb) == -1) {
+	if (__magic_file_buffer (ms, -1, NULL, buf, nb) == -1) {
 		return NULL;
 	}
-	return file_getbuffer (ms);
+	return __magic_file_getbuffer (ms);
 }
 
 R_API const char *r_magic_error(RMagic *ms) {

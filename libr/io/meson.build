@@ -7,18 +7,22 @@ r_io_sources = [
   'io_cache.c',
   'io_desc.c',
   'io_plugin.c',
+  'io_stream.c',
   'io_bank.c',
   'io_submap.c',
   'ioutils.c',
   'undo.c',
   'p_cache.c',
   'p/io_ar.c',
+  'p/io_reg.c',
   'p/io_fd.c',
   'p/io_bfdbg.c',
   'p/io_bochs.c',
   'p/io_socket.c',
   'p/io_debug.c',
   'p/io_default.c',
+  'p/io_sysgdb.c',
+  'p/io_dsc.c',
   'p/io_gdb.c',
   'p/io_gprobe.c',
   'p/io_gzip.c',
@@ -26,6 +30,8 @@ r_io_sources = [
   'p/io_ihex.c',
   'p/io_mach.c',
   'p/io_malloc.c',
+  'p/io_cyclic.c',
+  'p/io_xattr.c',
   'p/io_xalz.c',
   'p/io_mmap.c',
   'p/io_null.c',
@@ -41,6 +47,7 @@ r_io_sources = [
   'p/io_shm.c',
   'p/io_sparse.c',
   'p/io_tcpslurp.c',
+  'p/io_uf2.c',
   'p/io_winkd.c',
   'p/io_winedbg.c',
   'p/io_zip.c',
@@ -55,10 +62,11 @@ if host_machine.system() == 'windows'
   ]
 endif
 
-
 r_io_deps = [
   r_util_dep,
   r_socket_dep,
+  r_cons_dep,
+  r_crypto_dep,
   bochs_dep,
   gdb_dep,
   winkd_dep,
@@ -67,6 +75,12 @@ r_io_deps = [
   ar_dep,
   pth
 ]
+
+if host_machine.system() == 'haiku'
+  r_io_deps += [
+    cc.find_library('network')
+  ]
+endif
 
 if host_machine.system() == 'linux' or host_machine.system() == 'android'
   r_io_sources += [
@@ -83,7 +97,7 @@ endif
 
 r_io = library('r_io', r_io_sources,
   include_directories: platform_inc,
-  link_with: [r_util, r_socket],
+  link_with: [r_util, r_cons, r_crypto, r_socket],
   dependencies: r_io_deps,
   c_args: library_cflags,
   install: true,
@@ -92,12 +106,14 @@ r_io = library('r_io', r_io_sources,
   soversion: r2_libversion
 )
 
-r_io_dep = declare_dependency(link_with: r_io,
+r_io_dep = declare_dependency(link_with: [r_io, r_crypto],
   include_directories: platform_inc)
 
 if get_option('blob')
 r_io_static_deps = [
   r_util_static_dep,
+  r_cons_static_dep,
+  r_crypto_static_dep,
   r_socket_static_dep,
   winkd_static_dep,
   bochs_static_dep,
@@ -110,7 +126,7 @@ r_io_static_deps = [
 
 r_io_static = static_library('r_io_static', r_io_sources,
   include_directories: platform_inc,
-  link_with: [r_util_static, r_socket_static],
+  link_with: [r_util_static, r_crypto_static, r_cons_static, r_socket_static],
   dependencies: r_io_static_deps,
   c_args: library_cflags,
   install: true,
@@ -129,6 +145,8 @@ pkgconfig_mod.generate(r_io,
   libraries: pkgcfg_sanitize_libs,
   requires: [
     'r_util',
+    'r_cons',
+    'r_crypto',
     'r_socket'
   ],
   description: 'radare foundation libraries'

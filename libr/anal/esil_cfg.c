@@ -1,13 +1,13 @@
-/* radare2 - LGPL - Copyright 2019 - condret */
+/* radare2 - LGPL - Copyright 2019 - 2024 - condret */
 
 #include <r_types.h>
 #include <r_util.h>
 #include <r_anal.h>
 
-/*	shared internal state of the subgraph generating functions	*/
+/* shared internal state of the subgraph generating functions */
 
 typedef struct esil_cfg_generator_t {
-	RAnalEsil *esil;
+	REsil *esil;
 	union {
 		RStack *ifelse;
 		RStack *vals;
@@ -52,17 +52,15 @@ typedef struct esil_value_t {
 	EsilValType type;
 } EsilVal;
 
-/*	HELPERS 	*/
+/* HELPERS */
 
+// r_str_tok () ?
 static char *condrets_strtok(char *str, const char tok) {
 	if (!str) {
 		return NULL;
 	}
 	ut32 i = 0;
-	while (1 == 1) {
-		if (!str[i]) {
-			break;
-		}
+	while (str[i]) {
 		if (str[i] == tok) {
 			str[i] = '\0';
 			return &str[i + 1];
@@ -72,8 +70,8 @@ static char *condrets_strtok(char *str, const char tok) {
 	return NULL;
 }
 
-RAnalEsilOp *esil_get_op (RAnalEsil *esil, const char *op) {
-	r_return_val_if_fail (R_STR_ISNOTEMPTY (op) && esil && esil->ops, NULL);
+REsilOp *esil_get_op (REsil *esil, const char *op) {
+	R_RETURN_VAL_IF_FAIL (R_STR_ISNOTEMPTY (op) && esil && esil->ops, NULL);
 	return ht_pp_find (esil->ops, op, NULL);
 }
 
@@ -159,7 +157,7 @@ void _handle_if_enter (EsilCfgGen *gen, ut32 id, const bool has_next) {
 	EsilCfgScopeCookie *cookie = R_NEW0 (EsilCfgScopeCookie);
 
 	// get current bb
-	//	RAnalEsilBB *bb = (RAnalEsilBB *)gen->cur->data;
+	// RAnalEsilBB *bb = (RAnalEsilBB *)gen->cur->data;
 
 	// create if-enter-bb
 	RAnalEsilBB *entered_bb = R_NEW0 (RAnalEsilBB);
@@ -264,9 +262,9 @@ bool _round_0_cb (void *user, void *data, ut32 id) {
 	EsilCfgGen *gen = (EsilCfgGen *)user;
 	char *atom = (char *)data;
 	RAnalEsilBB *bb = (RAnalEsilBB *)gen->cur->data;
-	RAnalEsilOp *op = esil_get_op (gen->esil, atom);
+	REsilOp *op = esil_get_op (gen->esil, atom);
 	bb->last.idx = (ut16)id;
-	if (op && op->type == R_ANAL_ESIL_OP_TYPE_CONTROL_FLOW) {
+	if (op && op->type == R_ESIL_OP_TYPE_CONTROL_FLOW) {
 		_handle_control_flow_ifelsefi (gen, atom, id);
 	}
 	return true;
@@ -320,7 +318,7 @@ void _handle_goto (EsilCfgGen *gen, ut32 idx) {
 	// bb->last.idx is the GOTO operation itself, we do not reach this in the loop
 	for (id = bb->first.idx; id < bb->last.idx; id++) {
 		char *atom = (char *)r_id_storage_get (gen->atoms, (ut32)id);
-		RAnalEsilOp *op = esil_get_op (gen->esil, atom);
+		REsilOp *op = esil_get_op (gen->esil, atom);
 		if (op) {
 			ut32 j;
 			for (j = 0; j < op->pop; j++) {
@@ -379,8 +377,8 @@ beach:
 bool _round_1_cb(void *user, void *data, ut32 id) {
 	EsilCfgGen *gen = (EsilCfgGen *)user;
 	char *atom = (char *)data;
-	RAnalEsilOp *op = esil_get_op (gen->esil, atom);
-	if (op && op->type == R_ANAL_ESIL_OP_TYPE_CONTROL_FLOW) {
+	REsilOp *op = esil_get_op (gen->esil, atom);
+	if (op && op->type == R_ESIL_OP_TYPE_CONTROL_FLOW) {
 		if (!strcmp ("BREAK", atom)) {
 			_handle_break (gen, id);
 		}
@@ -394,7 +392,7 @@ bool _round_1_cb(void *user, void *data, ut32 id) {
 void _round_2_cb (RGraphNode *n, RGraphVisitor *vi) {
 	RAnalEsilBB *bb = (RAnalEsilBB *)n->data;
 	EsilCfgGen *gen = (EsilCfgGen *)vi->data;
-	RStrBuf *buf = r_strbuf_new ((char *)r_id_storage_get (gen->atoms, bb->first.idx));
+	RStrBuf *buf = r_strbuf_new (n == gen->cfg->end ? NULL: (char *)r_id_storage_get (gen->atoms, bb->first.idx));
 	r_strbuf_append (buf, ",");
 	ut32 id;
 	for (id = bb->first.idx + 1; id <= bb->last.idx; id++) {
@@ -499,7 +497,7 @@ static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal, RIDStorage *at
 	return cfg;
 }
 
-R_API RAnalEsilCFG *r_anal_esil_cfg_new(void) {
+R_IPI RAnalEsilCFG *r_anal_esil_cfg_new(void) {
 	RAnalEsilCFG *cf = R_NEW0 (RAnalEsilCFG);
 	if (cf) {
 		RAnalEsilBB *p = R_NEW0 (RAnalEsilBB);
@@ -540,7 +538,8 @@ R_API RAnalEsilCFG *r_anal_esil_cfg_new(void) {
 // this little function takes a cfg, an offset and an esil expression
 // concatinates to already existing graph
 R_API RAnalEsilCFG *r_anal_esil_cfg_expr(RAnalEsilCFG *cfg, RAnal *anal, const ut64 off, char *expr) {
-	if (!anal || !anal->esil) {
+	R_RETURN_VAL_IF_FAIL (expr && anal, NULL);
+	if (!anal->esil) {
 		return NULL;
 	}
 	RStack *stack = r_stack_new (4);
@@ -572,8 +571,9 @@ R_API RAnalEsilCFG *r_anal_esil_cfg_expr(RAnalEsilCFG *cfg, RAnal *anal, const u
 	return ret;
 }
 
-R_API RAnalEsilCFG *r_anal_esil_cfg_op(RAnalEsilCFG *cfg, RAnal *anal, RAnalOp *op) {
-	if (!op || !anal || !anal->reg || !anal->esil) {
+R_API RAnalEsilCFG *r_anal_esil_cfg_op(R_NULLABLE RAnalEsilCFG *cfg, RAnal *anal, RAnalOp *op) {
+	R_RETURN_VAL_IF_FAIL (anal && op, NULL);
+	if (!anal->reg || !anal->esil) {
 		return NULL;
 	}
 	RAnalEsilBB *glue_bb = R_NEW0 (RAnalEsilBB);
@@ -585,7 +585,7 @@ R_API RAnalEsilCFG *r_anal_esil_cfg_op(RAnalEsilCFG *cfg, RAnal *anal, RAnalOp *
 		free (glue_bb);
 		return NULL;
 	}
-	const char *pc = r_reg_get_name (anal->reg, R_REG_NAME_PC);
+	const char *pc = r_reg_alias_getname (anal->reg, R_REG_ALIAS_PC);
 	r_strbuf_setf (glue, "0x%" PFMT64x ",%s,:=,", op->addr + op->size, pc);
 	glue_bb->expr = strdup (r_strbuf_get (glue));
 	r_strbuf_free (glue);
@@ -632,7 +632,8 @@ static void merge_2_blocks(RAnalEsilCFG *cfg, RGraphNode *node, RGraphNode *bloc
 	}
 	RAnalEsilBB *block_bb, *node_bb = (RAnalEsilBB *)node->data;
 	block_bb = (RAnalEsilBB *)block->data;
-	if ((block_bb->enter == R_ANAL_ESIL_BLOCK_ENTER_TRUE) || (block_bb->enter == R_ANAL_ESIL_BLOCK_ENTER_FALSE)) {
+	if ((block_bb->enter == R_ANAL_ESIL_BLOCK_ENTER_TRUE) ||
+		(block_bb->enter == R_ANAL_ESIL_BLOCK_ENTER_FALSE)) {
 		node_bb->enter = block_bb->enter;
 	} else {
 		node_bb->enter = R_ANAL_ESIL_BLOCK_ENTER_NORMAL;
@@ -658,10 +659,11 @@ R_API void r_anal_esil_cfg_merge_blocks(RAnalEsilCFG *cfg) {
 	r_list_foreach_safe (cfg->g->nodes, iter, ator, node) {
 		if (r_list_length (node->in_nodes) == 1) {
 			RAnalEsilBB *bb = (RAnalEsilBB *)node->data;
-			RGraphNode *top = (RGraphNode *)r_list_get_top (node->out_nodes);
+			RGraphNode *top = (RGraphNode *)r_list_last (node->out_nodes);
 			// segfaults here ?
-			if (!(top && bb->enter == R_ANAL_ESIL_BLOCK_ENTER_GLUE && (r_list_length (top->in_nodes) > 1))) {
-				RGraphNode *block = (RGraphNode *)r_list_get_top (node->in_nodes);
+			if (!(top && bb->enter == R_ANAL_ESIL_BLOCK_ENTER_GLUE &&
+				(r_list_length (top->in_nodes) > 1))) {
+				RGraphNode *block = (RGraphNode *)r_list_last (node->in_nodes);
 				if (r_list_length (block->out_nodes) == 1) {
 					merge_2_blocks (cfg, node, block);
 				}

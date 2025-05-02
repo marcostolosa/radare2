@@ -22,7 +22,7 @@ extern "C" {
  * Paths pointing into the webroot are an exception: For reaching the webroot, .. and absolute
  * path are ok.
  */
-#if __WINDOWS__
+#if R2__WINDOWS__
 R_API HANDLE r_sandbox_opendir(const char *path, WIN32_FIND_DATAW *entry);
 #else
 #include <dirent.h>
@@ -47,7 +47,9 @@ R_API int r_sandbox_kill(int pid, int sig);
 #define R_SANDBOX_GRAIN_DISK (2)
 #define R_SANDBOX_GRAIN_FILES (4)
 #define R_SANDBOX_GRAIN_EXEC (8)
-#define R_SANDBOX_GRAIN_ALL (8|4|2|1)
+#define R_SANDBOX_GRAIN_ENVIRON (16)
+#define R_SANDBOX_GRAIN_ALL (16|8|4|2|1)
+
 R_API bool r_sandbox_enable(bool e);
 R_API bool r_sandbox_disable(bool e);
 R_API int r_sandbox_grain(int mask);

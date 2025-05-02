@@ -21,10 +21,13 @@ enum {
 	R_SEARCH_STRING,
 	R_SEARCH_XREFS,
 	R_SEARCH_AES,
-	R_SEARCH_PRIV_KEY,
+	R_SEARCH_SM4,
+	R_SEARCH_ASN1_PRIV_KEY,
+	R_SEARCH_RAW_PRIV_KEY,
 	R_SEARCH_DELTAKEY,
 	R_SEARCH_MAGIC,
 	R_SEARCH_RABIN_KARP,
+	R_SEARCH_TIRE,
 	R_SEARCH_LAST
 };
 
@@ -40,10 +43,12 @@ typedef struct r_search_keyword_t {
 	ut32 binmask_length;
 	void *data;
 	int count;
-	int kwidx;
-	int icase; // ignore case
+	int kwidx; // index
+	bool icase; // ignore case
 	int type;
 	ut64 last; // last hit hint
+	int align; // per-keyword alignment rule
+	// XXX string search dont have a way to report the kw hit size
 } RSearchKeyword;
 
 typedef struct r_search_uds_t {
@@ -55,6 +60,9 @@ typedef struct r_search_uds_t {
 typedef struct r_search_hit_t {
 	RSearchKeyword *kw;
 	ut64 addr;
+#if R2_590
+	size_t size;
+#endif
 } RSearchHit;
 
 typedef int (*RSearchCallback) (R_NULLABLE RSearchKeyword *kw, void *user, ut64 where); // TODO: depricate, b/c lacks match len
@@ -69,8 +77,8 @@ typedef struct r_search_t {
 	int mode;
 	int longest; // iff > 0, longest element in kws
 	ut32 pattern_size;
-	ut32 string_min; // max length of strings for R_SEARCH_STRING
-	ut32 string_max; // min length of strings for R_SEARCH_STRING
+	ut32 string_min;
+	ut32 string_max;
 	void *data; // data used by search algorithm
 	RSearchDFree *datafree;
 	void *user; // user data passed to callback
@@ -108,13 +116,14 @@ R_API int r_search_maps(RSearch *s, RList /*<<RIOMap>>*/ *maps);
 
 R_API void r_search_keyword_free(RSearchKeyword *kw);
 R_API RSearchKeyword* r_search_keyword_new(const ut8 *kw, int kwlen, const ut8 *bm, int bmlen, const char *data);
-R_API RSearchKeyword* r_search_keyword_new_str(const char *kw, const char *bm, const char *data, int icase);
-R_API RSearchKeyword* r_search_keyword_new_wide(const char *kw, const char *bm, const char *data, int icase);
+R_API RSearchKeyword* r_search_keyword_new_str(const char *kw, const char *bm, const char *data, bool icase);
+R_API RSearchKeyword* r_search_keyword_new_hexstr(const char *xs, const char *data);
+R_API RSearchKeyword* r_search_keyword_new_wide(const char *kw, const char *bm, const char *data, bool icase, bool be);
 R_API RSearchKeyword* r_search_keyword_new_hex(const char *kwstr, const char *bmstr, const char *data);
 R_API RSearchKeyword* r_search_keyword_new_hexmask(const char *kwstr, const char *data);
 R_API RSearchKeyword *r_search_keyword_new_regexp(const char *str, const char *data);
 
-R_API int r_search_kw_add(RSearch *s, RSearchKeyword *kw);
+R_API bool r_search_kw_add(RSearch *s, RSearchKeyword *kw);
 R_API void r_search_reset(RSearch *s, int mode);
 R_API void r_search_kw_reset(RSearch *s);
 R_API void r_search_string_prepare_backward(RSearch *s);
@@ -128,10 +137,10 @@ R_API int r_search_range_reset(RSearch *s);
 R_API int r_search_hit_new(RSearch *s, RSearchKeyword *kw, ut64 addr);
 R_API void r_search_set_distance(RSearch *s, int dist);
 R_API int r_search_strings(RSearch *s, ut32 min, ut32 max);
-R_API int r_search_set_string_limits(RSearch *s, ut32 min, ut32 max); // WTF dupped?
+R_API bool r_search_set_string_limits(RSearch *s, ut32 min, ut32 max); // WTF dupped?
 R_API void r_search_set_callback(RSearch *s, RSearchCallback(callback), void *user); // TODO: depricate
 R_API void r_search_set_read_cb(RSearch *s, RSearchRCb cb, void *user);
-R_API int r_search_begin(RSearch *s);
+R_API void r_search_begin(RSearch *s);
 
 /* pattern search */
 R_API void r_search_pattern_size(RSearch *s, int size);

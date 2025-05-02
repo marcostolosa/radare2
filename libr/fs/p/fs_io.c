@@ -1,11 +1,11 @@
-/* radare - LGPL - Copyright 2017-2019 - pancake */
+/* radare - LGPL - Copyright 2017-2025 - pancake */
 
 #include <r_fs.h>
 #include <r_lib.h>
 #include <sys/stat.h>
 
 static char *enbase(const char *p) {
-	char *enc_path = r_base64_encode_dyn (p, -1);
+	char *enc_path = r_base64_encode_dyn ((const ut8*)p, -1);
 	char *res = r_str_newf ("base64:%s", enc_path);
 	free (enc_path);
 	return res;
@@ -44,7 +44,7 @@ static int fs_io_read(RFSFile *file, ut64 addr, int len) {
 	if (!abs_path) {
 		return -1;
 	}
-	
+
 	char *enc_uri = enbase (abs_path);
 	free (abs_path);
 	char *cmd = r_str_newf ("mg %s 0x%08"PFMT64x" %d", enc_uri, addr, len);
@@ -83,13 +83,12 @@ static void fs_io_close(RFSFile *file) {
 
 static void append_file(RList *list, const char *name, int type, int time, ut64 size) {
 	RFSFile *fsf = r_fs_file_new (NULL, name);
-	if (!fsf) {
-		return;
+	if (fsf) {
+		fsf->type = type;
+		fsf->time = time;
+		fsf->size = size;
+		r_list_append (list, fsf);
 	}
-	fsf->type = type;
-	fsf->time = time;
-	fsf->size = size;
-	r_list_append (list, fsf);
 }
 
 static RList *fs_io_dir(RFSRoot *root, const char *path, int view /*ignored*/) {
@@ -125,7 +124,7 @@ static RList *fs_io_dir(RFSRoot *root, const char *path, int view /*ignored*/) {
 	return list;
 }
 
-static int fs_io_mount(RFSRoot *root) {
+static bool fs_io_mount(RFSRoot *root) {
 	root->ptr = NULL;
 	return true;
 }
@@ -135,9 +134,11 @@ static void fs_io_umount(RFSRoot *root) {
 }
 
 RFSPlugin r_fs_plugin_io = {
-	.name = "io",
-	.desc = "r_io based filesystem",
-	.license = "MIT",
+	.meta = {
+		.name = "io",
+		.desc = "r_io based filesystem",
+		.license = "MIT",
+	},
 	.open = fs_io_open,
 	.read = fs_io_read,
 	.close = fs_io_close,

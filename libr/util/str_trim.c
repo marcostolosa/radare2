@@ -1,18 +1,13 @@
 /* radare - LGPL - Copyright 2007-2022 - pancake */
 
-#include <r_bin.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include <stdarg.h>
+#include <r_util.h>
 
 // TODO: simplify this horrible loop
 R_API void r_str_trim_path(char *s) {
-	r_return_if_fail (s);
+	R_RETURN_IF_FAIL (s);
 	char *src, *dst, *p;
 	int i = 0;
-	if (!s || !*s) {
+	if (R_STR_ISEMPTY (s)) {
 		return;
 	}
 	dst = src = s + 1;
@@ -72,8 +67,39 @@ R_API char* r_str_trim_lines(char *str) {
 	return r_strbuf_drain (sb);
 }
 
+R_API void r_str_trim_emptylines(char *str) {
+	r_str_trim_tail (str);
+	char *r = str;
+	while (*r) {
+		if (*r == '\n') {
+			r++;
+			// skip empty lines
+			char *nl = r;
+			while (*r && *r != '\n') {
+				if (!isspace (*r)) {
+					break;
+				}
+				r++;
+			}
+			if (*r == '\n') {
+				r_str_cpy (nl, r + 1);
+			}
+		}
+		if (!*r) {
+			break;
+		}
+		r++;
+	}
+}
+
 R_API char *r_str_trim_dup(const char *str) {
 	char *a = strdup (str);
+	r_str_trim (a);
+	return a;
+}
+
+R_API char *r_str_trim_ndup(const char *str, size_t n) {
+	char *a = r_str_ndup (str, n);
 	r_str_trim (a);
 	return a;
 }
@@ -81,7 +107,7 @@ R_API char *r_str_trim_dup(const char *str) {
 // Returns a pointer to the first non-whitespace character of str.
 // TODO: Find a better name: to r_str_trim_head_ro(), r_str_skip_head or so
 R_API const char *r_str_trim_head_ro(const char *str) {
-	r_return_val_if_fail (str, NULL);
+	R_RETURN_VAL_IF_FAIL (str, NULL);
 	for (; *str && IS_WHITECHAR (*str); str++) {
 		;
 	}
@@ -90,7 +116,7 @@ R_API const char *r_str_trim_head_ro(const char *str) {
 
 // TODO: find better name
 R_API const char *r_str_trim_head_wp(const char *str) {
-	r_return_val_if_fail (str, NULL);
+	R_RETURN_VAL_IF_FAIL (str, NULL);
 	for (; *str && !IS_WHITESPACE (*str); str++) {
 		;
 	}
@@ -99,7 +125,7 @@ R_API const char *r_str_trim_head_wp(const char *str) {
 
 // remove in-place spaces from the head of the string.
 R_API void r_str_trim_head(char *str) {
-	r_return_if_fail (str);
+	R_RETURN_IF_FAIL (str);
 	char *p = (char *)r_str_trim_head_ro (str);
 	if (p && p != str) {
 		memmove (str, p, strlen (p) + 1);
@@ -120,7 +146,7 @@ static bool is_escapable(char ch) {
 }
 
 R_API void r_str_trim_args(char *str) {
-	r_return_if_fail (str);
+	R_RETURN_IF_FAIL (str);
 	char q = 0;
 	bool e = false;
 	char *s = str;
@@ -173,7 +199,7 @@ R_API void r_str_trim_args(char *str) {
 // Remove whitespace chars from the tail of the string, replacing them with
 // null bytes. The string is changed in-place.
 R_API void r_str_trim_tail(char *str) {
-	r_return_if_fail (str);
+	R_RETURN_IF_FAIL (str);
 	size_t length = strlen (str);
 	while (length-- > 0) {
 		if (IS_WHITECHAR (str[length])) {
@@ -187,8 +213,32 @@ R_API void r_str_trim_tail(char *str) {
 // Removes spaces from the head of the string, and zeros out whitespaces from
 // the tail of the string. The string is changed in place.
 R_API void r_str_trim(char *str) {
-	r_str_trim_head (str);
-	r_str_trim_tail (str);
+	R_RETURN_IF_FAIL (str);
+	r_str_ntrim (str, strlen (str));
+}
+
+R_API int r_str_ntrim(char *str, int length) {
+	R_RETURN_VAL_IF_FAIL (str && length >= 0, -1);
+	// r_str_trim_head (str);
+	char *p = str;
+	for (; *p && IS_WHITECHAR (*p) && length > 0; p++) {
+		length--;
+	}
+	if (p != str && length > 0) {
+		memmove (str, p, length + 1);
+	}
+	// r_str_trim_tail (str);
+	while (length > 0) {
+		const int newlength = length - 1;
+		if (IS_WHITECHAR (str[newlength])) {
+			str[newlength] = '\0';
+		} else {
+			break;
+		}
+		length = newlength;
+	}
+	str[length] = 0;
+	return length;
 }
 
 // no copy, like trim_head+tail but with trim_head_ro, beware heap issues
@@ -201,7 +251,7 @@ R_API char *r_str_trim_nc(char *str) {
 
 /* supposed to chop a string with ansi controls to max length of n. */
 R_API int r_str_ansi_trim(char *str, int str_len, int n) {
-	r_return_val_if_fail (str, 0);
+	R_RETURN_VAL_IF_FAIL (str, 0);
 	char ch, ch2;
 	int back = 0, i = 0, len = 0;
 	/* simple case - no need to cut */
@@ -223,7 +273,7 @@ R_API int r_str_ansi_trim(char *str, int str_len, int n) {
 					i += 18;
 				}
 			} else if (ch2 == '[') {
-				for (++i; (i < str_len) && str[i] && str[i] != 'J' && str[i] != 'm' && str[i] != 'H';
+				for (i++; (i < str_len) && str[i] && str[i] != 'J' && str[i] != 'm' && str[i] != 'H';
 					i++) {
 					;
 				}

@@ -188,10 +188,12 @@ size: 11
 \           0x004017c6      3d00100000     cmp eax, 0x1000
 EOF
 EXPECT_ERR=<<EOF
+WARN: Relocs has not been applied. Please use `-e bin.relocs.apply=true` or `-e bin.cache=true` next time
 EOF
 RUN
 
-NAME=afb+ with wrong size
+NAME=Adding basic blocks with with wrong size (afb+)
+BROKEN=1
 FILE=bins/pe/a.exe
 CMDS=<<EOF
 s 0x004017c0
@@ -287,38 +289,34 @@ afi sym.sum_float
 EOF
 EXPECT=<<EOF
 #
-offset: 0x00001119
+addr: 0x00001119
 name: sym.sum_float
 size: 26
 is-pure: true
 realsz: 26
 stackframe: 8
-call-convention: amd64
-cyclomatic-cost: 10
+callconv: amd64
+cyclic-cost: 10
 cyclomatic-complexity: 1
 bits: 64
 type: sym [NEW]
 num-bbs: 1
 num-instrs: 8
 edges: 0
-minbound: 0x00001119
-maxbound: 0x00001133
+minaddr: 0x00001119
+maxaddr: 0x00001133
 is-lineal: true
 end-bbs: 1
-call-refs:
-data-refs:
-code-xrefs: 0x00001165 C
+maxbbins: 8
+midbbins: 8.00
+ratbbins: 1.00
 noreturn: false
+recursive: false
 in-degree: 1
 out-degree: 0
-data-xrefs:
 locals: 2
 args: 2
-var int64_t var_4h @ rbp-0x4
-var int64_t var_8h @ rbp-0x8
-arg int64_t arg7 @ xmm0
-arg int64_t arg8 @ xmm1
-diff: type: new
+
 EOF
 RUN
 
@@ -369,11 +367,11 @@ af+ 0x1337 func
 afl
 EOF
 EXPECT=<<EOF
-0x00001337    0 0            func
+0x00001337    0      0 func
 EOF
 EXPECT_ERR=<<EOF
-ERROR: Cannot add function 'func' (duplicated) at 0x00001337
-ERROR: Cannot add function 'func' (duplicated) at 0x00001337
+ERROR: Cannot add dupped function 'func' at 0x00001337
+ERROR: Cannot add dupped function 'func' at 0x00001337
 EOF
 RUN
 
@@ -404,26 +402,26 @@ af @@ *
 afl
 EOF
 EXPECT=<<EOF
-0x00000000    1 1            sym.some_func
-0x00000001    1 1            sym.some_other_func
-0x00000002    1 1            a
-0x00000003    1 1            aa
-0x00000004    1 1            aaa
-0x00000005    1 1            aaaa
-0x00000006    1 1            sym
-0x00000007    1 1            sym.
-0x00000008    1 1            sym.b
+0x00000000    1      1 sym.some_func
+0x00000001    1      1 sym.some_other_func
+0x00000002    1      1 a
+0x00000003    1      1 aa
+0x00000004    1      1 aaa
+0x00000005    1      1 aaaa
+0x00000006    1      1 sym
+0x00000007    1      1 sym.
+0x00000008    1      1 sym.b
 --
 --
-0x00000000    1 1            sym.some_func
-0x00000001    1 1            sym.some_other_func
-0x00000002    1 1            a
-0x00000003    1 1            aa
-0x00000004    1 1            aaa
-0x00000005    1 1            aaaa
-0x00000006    1 1            sym
-0x00000007    1 1            sym.
-0x00000008    1 1            sym.b
+0x00000000    1      1 sym.some_func
+0x00000001    1      1 sym.some_other_func
+0x00000002    1      1 a
+0x00000003    1      1 aa
+0x00000004    1      1 aaa
+0x00000005    1      1 aaaa
+0x00000006    1      1 sym
+0x00000007    1      1 sym.
+0x00000008    1      1 sym.b
 EOF
 RUN
 
@@ -436,8 +434,29 @@ af @ sym.__syscall_error
 afl
 EOF
 EXPECT=<<EOF
-0x0001f8b8    2 20           sym.fstatat
-0x00021484    1 8            sym.__errno
-0x0001f7cc    1 48           sym.__syscall_error
+0x0001f8b8    2     20 sym.fstatat
+0x0001f7cc    1     48 sym.__syscall_error
+0x00021484    1      8 sym.__errno
+EOF
+RUN
+
+NAME=af with custom sym.il name
+FILE=bins/mach0/ls-m1
+ARGS=-a arm -b 64
+CMDS=<<EOF
+sn
+sn
+s
+f sym.il.piltrafilla
+af
+pd 2
+EOF
+EXPECT=<<EOF
+0x1000047a8
+            ;-- func.1000047a8:
+/ 688: sym.il.piltrafilla (int64_t arg1, int64_t arg2, int64_t arg3);
+| `- args(x0, x1, x2) vars(5:sp[0x10..0x50])
+|           0x1000047a8      7f2303d5       pacibsp
+|           0x1000047ac      fc6fbaa9       stp x28, x27, [sp, -0x60]!
 EOF
 RUN

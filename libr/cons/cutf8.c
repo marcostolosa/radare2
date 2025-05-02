@@ -3,7 +3,7 @@
 // Copypasta from http://www.linuxquestions.org/questions/programming-9/get-cursor-position-in-c-947833/
 #include <r_cons.h>
 
-#if __UNIX__
+#if R2__UNIX__
 #include <stdio.h>
 #include <fcntl.h>
 #if HAVE_PTY
@@ -52,7 +52,7 @@ static inline int rd(const int fd) {
 /* Return a new file descriptor to the current TTY.
  */
 int current_tty(void) {
-#if __WINDOWS__
+#if R2__WINDOWS__
 	return 0;
 #elif __wasi__ || __EMSCRIPTEN__
 	return 0;
@@ -159,7 +159,7 @@ static int cursor_position(const int tty, int *const rowptr, int *const colptr) 
 		/* Parse rows. */
 		rows = 0;
 		res = rd (tty);
-		while (IS_DIGIT (res)) {
+		while (isdigit (res)) {
 			rows = 10 * rows + res - '0';
 			res = rd(tty);
 		}
@@ -174,7 +174,7 @@ static int cursor_position(const int tty, int *const rowptr, int *const colptr) 
 		if (res == -1) {
 			break;
 		}
-		while (IS_DIGIT(res)) {
+		while (isdigit(res)) {
 			cols = 10 * cols + res - '0';
 			res = rd(tty);
 		}
@@ -263,7 +263,7 @@ R_API bool r_cons_is_utf8(void) {
 }
 #else
 R_API bool r_cons_is_utf8(void) {
-#if __WINDOWS__
+#if R2__WINDOWS__
 	return GetConsoleOutputCP () == CP_UTF8;
 #else
 	return true;

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2008-2021 - pancake */
+/* radare - LGPL - Copyright 2008-2025 - pancake */
 
 #include <r_cons.h>
 #include <ctype.h>
@@ -6,20 +6,23 @@
 #define I(x) r_cons_singleton ()->x
 
 // Display the content of a file in the hud
-R_API char *r_cons_hud_file(const char *f) {
+R_API char *r_cons_hud_file(RCons *cons, const char *f) {
 	char *s = r_file_slurp (f, NULL);
 	if (s) {
-		char *ret = r_cons_hud_string (s);
+		r_str_ansi_strip (s);
+		char *ret = r_cons_hud_string (cons, s);
 		free (s);
 		return ret;
 	}
 	return NULL;
 }
 
+static char *r_cons_hud_line(RCons *cons, RList *list, const char *prompt);
+
 // Display a buffer in the hud (splitting it line-by-line and ignoring
 // the lines starting with # )
-R_API char *r_cons_hud_line_string(const char *s) {
-	if (!r_cons_is_interactive ()) {
+R_API char *r_cons_hud_line_string(RCons *cons, const char *s) {
+	if (!r_kons_is_interactive (cons)) {
 		R_LOG_ERROR ("Hud mode requires scr.interactive=true");
 		return NULL;
 	}
@@ -29,6 +32,7 @@ R_API char *r_cons_hud_line_string(const char *s) {
 	}
 	r_str_replace_ch (o, '\r', 0, true);
 	r_str_replace_ch (o, '\t', 0, true);
+	r_str_ansi_strip (o);
 	RList *fl = r_list_new ();
 	int i;
 	if (!fl) {
@@ -49,7 +53,7 @@ R_API char *r_cons_hud_line_string(const char *s) {
 			os = o + i + 1;
 		}
 	}
-	ret = r_cons_hud_line (fl, NULL);
+	ret = r_cons_hud_line (cons, fl, NULL);
 	free (o);
 	r_list_free (fl);
 	return ret;
@@ -57,8 +61,8 @@ R_API char *r_cons_hud_line_string(const char *s) {
 
 // Display a buffer in the hud (splitting it line-by-line and ignoring
 // the lines starting with # )
-R_API char *r_cons_hud_string(const char *s) {
-	if (!r_cons_is_interactive ()) {
+R_API char *r_cons_hud_string(RCons *cons, const char *s) {
+	if (!r_kons_is_interactive (cons)) {
 		R_LOG_ERROR ("Hud mode requires scr.interactive=true");
 		return NULL;
 	}
@@ -66,6 +70,7 @@ R_API char *r_cons_hud_string(const char *s) {
 	if (!o) {
 		return NULL;
 	}
+	r_str_ansi_strip (o);
 	r_str_replace_ch (o, '\r', 0, true);
 	r_str_replace_ch (o, '\t', 0, true);
 	RList *fl = r_list_new ();
@@ -88,17 +93,17 @@ R_API char *r_cons_hud_string(const char *s) {
 			os = o + i + 1;
 		}
 	}
-	ret = r_cons_hud (fl, NULL);
+	ret = r_cons_hud (cons, fl, NULL);
 	free (o);
 	r_list_free (fl);
 	return ret;
 }
 
 /* Match a filter on a line. A filter can contain multiple words
-   separated by spaces, which are all matched *in any order* over the target
-   entry. If all words are present, the function returns true.
-   The mask is a character buffer which is filled by 'x' to mark those characters
-   that match the filter */
+ * separated by spaces, which are all matched *in any order* over the target
+ * entry. If all words are present, the function returns true.
+ * The mask is a character buffer which is filled by 'x' to mark those characters
+ * that match the filter */
 static bool __matchString(char *entry, char *filter, char *mask, const int mask_size) {
 	char *p, *current_token = filter;
 	const char *filter_end = filter + strlen (filter);
@@ -146,7 +151,6 @@ static bool __matchString(char *entry, char *filter, char *mask, const int mask_
 	free (ansi_filtered);
 	return true;
 }
-
 
 static RList *hud_filter(RList *list, char *user_input, int top_entry_n, int *current_entry_n, char **selected_entry, bool simple) {
 	RListIter *iter;
@@ -246,7 +250,7 @@ static void mht_free_kv(HtPPKv *kv) {
 // Display a list of entries in the hud, filtered and emphasized based on the user input.
 
 #define HUD_CACHE 0
-R_API char *r_cons_hud(RList *list, const char *prompt) {
+R_API char *r_cons_hud(RCons *cons, RList *list, const char *prompt) {
 	bool demo = r_cons_singleton ()->context->demo;
 	char user_input[HUD_BUF_SIZE + 1];
 	char *selected_entry = NULL;
@@ -340,7 +344,7 @@ _beach:
 	return NULL;
 }
 
-R_API char *r_cons_hud_line(RList *list, const char *prompt) {
+static char *r_cons_hud_line(RCons *cons, RList *list, const char *prompt) {
 	char user_input[HUD_BUF_SIZE + 1];
 	char *selected_entry = NULL;
 	RListIter *iter;
@@ -358,7 +362,7 @@ R_API char *r_cons_hud_line(RList *list, const char *prompt) {
 	r_cons_enable_mouse (false);
 	r_cons_set_raw (true);
 
-	r_cons_reset ();
+	r_kons_reset (cons);
 	// Repeat until the user exits the hud
 	for (;;) {
 		hud->current_entry_n = 0;
@@ -427,7 +431,7 @@ _beach:
 }
 
 // Display the list of files in a directory
-R_API char *r_cons_hud_path(const char *path, int dir) {
+R_API char *r_cons_hud_path(RCons *cons, const char *path, int dir) {
 	char *tmp, *ret = NULL;
 	RList *files;
 	if (path) {
@@ -438,7 +442,7 @@ R_API char *r_cons_hud_path(const char *path, int dir) {
 	}
 	files = r_sys_dir (tmp);
 	if (files) {
-		ret = r_cons_hud (files, tmp);
+		ret = r_cons_hud (cons, files, tmp);
 		if (ret) {
 			tmp = r_str_append (tmp, "/");
 			tmp = r_str_append (tmp, ret);
@@ -447,7 +451,7 @@ R_API char *r_cons_hud_path(const char *path, int dir) {
 			free (tmp);
 			tmp = ret;
 			if (r_file_is_directory (tmp)) {
-				ret = r_cons_hud_path (tmp, dir);
+				ret = r_cons_hud_path (cons, tmp, dir);
 				free (tmp);
 				tmp = ret;
 			}
@@ -463,7 +467,37 @@ R_API char *r_cons_hud_path(const char *path, int dir) {
 	return tmp;
 }
 
+static char *r_cons_message_multiline(const char *msg) {
+	char *s = strdup (msg);
+	RList *lines = r_str_split_list (s, "\n", 0);
+	RListIter *iter;
+	const char *line;
+	int longest = 0;
+	r_list_foreach (lines, iter, line) {
+		int linelen = strlen (line);
+		if (linelen > longest) {
+			longest = linelen;
+		}
+	}
+	int rows, cols = r_cons_get_size (&rows);
+	const char *pad = r_str_pad (' ', (cols-longest) / 2);
+	char *newmsg = r_str_prefix_all (msg, pad);
+	r_cons_clear ();
+	r_cons_gotoxy (0, (rows / 2) - (r_list_length (lines) / 2));
+	r_cons_println (newmsg);
+	r_cons_flush ();
+	r_cons_gotoxy (0, rows - 2);
+	r_cons_any_key (NULL);
+	r_list_free (lines);
+	free (s);
+	free (newmsg);
+	return NULL;
+}
+
 R_API char *r_cons_message(const char *msg) {
+	if (strchr (msg, '\n')) {
+		return r_cons_message_multiline (msg);
+	}
 	int len = strlen (msg);
 	int rows, cols = r_cons_get_size (&rows);
 	r_cons_clear ();

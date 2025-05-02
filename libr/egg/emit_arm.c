@@ -143,7 +143,7 @@ static void emit_arg(REgg *egg, int xs, int num, const char *str) {
 	case 0:
 		if (strchr (str, ',')) {
 			// r_egg_printf (egg, ".  str r0, [%s]\n", str);
-			strncpy (lastargs[num - 1], str, sizeof(lastargs[0]) - 1);
+			strncpy (lastargs[num - 1], str, sizeof (lastargs[0]) - 1);
 		} else {
 			if (!atoi (str)) {
 				R_LOG_WARN ("probably a bug?");
@@ -160,7 +160,7 @@ static void emit_arg(REgg *egg, int xs, int num, const char *str) {
 		if (d) {
 			r_egg_printf (egg, "  add "R_BP ", %d\n", d);
 		}
-		r_egg_printf (egg, "  push {"R_BP "}\n");
+		r_egg_printf (egg, "  push { "R_BP " }\n");
 		if (d) {
 			r_egg_printf (egg, "  sub "R_BP ", %d\n", d);
 		}
@@ -274,12 +274,6 @@ static void emit_mathop(REgg *egg, int ch, int vs, int type, const char *eq, con
 	if (!p) {
 		p = R_AX;
 	}
-#if 0
-	// TODO:
-	eprintf ("TYPE = %c\n", type);
-	eprintf ("  %s%c %c%s, %s\n", op, vs, type, eq, p);
-	eprintf ("  %s %s, [%s]\n", op, p, eq);
-#endif
 	if (type == '*') {
 		r_egg_printf (egg, "  %s %s, [%s]\n", op, p, eq);
 	} else {

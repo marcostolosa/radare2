@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2017 - rkx1209 */
+/* radare - LGPL - Copyright 2017-2023 - rkx1209 */
 
 #include <r_debug.h>
 #include <r_util/r_json.h>
@@ -12,7 +12,7 @@ R_API void r_debug_session_free(RDebugSession *session) {
 		r_vector_free (session->checkpoints);
 		ht_up_free (session->registers);
 		ht_up_free (session->memory);
-		R_FREE (session);
+		free (session);
 	}
 }
 
@@ -22,7 +22,10 @@ static void r_debug_checkpoint_fini(void *element, void *user) {
 	for (i = 0; i < R_REG_TYPE_LAST; i++) {
 		r_reg_arena_free (checkpoint->arena[i]);
 	}
-	r_list_free (checkpoint->snaps);
+	// causes double free in RDebug.free with this reproducer:
+	// lldb -- r2 -NAdq -c 'db main;dts+;db;dc;pd-- 2' /bin/ls
+	// r_list_free (checkpoint->snaps);
+	checkpoint->snaps = NULL;
 }
 
 static void htup_vector_free(HtUPKv *kv) {
@@ -55,7 +58,7 @@ R_API RDebugSession *r_debug_session_new(void) {
 }
 
 R_API bool r_debug_add_checkpoint(RDebug *dbg) {
-	r_return_val_if_fail (dbg->session, false);
+	R_RETURN_VAL_IF_FAIL (dbg->session, false);
 	size_t i;
 	RDebugCheckpoint checkpoint = {0};
 
@@ -91,9 +94,11 @@ R_API bool r_debug_add_checkpoint(RDebug *dbg) {
 	r_vector_push (dbg->session->checkpoints, &checkpoint);
 
 	// Add PC register change so we can check for breakpoints when continue [back]
-	RRegItem *ripc = r_reg_get (dbg->reg, dbg->reg->name[R_REG_NAME_PC], R_REG_TYPE_GPR);
-	ut64 data = r_reg_get_value (dbg->reg, ripc);
-	r_debug_session_add_reg_change (dbg->session, ripc->arena, ripc->offset, data);
+	RRegItem *ripc = r_reg_get (dbg->reg, "PC", R_REG_TYPE_GPR);
+	if (ripc) {
+		ut64 data = r_reg_get_value (dbg->reg, ripc);
+		r_debug_session_add_reg_change (dbg->session, ripc->arena, ripc->offset, data);
+	}
 
 	return true;
 }
@@ -193,24 +198,16 @@ R_API void r_debug_session_list_memory(RDebug *dbg) {
 			if (!snap) {
 				return;
 			}
-
 			ut8 *hash = r_debug_snap_get_hash (snap);
-			if (!hash) {
-				r_debug_snap_free (snap);
-				return;
-			}
-
-			char *hexstr = r_hex_bin2strdup (hash, R_HASH_SIZE_SHA256);
-			if (!hexstr) {
+			if (hash) {
+				char *hexstr = r_hex_bin2strdup (hash, R_HASH_SIZE_SHA256);
+				if (hexstr) {
+					dbg->cb_printf ("%s: %s\n", snap->name, hexstr);
+					free (hexstr);
+				}
 				free (hash);
-				r_debug_snap_free (snap);
-				return;
 			}
-			dbg->cb_printf ("%s: %s\n", snap->name, hexstr);
-
-			free (hexstr);
-			free (hash);
-			r_debug_snap_free (snap);
+		// 	r_debug_snap_free (snap);
 		}
 	}
 }
@@ -275,7 +272,7 @@ static void serialize_registers(Sdb *db, HtUP *registers) {
 	ht_up_foreach (registers, serialize_register_cb, db);
 }
 
-// 0x<addr>={"size":<size_t>, "a":[<RDebugChangeMem>]}},
+// 0x<addr>={ "size":<size_t>, "a":[<RDebugChangeMem>]}},
 static bool serialize_memory_cb(void *db, const ut64 k, const void *v) {
 	RDebugChangeMem *mem;
 	RVector *vmem = (RVector *)v;
@@ -311,8 +308,8 @@ static void serialize_checkpoints(Sdb *db, RVector *checkpoints) {
 
 	r_vector_foreach (checkpoints, chkpt) {
 		// 0x<cnum>={
-		//   registers:{"<RRegisterType>":<RRegArena>, ...},
-		//   snaps:{"size":<size_t>, "a":[<RDebugSnap>]}
+		//   registers:{ "<RRegisterType>":<RRegArena>, ...},
+		//   snaps:{ "size":<size_t>, "a":[<RDebugSnap>]}
 		// }
 		PJ *j = pj_new ();
 		if (!j) {
@@ -321,7 +318,7 @@ static void serialize_checkpoints(Sdb *db, RVector *checkpoints) {
 		pj_o (j);
 
 		// Serialize RRegArena to "registers"
-		// {"size":<int>, "bytes":"<base64>"}
+		// { "size":<int>, "bytes":"<base64>" }
 		pj_ka (j, "registers");
 		for (i = 0; i < R_REG_TYPE_LAST; i++) {
 			RRegArena *arena = chkpt->arena[i];
@@ -338,7 +335,7 @@ static void serialize_checkpoints(Sdb *db, RVector *checkpoints) {
 		pj_end (j);
 
 		// Serialize RDebugSnap to "snaps"
-		// {"name":<str>, "addr":<ut64>, "addr_end":<ut64>, "size":<ut64>,
+		// { "name":<str>, "addr":<ut64>, "addr_end":<ut64>, "size":<ut64>,
 		//  "data":"<base64>", "perm":<int>, "user":<int>, "shared":<bool>}
 		pj_ka (j, "snaps");
 		r_list_foreach (chkpt->snaps, iter, snap) {
@@ -375,28 +372,28 @@ static void serialize_checkpoints(Sdb *db, RVector *checkpoints) {
  *   maxcnum=<maxcnum>
  *
  *   /registers
- *     0x<addr>={"size":<size_t>, "a":[<RDebugChangeReg>]}
+ *     0x<addr>={ "size":<size_t>, "a":[<RDebugChangeReg>]}
  *
  *   /memory
- *     0x<addr>={"size":<size_t>, "a":[<RDebugChangeMem>]}
+ *     0x<addr>={ "size":<size_t>, "a":[<RDebugChangeMem>]}
  *
  *   /checkpoints
  *     0x<cnum>={
- *       registers:{"<RRegisterType>":<RRegArena>, ...},
- *       snaps:{"size":<size_t>, "a":[<RDebugSnap>]}
+ *       registers:{ "<RRegisterType>":<RRegArena>, ...},
+ *       snaps:{ "size":<size_t>, "a":[<RDebugSnap>]}
  *     }
  *
  * RDebugChangeReg JSON:
- * {"cnum":<int>, "data":<ut64>}
+ * { "cnum":<int>, "data":<ut64>}
  *
  * RDebugChangeMem JSON:
- * {"cnum":<int>, "data":<ut8>}
+ * { "cnum":<int>, "data":<ut8>}
  *
  * RRegArena JSON:
- * {"size":<int>, "bytes":"<base64>"}
+ * { "size":<int>, "bytes":"<base64>" }
  *
  * RDebugSnap JSON:
- * {"name":<str>, "addr":<ut64>, "addr_end":<ut64>, "size":<ut64>,
+ * { "name":<str>, "addr":<ut64>, "addr_end":<ut64>, "size":<ut64>,
  *  "data":"<base64>", "perm":<int>, "user":<int>, "shared":<bool>}
  *
  * Notes:
@@ -590,7 +587,7 @@ static bool deserialize_checkpoints_cb(void *user, const char *cnum, const char 
 		baby = r_json_get (child, "arena");
 		CHECK_TYPE (baby, R_JSON_INTEGER);
 		int arena = baby->num.s_value;
-		if (arena < R_REG_TYPE_GPR || arena > R_REG_TYPE_SEG) {
+		if (arena < 0 || arena >= R_REG_TYPE_LAST) {
 			continue;
 		}
 		baby = r_json_get (child, "size");

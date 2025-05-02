@@ -344,18 +344,17 @@ static bool r_bin_mdmp_init_hdr(struct r_bin_mdmp_obj *obj) {
 	read_hdr (obj->b, obj->hdr);
 
 	if (obj->hdr->number_of_streams == 0) {
-		eprintf ("[WARN] No streams present!\n");
+		R_LOG_WARN ("No streams present");
 		return false;
 	}
 
-	if (obj->hdr->stream_directory_rva < sizeof (struct minidump_header))
-	{
-		eprintf ("[ERROR] RVA for directory resides in the header!\n");
+	if (obj->hdr->stream_directory_rva < sizeof (struct minidump_header)) {
+		R_LOG_ERROR ("RVA for directory resides in the header");
 		return false;
 	}
 
 	if (obj->hdr->check_sum) {
-		eprintf ("[INFO] Checksum present but needs validating!\n");
+		R_LOG_INFO ("Checksum present but needs validating");
 		return false;
 	}
 
@@ -440,13 +439,13 @@ static bool r_bin_mdmp_init_directory_entry(struct r_bin_mdmp_obj *obj, struct m
 	/* We could confirm data sizes but a malcious MDMP will always get around
 	** this! But we can ensure that the data is not outside of the file */
 	if ((ut64)entry->location.rva + entry->location.data_size > r_buf_size (obj->b)) {
-		eprintf ("[ERROR] Size Mismatch - Stream data is larger than file size!\n");
+		R_LOG_ERROR ("Size Mismatch - Stream data is larger than file size!");
 		return false;
 	}
 
 	switch (entry->stream_type) {
 	case THREAD_LIST_STREAM:
-		r = r_buf_read_at (obj->b, entry->location.rva, (ut8 *)&thread_list, sizeof (thread_list));
+		r = r_buf_fread_at (obj->b, entry->location.rva, (ut8 *)&thread_list, "i", 1);
 		if (r != sizeof (thread_list)) {
 			break;
 		}
@@ -487,14 +486,14 @@ static bool r_bin_mdmp_init_directory_entry(struct r_bin_mdmp_obj *obj, struct m
 		for (i = 0; i < module_list.number_of_modules && offset < obj->size; i++) {
 			struct minidump_module *module = read_module (obj->b, offset);
 			if (!module) {
-				break;	
+				break;
 			}
 			r_list_append (obj->streams.modules, module);
 			offset += sizeof (*module);
 		}
 		break;
 	case MEMORY_LIST_STREAM:
-		r = r_buf_read_at (obj->b, entry->location.rva, (ut8 *)&memory_list, sizeof (memory_list));
+		r = r_buf_fread_at (obj->b, entry->location.rva, (ut8 *)&memory_list, "i", 1);
 		if (r != sizeof (memory_list)) {
 			break;
 		}
@@ -514,7 +513,7 @@ static bool r_bin_mdmp_init_directory_entry(struct r_bin_mdmp_obj *obj, struct m
 			if (!desc) {
 				break;
 			}
-			r = r_buf_read_at (obj->b, offset, (ut8 *)desc, sizeof (*desc));
+			r = r_buf_fread_at (obj->b, offset, (ut8 *)desc, "lii", 1);
 			if (r != sizeof (*desc)) {
 				break;
 			}
@@ -529,7 +528,7 @@ static bool r_bin_mdmp_init_directory_entry(struct r_bin_mdmp_obj *obj, struct m
 			break;
 		}
 
-		r = r_buf_read_at (obj->b, entry->location.rva, (ut8 *)obj->streams.exception, sizeof (*obj->streams.exception));
+		r = r_buf_fread_at (obj->b, entry->location.rva, (ut8 *)obj->streams.exception, "4i2l2i15l2i", 1);
 		if (r != sizeof (*obj->streams.exception)) {
 			break;
 		}
@@ -560,8 +559,7 @@ static bool r_bin_mdmp_init_directory_entry(struct r_bin_mdmp_obj *obj, struct m
 			break;
 		}
 
-		sdb_num_set (obj->kv, "mdmp_system_info.offset",
-			entry->location.rva, 0);
+		sdb_num_set (obj->kv, "mdmp_system_info.offset", entry->location.rva, 0);
 		/* TODO: We need E as a byte! */
 		sdb_set (obj->kv, "mdmp_system_info.format", "[2]EwwbBddd[4]Ed[2]Ew[2]q "
 			"(mdmp_processor_architecture)ProcessorArchitecture "
@@ -573,7 +571,7 @@ static bool r_bin_mdmp_init_directory_entry(struct r_bin_mdmp_obj *obj, struct m
 		break;
 	case THREAD_EX_LIST_STREAM:
 		/* TODO: Not yet fully parsed or utilised */
-		r = r_buf_read_at (obj->b, entry->location.rva, (ut8 *)&thread_ex_list, sizeof (thread_ex_list));
+		r = r_buf_fread_at (obj->b, entry->location.rva, (ut8 *)&thread_ex_list, "i", 1);
 		if (r != sizeof (thread_ex_list)) {
 			break;
 		}
@@ -878,7 +876,7 @@ static bool r_bin_mdmp_init_directory_entry(struct r_bin_mdmp_obj *obj, struct m
 		/* Silently ignore reserved streams */
 		break;
 	default:
-		eprintf ("[WARN] Invalid or unsupported enumeration encountered %d\n", entry->stream_type);
+		R_LOG_WARN ("Invalid or unsupported enumeration encountered %d", entry->stream_type);
 		break;
 	}
 	return true;
@@ -910,7 +908,7 @@ static bool r_bin_mdmp_init_directory(struct r_bin_mdmp_obj *obj) {
 	ut64 bytes_left = rvadir < obj->size ? obj->size - rvadir : 0;
 	size_t max_entries = R_MIN (obj->hdr->number_of_streams, bytes_left / sizeof (struct minidump_directory));
 	if (max_entries < obj->hdr->number_of_streams) {
-		eprintf ("[ERROR] Number of streams = %u is greater than is supportable by bin size\n",
+		R_LOG_ERROR ("Number of streams = %u is greater than is supportable by bin size",
 				obj->hdr->number_of_streams);
 	}
 	/* Parse each entry in the directory */
@@ -1002,7 +1000,8 @@ static bool r_bin_mdmp_init_pe_bins(struct r_bin_mdmp_obj *obj) {
 			continue;
 		}
 		int r = r_buf_read_at (obj->b, paddr, b, module->size_of_image);
-		r_buf_free (buf);
+		//r_unref (buf);
+		// r_buf_free (buf); - still uaf, it could be freed if pe parsing fails
 		buf = r_buf_new_with_bytes (b, r);
 		dup = false;
 		if (check_pe32_buf (buf, module->size_of_image)) {
@@ -1049,7 +1048,8 @@ static bool r_bin_mdmp_init_pe_bins(struct r_bin_mdmp_obj *obj) {
 			r_list_append (obj->pe64_bins, pe64_bin);
 		}
 	}
-	r_buf_free (buf);
+	//r_unref (buf);
+	// r_unref (buf); // r_buf_free (buf);
 	buf = NULL;
 	return true;
 }
@@ -1058,17 +1058,17 @@ static int r_bin_mdmp_init(struct r_bin_mdmp_obj *obj) {
 	r_bin_mdmp_init_parsing (obj);
 
 	if (!r_bin_mdmp_init_hdr (obj)) {
-		eprintf ("[ERROR] Failed to initialise header\n");
+		R_LOG_ERROR ("Failed to initialise header");
 		return false;
 	}
 
 	if (!r_bin_mdmp_init_directory (obj)) {
-		eprintf ("[ERROR] Failed to initialise directory structures!\n");
+		R_LOG_ERROR ("Failed to initialise directory structures");
 		return false;
 	}
 
 	if (!r_bin_mdmp_init_pe_bins (obj)) {
-		eprintf ("[ERROR] Failed to initialise pe binaries!\n");
+		R_LOG_ERROR ("[ERROR] Failed to initialise pe binaries");
 		return false;
 	}
 

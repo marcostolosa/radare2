@@ -1,17 +1,50 @@
-/* radare - LGPL - Copyright 2009-2022 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
 #include <r_core.h>
-#include <r_types.h>
-#include <r_util.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <r_main.h>
-#include "../../libr/bin/pdb/pdb_downloader.h"
+#include "../../libr/bin/format/pdb/pdb_downloader.h"
+
+typedef struct rabin2_state_t {
+	char *stdin_buf;
+} Rabin2State;
+
+typedef struct {
+	const char *name;
+	const char *desc;
+} Rabin2Env;
+
+static Rabin2Env env[] = {
+	{ "R2_NOPLUGINS",				"                      # same as r2 -N. Dont load shared plugins" },
+	{ "RABIN2_ARGS",				"                      # ignore cli and use these program arguments" },
+	{ "RABIN2_CHARSET",				"e cfg.charset         # set default value charset for -z strings" },
+	{ "RABIN2_CODESIGN_VERBOSE",	"                      # show codesign details at parse time" },
+//TODO { "RABIN2_MACHO_CODESIGN",	"" },
+	{ "RABIN2_DEBASE64",			"e bin.str.debase64    # try to debase64 all strings" },
+	{ "RABIN2_DEMANGLE",			"e bin.demangle        # dont demangle symbols if value is 0" },
+	{ "RABIN2_DEMANGLE_CMD", 		"e bin.demangle.cmd    # try to purge false positives" },
+	{ "RABIN2_DEMANGLE_TRYLIB",		"e bin.demangle.trylib # load Swift libs to demangle (default: false)" },
+//	{ "RABIN2_DEMAN_PFXLIB",		"e bin.demangle.pfxlib # prefix symbols with library name" },
+//	{ "RABIN2_DEMAN_NAT",			"e bin.demangle.native # load Swift libs to demangle (default: true)" },
+	{ "RABIN2_LANG",				"e bin.lang            # assume lang for demangling" },
+	{ "RABIN2_MACHO_NOFUNCSTARTS",	"                      # if set it will ignore the FUNCSTART information" },
+	{ "RABIN2_MACHO_NOSWIFT",		"                      # avoid parsing the swift metadata" },
+	{ "RABIN2_MACHO_SKIPFIXUPS",	"                      # do not parse the mach-o chained fixups" },
+	{ "RABIN2_MAXSTRBUF",			"e bin.str.maxbuf      # specify maximum buffer size" },
+	{ "RABIN2_PDBSERVER",			"e pdb.server          # use alternative PDB server" },
+	{ "RABIN2_PREFIX",				"e bin.prefix          # prefix symbols/sections/relocs with a specific string" },
+	{ "RABIN2_STRFILTER",			"e bin.str.filter      # r2 -qc 'e bin.str.filter=?" "?' -" },
+	{ "RABIN2_STRPURGE",			"e bin.str.purge       # try to purge false positives" },
+//	{ "RABIN2_STR_FILTER",			"e bin.str.filter      # r2 -qc 'e bin.str.filter=?" "?' -" },
+//	{ "RABIN2_STR_PURGE",			"e bin.str.purge       # try to purge false positives" },"
+	{ "RABIN2_SYMSTORE",			"e pdb.symstore        # path to downstream symbol store" },
+	{ "RABIN2_VERBOSE",				"e bin.verbose         # show debugging messages from the parser" },
+};
+
+static void rabin_show_env(bool show_desc);
 
 static int rabin_show_help(int v) {
-	printf ("Usage: rabin2 [-AcdeEghHiIjlLMqrRsSUvVxzZ] [-@ at] [-a arch] [-b bits] [-B addr]\n"
+	printf ("Usage: rabin2 [-AcdeEghHiIjJlLMqrRsSUvVxzZ] [-@ at] [-a arch] [-b bits] [-B addr]\n"
 		"              [-C F:C:D] [-f str] [-m addr] [-n str] [-N m:M] [-P[-P] pdb]\n"
-		"              [-o str] [-O str] [-k query] [-D lang mangledsymbol] file\n");
+		"              [-o str] [-O help] [-k query] [-D lang mangledsymbol] file\n");
 	if (v) {
 		printf (
 		" -@ [addr]       show section, symbol or import at addr\n"
@@ -30,12 +63,13 @@ static int rabin_show_help(int v) {
 		" -f [str]        select sub-bin named str\n"
 		" -F [binfmt]     force to use that bin plugin (ignore header check)\n"
 		" -g              same as -SMZIHVResizcld -SS -SSS -ee (show all info)\n"
-		" -G [addr]       load address . offset to header\n"
+		" -G [addr]       load address . address to header\n"
 		" -h              this help message\n"
 		" -H              header fields\n"
 		" -i              imports (symbols imported from libraries)\n"
 		" -I              binary info\n"
 		" -j              output in json\n"
+		" -J ([var])      display variable\n"
 		" -k [sdb-query]  run sdb query. for example: '*'\n"
 		" -K [algo]       calculate checksums (md5, sha1, ..)\n"
 		" -l              linked libraries\n"
@@ -50,7 +84,7 @@ static int rabin_show_help(int v) {
 		" -P              show debug/pdb information\n"
 		" -PP             download pdb file for binary\n"
 		" -q              be quiet, just show fewer data\n"
-		" -qq             show less info (no offset/size for -z for ex.)\n"
+		" -qq             show less info (no addr/size for -z for ex.)\n"
 		" -Q              show load address used by dlopen (non-aslr libs)\n"
 		" -r              radare output\n"
 		" -R              relocations\n"
@@ -68,60 +102,33 @@ static int rabin_show_help(int v) {
 		" -x              extract bins contained in file\n"
 		" -X [fmt] [f] .. package in fat or zip the given files and bins contained in file\n"
 		" -z              strings (from data section)\n"
-		" -zz             strings (from raw bins [e bin.rawstr=1])\n"
+		" -zz             strings (from raw bins [e bin.str.raw=1])\n"
 		" -zzz            dump raw strings to stdout (for huge files)\n"
 		" -Z              guess size of binary program\n"
 		);
 	}
 	if (v) {
-		printf ("Environment:\n"
-		" RABIN2_CHARSET:   e cfg.charset      # set default value charset for -z strings\n"
-		" RABIN2_DEBASE64:  e bin.debase64     # try to debase64 all strings\n"
-		" RABIN2_DEMANGLE=0:e bin.demangle     # do not demangle symbols\n"
-		" RABIN2_DMNGLRCMD: e bin.demanglercmd # try to purge false positives\n"
-		" RABIN2_LANG:      e bin.lang         # assume lang for demangling\n"
-		" RABIN2_MAXSTRBUF: e bin.maxstrbuf    # specify maximum buffer size\n"
-		" RABIN2_NOPLUGINS: 1|0|               # do not load shared plugins (speedup loading)\n"
-		" RABIN2_PDBSERVER: e pdb.server       # use alternative PDB server\n"
-		" RABIN2_PREFIX:    e bin.prefix       # prefix symbols/sections/relocs with a specific string\n"
-		" RABIN2_STRFILTER: e bin.str.filter   # r2 -qc 'e bin.str.filter=?" "?' -\n"
-		" RABIN2_STRPURGE:  e bin.str.purge    # try to purge false positives\n"
-		" RABIN2_SYMSTORE:  e pdb.symstore     # path to downstream symbol store\n"
-		" RABIN2_SWIFTLIB:  1|0|               # load Swift libsto demangle (default: true)\n"
-		" RABIN2_VERBOSE:   e bin.verbose      # show debugging messages from the parser\n"
-		);
+		printf ("Environment:\n");
+		rabin_show_env (true);
 	}
 	return 1;
 }
 
-static char *stdin_gets(bool liberate) {
-	static R_TH_LOCAL char *stdin_buf = NULL;
+static char *stdin_gets(Rabin2State *state) {
 #define STDIN_BUF_SIZE 96096
-	if (liberate) {
-		free (stdin_buf);
-		stdin_buf = NULL;
-		return NULL;
-	}
-	if (!stdin_buf) {
-		/* XXX: never freed. leaks! */
-		stdin_buf = malloc (STDIN_BUF_SIZE);
-		if (!stdin_buf) {
-			return NULL;
-		}
-	}
-	memset (stdin_buf, 0, STDIN_BUF_SIZE);
-	if (!fgets (stdin_buf, STDIN_BUF_SIZE, stdin)) {
+	memset (state->stdin_buf, 0, STDIN_BUF_SIZE);
+	if (!fgets (state->stdin_buf, STDIN_BUF_SIZE, stdin)) {
 		return NULL;
 	}
 	if (feof (stdin)) {
 		return NULL;
 	}
-	return strdup (stdin_buf);
+	return strdup (state->stdin_buf);
 }
 
-static void __sdb_prompt(Sdb *sdb) {
+static void __sdb_prompt(Rabin2State *state, Sdb *sdb) {
 	char *line;
-	for (; (line = stdin_gets (false));) {
+	for (; (line = stdin_gets (state));) {
 		sdb_query (sdb, line);
 		free (line);
 	}
@@ -164,17 +171,17 @@ static bool extract_binobj(const RBinFile *bf, RBinXtrData *data, int idx) {
 		xtr_type = data->metadata->xtr_type;
 	}
 	if (!strcmp (xtr_type, "fat") && bin_size == bf->size && bin_size) {
-		eprintf ("This is not a fat bin\n");
+		R_LOG_ERROR ("This is not a fat bin");
 		return false;
 	}
 	bytes = malloc (bin_size);
 	if (!bytes) {
-		eprintf ("error: BinFile buffer is empty\n");
+		R_LOG_ERROR ("BinFile buffer is empty");
 		return false;
 	}
 	nb = r_buf_read_at (data->buf, 0, bytes, bin_size);
 	if (nb <= 0) {
-		eprintf ("Couldn't read xtrdata\n");
+		R_LOG_ERROR ("Couldn't read xtrdata");
 		return false;
 	}
 	if (!arch) {
@@ -189,7 +196,7 @@ static bool extract_binobj(const RBinFile *bf, RBinXtrData *data, int idx) {
 	if (!outpath || !r_sys_mkdirp (outpath)) {
 		free (path);
 		free (outpath);
-		eprintf ("Error creating dir structure\n");
+		R_LOG_ERROR ("creating dir structure");
 		return false;
 	}
 
@@ -198,7 +205,7 @@ static bool extract_binobj(const RBinFile *bf, RBinXtrData *data, int idx) {
 		: r_str_newf ("%s/%s.%s_%i.%d", outpath, ptr, arch, bits, idx);
 
 	if (!outfile || !r_file_dump (outfile, bytes, bin_size, 0)) {
-		eprintf ("Error extracting %s\n", outfile);
+		R_LOG_ERROR ("extract failed %s", outfile);
 		res = false;
 	} else {
 		printf ("%s created (%"PFMT64d")\n", outfile, bin_size);
@@ -240,15 +247,14 @@ static int rabin_extract(RBin *bin, int all) {
 }
 
 static int rabin_dump_symbols(RBin *bin, int len) {
-	RList *symbols = r_bin_get_symbols (bin);
+	RVecRBinSymbol *symbols = r_bin_get_symbols_vec (bin);
 	if (!symbols) {
 		return false;
 	}
 
-	RListIter *iter;
 	RBinSymbol *symbol;
 	int olen = len;
-	r_list_foreach (symbols, iter, symbol) {
+	R_VEC_FOREACH (symbols, symbol) {
 		if (symbol->size && (olen > symbol->size || !olen)) {
 			len = symbol->size;
 		} else if (!symbol->size && !olen) {
@@ -267,9 +273,10 @@ static int rabin_dump_symbols(RBin *bin, int len) {
 		}
 		if (r_buf_read_at (bin->cur->buf, symbol->paddr, buf, len) == len) {
 			r_hex_bin2str (buf, len, ret);
-			printf ("%s %s\n", symbol->name, ret);
+			const char *name = r_bin_name_tostring (symbol->name);
+			printf ("%s %s\n", name, ret);
 		} else {
-			eprintf ("Cannot read from buffer\n");
+			R_LOG_ERROR ("Cannot read from buffer");
 		}
 		free (buf);
 		free (ret);
@@ -277,55 +284,58 @@ static int rabin_dump_symbols(RBin *bin, int len) {
 	return true;
 }
 
-static bool __dumpSections(RBin *bin, const char *scnname, const char *output, const char *file) {
-	RList *sections;
+static bool __dumpSections(RBin *bin, const char *scnname, const char *output, const char *file, bool raw) {
 	RListIter *iter;
 	RBinSection *section;
-	ut8 *buf;
-	char *ret;
-	int r;
-
-	if (!(sections = r_bin_get_sections (bin))) {
+	RList *sections = r_bin_get_sections (bin);
+	if (!sections || r_list_empty (sections)) {
+		R_LOG_WARN ("No sections to dump");
 		return false;
 	}
 
 	r_list_foreach (sections, iter, section) {
-		if (!strcmp (scnname, section->name)) {
-			if (!(buf = malloc (section->size))) {
-				return false;
-			}
-			if ((section->size * 2) + 1 < section->size) {
-				free (buf);
-				return false;
-			}
-			if (!(ret = malloc (section->size*2+1))) {
-				free (buf);
-				return false;
-			}
-			if (section->paddr > r_buf_size (bin->cur->buf) ||
-				section->paddr + section->size > r_buf_size (bin->cur->buf)) {
-				free (buf);
-				free (ret);
-				return false;
-			}
-			r = r_buf_read_at (bin->cur->buf, section->paddr,
-					buf, section->size);
-			if (r < 1) {
-				free (buf);
-				free (ret);
-				return false;
-			}
-			//it does mean the user specified an output file
-			if (strcmp (output, file)) {
-				r_file_dump (output, buf, section->size, 0);
-			} else {
-				r_hex_bin2str (buf, section->size, ret);
-				printf ("%s\n", ret);
-			}
+		if (!r_str_glob (section->name, scnname)) {
+			continue;
+		}
+		const size_t ss = section->size;
+		if ((ss * 2) + 1 < ss) {
+			return false;
+		}
+		ut8 *buf = malloc (ss);
+		char *ret = malloc (ss * 2 + 1);
+		if (R_UNLIKELY (!buf || !ret)) {
 			free (buf);
 			free (ret);
-			break;
+			return false;
 		}
+		if (section->paddr > r_buf_size (bin->cur->buf) ||
+			section->paddr + ss > r_buf_size (bin->cur->buf)) {
+			free (buf);
+			free (ret);
+			return false;
+		}
+		int r = r_buf_read_at (bin->cur->buf, section->paddr, buf, ss);
+		if (r < 1) {
+			free (buf);
+			free (ret);
+			return false;
+		}
+		//it does mean the user specified an output file
+		if (strcmp (output, file)) {
+			r_file_dump (output, buf, ss, 0);
+		} else {
+			if (raw) {
+				if (write (1, buf, ss) != ss) {
+					R_LOG_WARN ("write truncated");
+				}
+			} else {
+				r_hex_bin2str (buf, ss, ret);
+				printf ("%s\n", ret);
+			}
+		}
+		free (buf);
+		free (ret);
+		break;
 	}
 	return true;
 }
@@ -383,7 +393,7 @@ static int rabin_do_operation(RBin *bin, const char *op, int rad, const char *ou
 			if (!ptr2) {
 				goto _rabin_do_operation_error;
 			}
-			if (!__dumpSections (bin, ptr2, output, file)) {
+			if (!__dumpSections (bin, ptr2, output, file, rad)) {
 				goto error;
 			}
 			break;
@@ -446,8 +456,11 @@ static int rabin_do_operation(RBin *bin, const char *op, int rad, const char *ou
 	case 'p':
 		{
 			int perms = (int)r_num_math (NULL, ptr2);
-			if (!perms) {
+			if (perms < 1) {
 				perms = r_str_rwx (ptr2);
+				if (perms < 0) {
+					R_LOG_ERROR ("Invalid permissions string (%s)", ptr2);
+				}
 			}
 			r_bin_wr_scn_perms (bin, ptr, perms);
 			rc = r_bin_wr_output (bin, output);
@@ -455,11 +468,11 @@ static int rabin_do_operation(RBin *bin, const char *op, int rad, const char *ou
 		break;
 	default:
 	_rabin_do_operation_error:
-		eprintf ("Unknown operation. use -O help\n");
+		R_LOG_ERROR ("Unknown operation. use -O help");
 		goto error;
 	}
 	if (!rc) {
-		eprintf ("Cannot dump :(\n");
+		R_LOG_ERROR ("Cannot dump :(");
 	}
 	free (arg);
 	return true;
@@ -470,7 +483,7 @@ error:
 
 static int rabin_show_srcline(RBin *bin, ut64 at) {
 	char *srcline;
-	if (at != UT64_MAX && (srcline = r_bin_addr2text (bin, at, true))) {
+	if (at != UT64_MAX && (srcline = r_bin_addrline_tostring (bin, at, 1))) {
 		printf ("%s\n", srcline);
 		free (srcline);
 		return true;
@@ -483,7 +496,7 @@ static int __lib_bin_cb(RLibPlugin *pl, void *user, void *data) {
 	struct r_bin_plugin_t *hand = (struct r_bin_plugin_t *)data;
 	RBin *bin = user;
 	//printf(" * Added (dis)assembly plugin\n");
-	r_bin_add (bin, hand);
+	r_bin_plugin_add (bin, hand);
 	return true;
 }
 
@@ -517,31 +530,18 @@ static int __lib_bin_ldr_dt(RLibPlugin *pl, void *p, void *u) {
 	return true;
 }
 
-static void setup_trylib_from_environment(RBin *bin, int type) {
-	bool trylib = false;
-	if (type == R_BIN_NM_SWIFT) {
-		trylib = true;
-		char *swiftlib = r_sys_getenv ("RABIN2_TRYLIB");
-		if (swiftlib) {
-			trylib = r_str_is_true (swiftlib);
-			free (swiftlib);
-		}
-	}
-	bin->demangle_trylib = trylib;
-}
-
 static char *__demangleAs(RBin *bin, int type, const char *file) {
-	bool syscmd = bin->demangle_usecmd;
+	bool syscmd = bin->options.demangle_usecmd;
 	char *res = NULL;
 	switch (type) {
-	case R_BIN_NM_CXX: res = r_bin_demangle_cxx (NULL, file, 0); break;
-	case R_BIN_NM_JAVA: res = r_bin_demangle_java (file); break;
-	case R_BIN_NM_OBJC: res = r_bin_demangle_objc (NULL, file); break;
-	case R_BIN_NM_SWIFT: res = r_bin_demangle_swift (file, syscmd, bin->demangle_trylib); break;
-	case R_BIN_NM_MSVC: res = r_bin_demangle_msvc (file); break;
-	case R_BIN_NM_RUST: res = r_bin_demangle_rust (NULL, file, 0); break;
+	case R_BIN_LANG_CXX: res = r_bin_demangle_cxx (NULL, file, 0); break;
+	case R_BIN_LANG_JAVA: res = r_bin_demangle_java (file); break;
+	case R_BIN_LANG_OBJC: res = r_bin_demangle_objc (NULL, file); break;
+	case R_BIN_LANG_SWIFT: res = r_bin_demangle_swift (file, syscmd, bin->options.demangle_trylib); break;
+	case R_BIN_LANG_MSVC: res = r_bin_demangle_msvc (file); break;
+	case R_BIN_LANG_RUST: res = r_bin_demangle_rust (NULL, file, 0); break;
 	default:
-		eprintf ("Unsupported demangler\n");
+		R_LOG_ERROR ("Unsupported demangler");
 		break;
 	}
 	return res;
@@ -557,8 +557,26 @@ static void __listPlugins(RBin *bin, const char* plugin_name, PJ *pj, int rad) {
 	}
 }
 
+static void rabin_env_print(const char *name) {
+	char *value = r_sys_getenv (name);
+	printf ("%s\n", R_STR_ISNOTEMPTY (value) ? value : "");
+	free (value);
+}
+
+static void rabin_show_env(bool show_desc) {
+	int id = 0;
+	for (id = 0; id < (sizeof (env) / sizeof (env[0])); id++) {
+		if (show_desc) {
+			printf ("%s\t%s\n", env[id].name, env[id].desc);
+		} else {
+			printf ("%s=", env[id].name);
+			rabin_env_print(env[id].name);
+		}
+	}
+}
+
 R_API int r_main_rabin2(int argc, const char **argv) {
-	RBin *bin = NULL;
+	Rabin2State state = {0};
 	const char *name = NULL;
 	const char *file = NULL;
 	const char *output = NULL;
@@ -584,10 +602,15 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 	ut64 at = UT64_MAX;
 
 	r_core_init (&core);
-	bin = core.bin;
+	RBin *bin = core.bin;
 
-	if (!(tmp = r_sys_getenv ("RABIN2_NOPLUGINS"))) {
-		char *homeplugindir = r_str_home (R2_HOME_PLUGINS);
+	state.stdin_buf = malloc (STDIN_BUF_SIZE);
+	if (!state.stdin_buf) {
+		return 1;
+	}
+
+	if (!(tmp = r_sys_getenv ("R2_NOPLUGINS"))) {
+		char *homeplugindir = r_xdg_datadir ("plugins");
 		char *plugindir = r_str_r2_prefix (R2_PLUGINS);
 		char *extrasdir = r_str_r2_prefix (R2_EXTRAS);
 		char *bindingsdir = r_str_r2_prefix (R2_BINDINGS);
@@ -600,7 +623,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 			&__lib_bin_ldr_cb, &__lib_bin_ldr_dt, bin);
 		/* load plugins everywhere */
 		char *path = r_sys_getenv (R_LIB_ENV);
-		if (path && *path) {
+		if (R_STR_ISNOTEMPTY (path)) {
 			r_lib_opendir (l, path);
 		}
 		r_lib_opendir (l, homeplugindir);
@@ -627,8 +650,9 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		free (tmp);
 	}
 #endif
-	if ((tmp = r_sys_getenv ("RABIN2_DMNGLRCMD"))) {
-		r_config_set (core.config, "cmd.demangle", tmp);
+	if ((tmp = r_sys_getenv ("RABIN2_DEMANGLE_CMD"))) {
+		// r_config_set (core.config, "cmd.demangle", tmp);
+		r_config_set (core.config, "bin.demangle.usecmd", tmp);
 		free (tmp);
 	}
 	if ((tmp = r_sys_getenv ("RABIN2_CHARSET"))) {
@@ -642,12 +666,10 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 	if (r_sys_getenv_asbool ("RABIN2_VERBOSE")) {
 		r_config_set_b (core.config, "bin.verbose", true);
 	}
-	if ((tmp = r_sys_getenv ("RABIN2_DEMANGLE"))) {
-		r_config_set (core.config, "bin.demangle", tmp);
-		free (tmp);
-	}
+	r_config_set_b (core.config, "bin.demangle.trylib", r_sys_getenv_asbool ("RABIN2_DEMAN_TRYLIB"));
+	r_config_set_b (core.config, "bin.demangle", r_sys_getenv_asbool ("RABIN2_DEMANGLE"));
 	if ((tmp = r_sys_getenv ("RABIN2_MAXSTRBUF"))) {
-		r_config_set (core.config, "bin.maxstrbuf", tmp);
+		r_config_set (core.config, "bin.str.maxbuf", tmp);
 		free (tmp);
 	}
 	if ((tmp = r_sys_getenv ("RABIN2_STRFILTER"))) {
@@ -659,7 +681,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		free (tmp);
 	}
 	if ((tmp = r_sys_getenv ("RABIN2_DEBASE64"))) {
-		r_config_set (core.config, "bin.debase64", tmp);
+		r_config_set (core.config, "bin.str.debase64", tmp);
 		free (tmp);
 	}
 	if ((tmp = r_sys_getenv ("RABIN2_PDBSERVER"))) {
@@ -671,7 +693,13 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 #define set_action(x) { actions++; action |= (x); }
 #define unset_action(x) action &= ~x
 	RGetopt opt;
-	r_getopt_init (&opt, argc, argv, "DjgAf:F:a:B:G:b:cC:k:K:dD:Mm:n:N:@:isSVIHeEUlRwO:o:pPqQrTtvLhuxXzZ");
+	r_getopt_init (&opt, argc, argv, "DjJ:gAf:F:a:B:G:b:cC:k:K:dD:Mm:n:N:@:isSVIHeEUlRwO:o:pPqQrTtvLhuxXzZ");
+	if (argc == 2 && !strcmp (argv[1], "-J")) {
+		rabin_show_env (false);
+		r_core_fini (&core);
+		free (state.stdin_buf);
+		return 0;
+	}
 	while ((c = r_getopt_next (&opt)) != -1) {
 		switch (c) {
 		case 'g':
@@ -757,6 +785,11 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 			break;
 		case 'Z': set_action (R_BIN_REQ_SIZE); break;
 		case 'I': set_action (R_BIN_REQ_INFO); break;
+		case 'J':
+			rabin_env_print (opt.arg);
+			r_core_fini (&core);
+			free (state.stdin_buf);
+			return 0;
 		case 'H':
 			set_action (R_BIN_REQ_FIELDS);
 			break;
@@ -764,15 +797,16 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		case 'P':
 			if (is_active (R_BIN_REQ_PDB)) {
 				set_action (R_BIN_REQ_PDB_DWNLD);
+				unset_action (R_BIN_REQ_PDB);
 			} else {
 				set_action (R_BIN_REQ_PDB);
 			}
 			break;
 		case 'D':
-			if (argv[opt.ind] && argv[opt.ind+1] && \
-				(!argv[opt.ind+1][0] || !strcmp (argv[opt.ind+1], "all"))) {
+			if (argv[opt.ind] && argv[opt.ind + 1] && \
+				(!argv[opt.ind + 1][0] || !strcmp (argv[opt.ind + 1], "all"))) {
 				r_config_set (core.config, "bin.lang", argv[opt.ind]);
-				r_config_set (core.config, "bin.demangle", "true");
+				r_config_set_b (core.config, "bin.demangle", true);
 				opt.ind += 2;
 			} else {
 				do_demangle = argv[opt.ind];
@@ -812,11 +846,13 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 					" c                 show Codesign data\n"
 					" C                 show LDID entitlements\n");
 				r_core_fini (&core);
+				free (state.stdin_buf);
 				return 0;
 			}
 			if (opt.ind == argc) {
-				eprintf ("Missing filename\n");
+				R_LOG_ERROR ("Missing filename");
 				r_core_fini (&core);
+				free (state.stdin_buf);
 				return 1;
 			}
 			break;
@@ -824,8 +860,9 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		case 'p': va = false; break;
 		case 'r': rad = true; break;
 		case 'v':
-			  r_core_fini (&core);
-			  return r_main_version_print ("rabin2");
+			r_core_fini (&core);
+			free (state.stdin_buf);
+			return r_main_version_print ("rabin2", 0);
 		case 'L':
 			set_action (R_BIN_REQ_LISTPLUGINS);
 			break;
@@ -836,7 +873,15 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 			}
 			break;
 		case 'B':
-			baddr = r_num_math (NULL, opt.arg);
+			{
+				const char *err = NULL;
+				//baddr = r_num_math_err (core.num, opt.arg, &err);
+				baddr = r_num_math_err (NULL, opt.arg, &err);
+				if (err) {
+					R_LOG_ERROR ("%s in base address (-B): '%s'", err, opt.arg);
+					return 1;
+				}
+			}
 			break;
 		case '@':
 			at = r_num_math (NULL, opt.arg);
@@ -849,13 +894,15 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 			break;
 		case 'N':
 			tmp = strchr (opt.arg, ':');
-			r_config_set (core.config, "bin.minstr", opt.arg);
+			r_config_set (core.config, "bin.str.min", opt.arg);
 			if (tmp) {
-				r_config_set (core.config, "bin.maxstr", tmp + 1);
+				r_config_set (core.config, "bin.str.max", tmp + 1);
 			}
 			break;
 		case 'h':
 			r_core_fini (&core);
+			free (create);
+			free (state.stdin_buf);
 			return rabin_show_help (1);
 		default:
 			action |= R_BIN_REQ_HELP;
@@ -868,6 +915,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 	if (rad == R_MODE_JSON) {
 		pj = r_core_pj_new (&core);
 		if (!pj) {
+			free (state.stdin_buf);
 			return 1;
 		}
 	}
@@ -884,6 +932,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 			pj_free (pj);
 		}
 		r_core_fini (&core);
+		free (state.stdin_buf);
 		return 0;
 	}
 
@@ -891,24 +940,26 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		char *res = NULL;
 		if ((argc - opt.ind) < 2) {
 			r_core_fini (&core);
+			free (state.stdin_buf);
 			return rabin_show_help (0);
 		}
 		int type = r_bin_demangle_type (do_demangle);
-		setup_trylib_from_environment (bin, type);
+		bin->options.demangle_trylib = (type == R_BIN_LANG_SWIFT && r_sys_getenv_asbool ("RABIN2_DEMAN_TRYLIB"));
 		file = argv[opt.ind + 1];
 		if (!strcmp (file, "-")) {
 			for (;;) {
-				file = stdin_gets (false);
-				if (!file || !*file) {
+				file = stdin_gets (&state);
+				if (R_STR_ISEMPTY (file)) {
 					break;
 				}
 				res = __demangleAs (bin, type, file);
 				if (!res) {
-					eprintf ("Unknown lang to demangle. Use: cxx, java, objc, swift\n");
+					R_LOG_ERROR ("Unknown lang to demangle. Use: cxx, msvc, dlang, rust, pascal, java, objc, swift");
 					r_core_fini (&core);
+					free (state.stdin_buf);
 					return 1;
 				}
-				if (res && *res) {
+				if (R_STR_ISNOTEMPTY (res)) {
 					printf ("%s\n", res);
 				} else if (file && *file) {
 					printf ("%s\n", file);
@@ -916,35 +967,37 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 				R_FREE (res);
 				R_FREE (file);
 			}
-			char *r = stdin_gets (true);
-			free (r);
+			free (stdin_gets (&state));
 		} else {
 			res = __demangleAs (bin, type, file);
-			if (res && *res) {
+			if (R_STR_ISNOTEMPTY (res)) {
 				printf ("%s\n", res);
-				free(res);
+				free (res);
 				r_core_fini (&core);
+				free (state.stdin_buf);
 				return 0;
-			} else {
-				printf ("%s\n", file);
 			}
+			printf ("%s\n", file);
 		}
 		free (res);
 		//eprintf ("%s\n", file);
 		r_core_fini (&core);
+		free (state.stdin_buf);
 		return 1;
 	}
 	file = argv[opt.ind];
 
 	if (file && !*file) {
-		eprintf ("Cannot open empty path\n");
+		R_LOG_ERROR ("Cannot open empty path");
 		r_core_fini (&core);
+		free (state.stdin_buf);
 		return 1;
 	}
 
 	if (!query) {
 		if (action & R_BIN_REQ_HELP || action == R_BIN_REQ_UNK || !file) {
 			r_core_fini (&core);
+			free (state.stdin_buf);
 			return rabin_show_help (0);
 		}
 	}
@@ -952,7 +1005,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		ptr = strchr (arch, '_');
 		if (ptr) {
 			*ptr = '\0';
-			bits = r_num_math (NULL, ptr+1);
+			bits = r_num_math (NULL, ptr + 1);
 		}
 	}
 	if (action & R_BIN_REQ_CREATE) {
@@ -962,8 +1015,9 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		ut8 *data = NULL, *code = NULL;
 		char *p2, *p = strchr (create, ':');
 		if (!p) {
-			eprintf ("Invalid format for -C flag. Use 'format:codehexpair:datahexpair'\n");
+			R_LOG_ERROR ("Invalid format for -C flag. Use 'format:code:data (in hexpairs)");
 			r_core_fini (&core);
+			free (state.stdin_buf);
 			return 1;
 		}
 		*p++ = 0;
@@ -983,6 +1037,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		code = malloc (strlen (p) + 1);
 		if (!code) {
 			r_core_fini (&core);
+			free (state.stdin_buf);
 			return 1;
 		}
 		codelen = r_hex_str2bin (p, code);
@@ -993,50 +1048,55 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 			ut64 tmpsz;
 			const ut8 *tmp = r_buf_data (b, &tmpsz);
 			if (r_file_dump (file, tmp, tmpsz, 0)) {
-				eprintf ("Dumped %" PFMT64d " bytes in '%s'\n",
-					tmpsz, file);
+				R_LOG_INFO ("Dumped %" PFMT64d " bytes in '%s'", tmpsz, file);
 				(void)r_file_chmod (file, "+x", 0);
 			} else {
-				eprintf ("Error dumping into a.out\n");
+				R_LOG_ERROR ("Cannot dump bytes into a.out");
 			}
 			r_buf_free (b);
 		} else {
-			eprintf ("Cannot create binary for this format '%s'.\n", create);
+			R_LOG_ERROR ("Cannot create binary for this format '%s'", create);
 		}
 		r_core_fini (&core);
+		free (state.stdin_buf);
 		return 0;
 	}
 	if (rawstr == 2) {
 		unset_action (R_BIN_REQ_STRINGS);
 	}
-	r_config_set_i (core.config, "bin.rawstr", rawstr);
+	r_config_set_i (core.config, "bin.str.raw", rawstr);
 
 	if (!file) {
-		eprintf ("Missing file.\n");
+		R_LOG_ERROR ("Missing file");
 		r_core_fini (&core);
+		free (state.stdin_buf);
 		return 1;
 	}
 
-	if (file && *file && action & R_BIN_REQ_DLOPEN) {
-#if __UNIX__ && HAVE_FORK
+	if (R_STR_ISNOTEMPTY (file) && action & R_BIN_REQ_DLOPEN) {
+#if R2__UNIX__ && HAVE_FORK
 		int child = r_sys_fork ();
 		if (child == -1) {
 			r_core_fini (&core);
+			free (state.stdin_buf);
 			return 1;
 		}
 		if (child == 0) {
+			free (state.stdin_buf);
 			return waitpid (child, NULL, 0);
 		}
 #endif
 		void *addr = r_lib_dl_open (file);
 		if (addr) {
-			eprintf ("%s is loaded at 0x%"PFMT64x"\n", file, (ut64)(size_t)(addr));
+			R_LOG_INFO ("%s is loaded at 0x%"PFMT64x, file, (ut64)(size_t)(addr));
 			r_lib_dl_close (addr);
 			r_core_fini (&core);
+			free (state.stdin_buf);
 			return 0;
 		}
-		eprintf ("Cannot open the '%s' library\n", file);
+		R_LOG_ERROR ("Cannot open the '%s' library", file);
 		r_core_fini (&core);
+		free (state.stdin_buf);
 		return 0;
 	}
 	if (action & R_BIN_REQ_PACKAGE) {
@@ -1046,7 +1106,8 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		int i, rc = 0;
 
 		if (opt.ind + 3 > argc) {
-			eprintf ("Usage: rabin2 -X [fat|zip] foo.zip a b c\n");
+			R_LOG_ERROR ("Usage: rabin2 -X [fat|zip] foo.zip a b c");
+			free (state.stdin_buf);
 			r_core_fini (&core);
 			return 1;
 		}
@@ -1068,25 +1129,28 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		}
 		r_core_fini (&core);
 		r_list_free (files);
+		free (state.stdin_buf);
 		return rc;
 	}
 
-	if (file && *file) {
+	if (R_STR_ISNOTEMPTY (file)) {
 		if (r_core_file_open (&core, file, R_PERM_R, 0)) {
 			fd = r_io_fd_get_current (core.io);
 			if (fd == -1) {
-				eprintf ("r_core: Cannot open file '%s'\n", file);
+				R_LOG_ERROR ("Cannot open file '%s'", file);
 				r_core_fini (&core);
+				free (state.stdin_buf);
 				return 1;
 			}
 		} else {
-			eprintf ("r_core: Cannot open file '%s'\n", file);
+			R_LOG_ERROR ("Cannot open file '%s'", file);
 			r_core_fini (&core);
+			free (state.stdin_buf);
 			return 1;
 		}
 	}
-	bin->minstrlen = r_config_get_i (core.config, "bin.minstr");
-	bin->maxstrbuf = r_config_get_i (core.config, "bin.maxstrbuf");
+	bin->options.minstrlen = r_config_get_i (core.config, "bin.str.min");
+	bin->options.maxstrbuf = r_config_get_i (core.config, "bin.str.maxbuf");
 
 	r_bin_force_plugin (bin, forcebin);
 	r_bin_load_filter (bin, action);
@@ -1099,8 +1163,9 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		//if this return false means that we did not return a valid bin object
 		//but we have yet the chance that this file is a fat binary
 		if (!bin->cur || !bin->cur->xtr_data) {
-			eprintf ("r_bin: Cannot open file\n");
+			R_LOG_ERROR ("Cannot open file");
 			r_core_fini (&core);
+			free (state.stdin_buf);
 			return 1;
 		}
 	}
@@ -1114,7 +1179,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		RBinFile *bf = r_bin_cur (core.bin);
 		if (bf) {
 			bf->strmode = rad;
-			r_bin_dump_strings (bf, bin->minstrlen, bf->rawstr);
+			r_bin_dump_strings (bf, bin->options.minstrlen, bf->rawstr);
 		}
 	}
 	if (query) {
@@ -1123,29 +1188,29 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 			r_cons_flush ();
 		} else {
 			if (!strcmp (query, "-")) {
-				__sdb_prompt (bin->cur->sdb);
+				__sdb_prompt (&state, bin->cur->sdb);
 			} else {
 				sdb_query (bin->cur->sdb, query);
 			}
 		}
 		r_core_fini (&core);
+		free (state.stdin_buf);
 		return 0;
 	}
-#define isradjson (rad==R_MODE_JSON&&actions>0)
+#define isradjson ((rad == R_MODE_JSON) && (actions > 0))
 #define run_action(n,x,y) {\
 	if (action & (x)) {\
 		if (isradjson) { pj_k (pj, n); } \
 		if (!r_core_bin_info (&core, y, pj, rad, va, &filter, chksum)) {\
-			eprintf ("Missing bin header %s\n", n);\
-			if (isradjson) pj_b (pj, false);\
+			R_LOG_ERROR ("Missing bin header %s", n);\
 		};\
 	}\
 }
 	core.bin = bin;
 	bin->cb_printf = r_cons_printf;
-	filter.offset = at;
+	filter.addr = at;
 	filter.name = name;
-	r_cons_new ()->context->is_interactive = false;
+	core.cons->context->is_interactive = false;
 
 	if (isradjson) {
 		pj_o (pj);
@@ -1154,9 +1219,9 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 	if (action & R_BIN_REQ_LISTARCHS || ((arch || bits || arch_name) &&
 		!r_bin_select (bin, arch, bits, arch_name))) {
 		if (rad == R_MODE_SIMPLEST || rad == R_MODE_SIMPLE) {
-			r_bin_list_archs (bin, pj, 'q');
+			r_bin_list_archs (bin, pj, NULL, 'q');
 		} else {
-			r_bin_list_archs (bin, pj, (rad == R_MODE_JSON)? 'j': 1);
+			r_bin_list_archs (bin, pj, NULL, (rad == R_MODE_JSON)? 'j': 1);
 		}
 		free (arch_name);
 	}
@@ -1210,7 +1275,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		if (bf && bf->xtr_data) {
 			rabin_extract (bin, (!arch && !arch_name && !bits));
 		} else {
-			eprintf ("Cannot extract bins from '%s'. No supported plugins found!\n", bin->file);
+			R_LOG_ERROR ("Cannot extract bins from '%s'. No supported plugins found!", bin->file);
 		}
 	}
 	if (op && action & R_BIN_REQ_OPERATION) {
@@ -1220,10 +1285,12 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 		pj_end (pj);
 		r_cons_println (pj_string (pj));
 	}
+
 	pj_free (pj);
 	r_cons_flush ();
 	r_core_fini (&core);
 	r_syscmd_popalld ();
+	free (state.stdin_buf);
 
 	return 0;
 }

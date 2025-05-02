@@ -1,20 +1,23 @@
-/* radare2 - LGPL - Copyright 2015-2021 - pancake */
+/* radare2 - LGPL - Copyright 2015-2024 - pancake */
 
 #ifndef R2_BIND_H
 #define R2_BIND_H
-
-// TODO: move riobind here too?
-// TODO: move rprint here too
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#ifndef R2_CONS_H
+typedef const char * const RCoreHelpMessage[];
+#endif
+
 typedef int (*RCoreCmd)(void *core, const char *cmd);
 typedef int (*RCoreCmdF)(void *user, const char *fmt, ...);
+typedef char *(*RCoreCallAt)(void *user, ut64 addr, const char *cmd);
 typedef int (*RCoreDebugBpHit)(void *core, void *bp);
 typedef void (*RCoreDebugSyscallHit)(void *core);
 typedef char* (*RCoreCmdStr)(void *core, const char *cmd);
+typedef char* (*RCoreBindHelp)(void *core, RCoreHelpMessage help);
 typedef char* (*RCoreCmdStrF)(void *core, const char *cmd, ...);
 typedef void (*RCorePuts)(const char *cmd);
 typedef void (*RCoreSetArchBits)(void *core, const char *arch, int bits);
@@ -32,16 +35,19 @@ typedef struct r_core_bind_t {
 	void *core;
 	RCoreCmd cmd;
 	RCoreCmdF cmdf;
-	RCoreCmdStr cmdstr;
-	RCoreCmdStrF cmdstrf;
+	RCoreCallAt callAt;
+	RCoreCmdStr cmdStr; // should be cmdStr if we care about snake
+	RCoreCmdStrF cmdStrF;
+	RCoreBindHelp help;
 	RCorePuts puts;
-	RCoreDebugBpHit bphit;
-	RCoreDebugSyscallHit syshit;
-	RCoreSetArchBits setab;
+	RCoreDebugBpHit bpHit;
+	RCoreDebugSyscallHit sysHit;
+	RCoreSetArchBits setArchBits;
 	RCoreGetName getName;
 	RCoreGetNameDelta getNameDelta;
-	RCoreSeekArchBits archbits;
-	RCoreConfigGetI cfggeti;
+	RCoreSeekArchBits archBits;
+	// R2_600 cfgGetB for booleans
+	RCoreConfigGetI cfgGetI;
 	RCoreConfigGet cfgGet;
 	RCoreNumGet numGet;
 	RCoreIsMapped isMapped;

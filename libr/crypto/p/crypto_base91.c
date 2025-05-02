@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2016-2022 - rakholiyajenish.07 */
+/* radare - LGPL - Copyright 2016-2024 - rakholiyajenish.07 */
 
 #include <r_lib.h>
 #include <r_crypto.h>
@@ -6,50 +6,54 @@
 
 #define INSIZE 32768
 
-static bool base91_set_key(RCrypto *cry, const ut8 *key, int keylen, int mode, int direction) {
-	cry->dir = direction;
+static bool base91_set_key(RCryptoJob *cj, const ut8 *key, int keylen, int mode, int direction) {
+	cj->dir = direction;
 	return true;
 }
 
-static int base91_get_key_size(RCrypto *cry) {
+static int base91_get_key_size(RCryptoJob *cj) {
 	return 0;
 }
 
-static bool base91_use(const char *algo) {
+static bool base91_check(const char *algo) {
 	return algo && !strcmp (algo, "base91");
 }
 
-static bool update(RCrypto *cry, const ut8 *buf, int len) {
+static bool update(RCryptoJob *cj, const ut8 *buf, int len) {
+	R_RETURN_VAL_IF_FAIL (cj && buf && len > 0, false);
+
 	int olen = INSIZE;
-	if (!cry || !buf || len < 1) {
-		return false;
-	}
 	ut8 *obuf = calloc (1, olen);
 	if (!obuf) {
 		return false;
 	}
-	if (cry->dir == 0) {
+	switch (cj->dir) {
+	case R_CRYPTO_DIR_ENCRYPT:
 		olen = r_base91_encode ((char *)obuf, (const ut8 *)buf, len);
-	} else if (cry->dir == 1) {
+		break;
+	case R_CRYPTO_DIR_DECRYPT:
 		olen = r_base91_decode (obuf, (const char *)buf, len);
+		break;
 	}
-	r_crypto_append (cry, obuf, olen);
+	r_crypto_job_append (cj, obuf, olen);
 	free (obuf);
 	return true;
 }
 
-static bool final(RCrypto *cry, const ut8 *buf, int len) {
-	return update (cry, buf, len);
-}
-
 RCryptoPlugin r_crypto_plugin_base91 = {
-	.name = "base91",
-	// R2_580 .author = "pancake",
+	.meta = {
+		.desc = "Binary to text encoding scheme using 91 ascii characters",
+		.name = "base91",
+		.author = "rakholiyajenish.07",
+		.license = "MIT",
+	},
+	.implements = "base91",
+	.type = R_CRYPTO_TYPE_ENCODER,
 	.set_key = base91_set_key,
 	.get_key_size = base91_get_key_size,
-	.use = base91_use,
+	.check = base91_check,
 	.update = update,
-	.final = final
+	.end = update
 };
 
 #ifndef R2_PLUGIN_INCORE

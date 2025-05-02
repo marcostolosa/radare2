@@ -1,4 +1,7 @@
-/* radare - LGPL - Copyright 2020-2021 - thestr4ng3r */
+/* radare - LGPL - Copyright 2020-2024 - pancake, thestr4ng3r */
+
+#undef R_LOG_ORIGIN
+#define R_LOG_ORIGIN "r2r.load"
 
 #include "r2r.h"
 
@@ -50,7 +53,7 @@ static char *read_string_val(char **nextline, const char *val, ut64 *linenum) {
 	if (val[0] == '\'') {
 		size_t len = strlen (val);
 		if (len > 1 && val[len - 1] == '\'') {
-			eprintf ("Error: Invalid string syntax, use <<EOF instead of '...'\n");
+			R_LOG_ERROR ("Invalid string syntax, use <<EOF instead of '...'");
 			return NULL;
 		}
 	}
@@ -58,13 +61,13 @@ static char *read_string_val(char **nextline, const char *val, ut64 *linenum) {
 		// <<EOF syntax
 		const char *endtoken = val + 2;
 		if (!*endtoken) {
-			eprintf ("Error: Missing opening end token after <<\n");
+			R_LOG_ERROR ("Missing opening end token after <<");
 			return NULL;
 		}
 		if (strcmp (endtoken, "EOF") != 0) {
 			// In case there will be strings containing "EOF" inside of them, this requirement
 			// can be weakened to only apply for strings which do not contain "EOF".
-			eprintf ("Error: End token must be \"EOF\", got \"%s\" instead.\n", endtoken);
+			R_LOG_ERROR ("End token must be \"EOF\", got \"%s\" instead", endtoken);
 			return NULL;
 		}
 		RStrBuf *buf = r_strbuf_new ("");
@@ -86,11 +89,10 @@ static char *read_string_val(char **nextline, const char *val, ut64 *linenum) {
 			r_strbuf_append (buf, line);
 			if (end) {
 				return r_strbuf_drain (buf);
-			} else {
-				r_strbuf_append (buf, "\n");
 			}
+			r_strbuf_append (buf, "\n");
 		} while ((line = *nextline));
-		eprintf ("Error: Missing closing end token %s\n", endtoken);
+		R_LOG_ERROR ("Missing closing end token %s", endtoken);
 		r_strbuf_free (buf);
 		return NULL;
 	}
@@ -101,7 +103,7 @@ static char *read_string_val(char **nextline, const char *val, ut64 *linenum) {
 R_API RPVector *r2r_load_cmd_test_file(const char *file) {
 	char *contents = r_file_slurp (file, NULL);
 	if (!contents) {
-		eprintf ("Failed to open file \"%s\"\n", file);
+		R_LOG_ERROR ("Failed to open %s", file);
 		return NULL;
 	}
 
@@ -137,16 +139,19 @@ R_API RPVector *r2r_load_cmd_test_file(const char *file) {
 		}
 
 		// RUN is the only cmd without value
-		if (strcmp (line, "RUN") == 0) {
+		if (!strcmp (line, "NORUN")) {
+			// dont run this test, like if it was commented out
+			continue;
+		}
+		if (!strcmp (line, "RUN")) {
 			test->run_line = linenum;
 			if (!test->cmds.value) {
-				eprintf (LINEFMT "Error: Test without CMDS key\n", file, linenum);
+				R_LOG_ERROR (LINEFMT ": Test without CMDS key", file, linenum);
 				goto fail;
 			}
 			if (!(test->expect.value || test->expect_err.value)) {
 				if (!(test->regexp_out.value || test->regexp_err.value)) {
-					eprintf (LINEFMT "Error: Test without EXPECT or EXPECT_ERR key"
-						 " (did you forget an EOF?)\n", file, linenum);
+					R_LOG_ERROR (LINEFMT ": Test without EXPECT or EXPECT_ERR key, missing EOF?", file, linenum);
 					goto fail;
 				}
 			}
@@ -159,29 +164,29 @@ R_API RPVector *r2r_load_cmd_test_file(const char *file) {
 		}
 
 #define DO_KEY_STR(key, field) \
-		if (strcmp (line, key) == 0) { \
+		if (!strcmp (line, key)) { \
 			if (test->field.value) { \
 				free (test->field.value); \
-				eprintf (LINEFMT "Warning: Duplicate key \"%s\"\n", file, linenum, key); \
+				R_LOG_WARN (LINEFMT ": Duplicate key \"%s\"", file, linenum, key); \
 			} \
 			if (!val) { \
-				eprintf (LINEFMT "Error: No value for key \"%s\"\n", file, linenum, key); \
+				R_LOG_ERROR (LINEFMT ": No value for key \"%s\"", file, linenum, key); \
 				goto fail; \
 			} \
 			test->field.line_begin = linenum; \
 			test->field.value = read_string_val (&nextline, val, &linenum); \
 			test->field.line_end = linenum + 1; \
 			if (!test->field.value) { \
-				eprintf (LINEFMT "Error: Failed to read value for key \"%s\"\n", file, linenum, key); \
+				R_LOG_ERROR (LINEFMT ": Failed to read value for key \"%s\"", file, linenum, key); \
 				goto fail; \
 			} \
 			continue; \
 		}
 
 #define DO_KEY_BOOL(key, field) \
-		if (strcmp (line, key) == 0) { \
+		if (!strcmp (line, key)) { \
 			if (test->field.value) { \
-				eprintf (LINEFMT "Warning: Duplicate key \"%s\"\n", file, linenum, key); \
+				R_LOG_WARN (LINEFMT ": Duplicate key \"%s\"", file, linenum, key); \
 			} \
 			test->field.set = true; \
 			/* Strip comment */ \
@@ -199,16 +204,16 @@ R_API RPVector *r2r_load_cmd_test_file(const char *file) {
 			} else if (!strcmp (val, "0")) { \
 				test->field.value = false; \
 			} else { \
-				eprintf (LINEFMT "Error: Invalid value \"%s\" for boolean key \"%s\", only \"1\" or \"0\" allowed.\n", file, linenum, val, key); \
+				R_LOG_ERROR (LINEFMT ": Invalid value \"%s\" for boolean key \"%s\", only \"1\" or \"0\" allowed", file, linenum, val, key); \
 				goto fail; \
 			} \
 			continue; \
 		}
 
 #define DO_KEY_NUM(key, field) \
-		if (strcmp (line, key) == 0) { \
+		if (!strcmp (line, key)) { \
 			if (test->field.value) { \
-				eprintf (LINEFMT "Warning: Duplicate key \"%s\"\n", file, linenum, key); \
+				R_LOG_WARN (LINEFMT ": Duplicate key \"%s\"", file, linenum, key); \
 			} \
 			test->field.set = true; \
 			/* Strip comment */ \
@@ -224,7 +229,7 @@ R_API RPVector *r2r_load_cmd_test_file(const char *file) {
 			char *endval; \
 			test->field.value = strtol (val, &endval, 0); \
 			if (!endval || *endval) { \
-				eprintf (LINEFMT "Error: Invalid value \"%s\" for numeric key \"%s\", only numbers allowed.\n", file, linenum, val, key); \
+				R_LOG_ERROR (LINEFMT ": Invalid value \"%s\" for numeric key \"%s\", only numbers allowed", file, linenum, val, key); \
 				goto fail; \
 			} \
 			continue; \
@@ -235,13 +240,14 @@ R_API RPVector *r2r_load_cmd_test_file(const char *file) {
 #undef DO_KEY_BOOL
 #undef DO_KEY_NUM
 
-		eprintf (LINEFMT "Unknown key \"%s\".\n", file, linenum, line);
+		R_LOG_ERROR (LINEFMT ": Unknown key \"%s\"", file, linenum, line);
+		break;
 	} while ((line = nextline));
 beach:
 	free (contents);
 
 	if (test && (test->name.value || test->cmds.value || test->expect.value)) {
-		eprintf ("Warning: found test tokens at the end of \"%s\" without RUN.\n", file);
+		R_LOG_WARN ("found test tokens at the end of \"%s\" without RUN", file);
 	}
 	r2r_cmd_test_free (test);
 	return ret;
@@ -258,12 +264,11 @@ R_API R2RAsmTest *r2r_asm_test_new(void) {
 }
 
 R_API void r2r_asm_test_free(R2RAsmTest *test) {
-	if (!test) {
-		return;
+	if (test != NULL) {
+		free (test->disasm);
+		free (test->bytes);
+		free (test);
 	}
-	free (test->disasm);
-	free (test->bytes);
-	free (test);
 }
 
 static bool parse_asm_path(const char *path, RStrConstPool *strpool, const char **arch_out, const char **cpuout, int *bitsout) {
@@ -311,13 +316,13 @@ R_API RPVector *r2r_load_asm_test_file(RStrConstPool *strpool, const char *file)
 	const char *cpu;
 	int bits;
 	if (!parse_asm_path (file, strpool, &arch, &cpu, &bits)) {
-		eprintf ("Failed to parse arch/cpu/bits from path %s\n", file);
+		R_LOG_ERROR ("Failed to parse arch/cpu/bits from path %s", file);
 		return NULL;
 	}
 
 	char *contents = r_file_slurp (file, NULL);
 	if (!contents) {
-		eprintf ("Failed to open file \"%s\"\n", file);
+		R_LOG_ERROR ("Failed to open file \"%s\"", file);
 		return NULL;
 	}
 
@@ -356,25 +361,25 @@ R_API RPVector *r2r_load_asm_test_file(RStrConstPool *strpool, const char *file)
 				mode |= R2R_ASM_TEST_MODE_BROKEN;
 				break;
 			default:
-				eprintf (LINEFMT "Warning: Invalid mode char '%c'\n", file, linenum, *line);
+				R_LOG_WARN (LINEFMT ": Invalid mode char '%c'", file, linenum, *line);
 				goto fail;
 			}
 			line++;
 		}
 		if (!(mode & R2R_ASM_TEST_MODE_ASSEMBLE) && !(mode & R2R_ASM_TEST_MODE_DISASSEMBLE)) {
-			eprintf (LINEFMT "Warning: Mode specifies neither assemble nor disassemble.\n", file, linenum);
+			R_LOG_WARN (LINEFMT "Mode specifies neither assemble nor disassemble", file, linenum);
 			continue;
 		}
 
 		char *disasm = strchr (line, '"');
 		if (!disasm) {
-			eprintf (LINEFMT "Error: Expected \" to begin disassembly.\n", file, linenum);
+			R_LOG_ERROR (LINEFMT ": Expected \" to begin disassembly", file, linenum);
 			goto fail;
 		}
 		disasm++;
 		char *hex = strchr (disasm, '"');
 		if (!hex) {
-			eprintf (LINEFMT "Error: Expected \" to end disassembly.\n", file, linenum);
+			R_LOG_ERROR (LINEFMT ": Expected \" to end disassembly", file, linenum);
 			goto fail;
 		}
 		*hex = '\0';
@@ -393,7 +398,7 @@ R_API RPVector *r2r_load_asm_test_file(RStrConstPool *strpool, const char *file)
 
 		size_t hexlen = strlen (hex);
 		if (!hexlen) {
-			eprintf (LINEFMT "Error: Expected hex chars.\n", file, linenum);
+			R_LOG_ERROR (LINEFMT ": Expected hex chars", file, linenum);
 			goto fail;
 		}
 		ut8 *bytes = malloc (hexlen);
@@ -402,11 +407,11 @@ R_API RPVector *r2r_load_asm_test_file(RStrConstPool *strpool, const char *file)
 		}
 		int bytesz = r_hex_str2bin (hex, bytes);
 		if (bytesz == 0) {
-			eprintf (LINEFMT "Error: Expected hex chars.\n", file, linenum);
+			R_LOG_ERROR (LINEFMT "Expected hex chars", file, linenum);
 			goto fail;
 		}
 		if (bytesz < 0) {
-			eprintf (LINEFMT "Error: Odd number of hex chars: %s\n", file, linenum, hex);
+			R_LOG_ERROR (LINEFMT ": Odd number of hex chars: %s", file, linenum, hex);
 			goto fail;
 		}
 
@@ -451,7 +456,7 @@ R_API void r2r_json_test_free(R2RJsonTest *test) {
 R_API RPVector *r2r_load_json_test_file(const char *file) {
 	char *contents = r_file_slurp (file, NULL);
 	if (!contents) {
-		eprintf ("Failed to open file \"%s\"\n", file);
+		R_LOG_ERROR ("Failed to open %s", file);
 		return NULL;
 	}
 
@@ -584,11 +589,21 @@ static R2RTestType test_type_for_path(const char *path, bool *load_plugins) {
 }
 
 static bool database_load(R2RTestDatabase *db, const char *path, int depth) {
+#if WANT_V35 == 0
+	R2RTestToSkip v35_tests_to_skip[] = {
+		{"asm", "arm.v35_64"},
+		{"esil", "arm_64"},
+		{"cmd", "cmd_open"},
+		{"tools", "rasm2"},
+	};
+#endif
+
 	if (depth <= 0) {
-		eprintf ("Directories for loading tests too deep: %s\n", path);
+		R_LOG_ERROR ("Directories for loading tests too deep: %s", path);
 		return false;
 	}
 	if (r_file_is_directory (path)) {
+		const char *archos = getarchos ();
 		RList *dir = r_sys_dir (path);
 		if (!dir) {
 			return false;
@@ -606,16 +621,34 @@ static bool database_load(R2RTestDatabase *db, const char *path, int depth) {
 			}
 			if (!strcmp (subname, "extras")) {
 				// Only load "extras" dirs if explicitly specified
-				eprintf ("Skipping %s"R_SYS_DIR"%s because it requires additional dependencies.\n", path, subname);
+				R_LOG_WARN ("Skipping %s"R_SYS_DIR"%s because it requires additional dependencies", path, subname);
 				continue;
 			}
+#if WANT_V35 == 0
+			bool skip = false;
+			size_t i = 0;
+			for (; i < sizeof (v35_tests_to_skip) / sizeof (R2RTestToSkip); i++) {
+				R2RTestToSkip test = v35_tests_to_skip[i];
+				bool is_dir = r_str_endswith (path, r_str_newf(R_SYS_DIR"%s", test.dir));
+				if (is_dir) {
+					if (!strcmp (subname, test.name)) {
+						R_LOG_WARN ("Skipping test %s"R_SYS_DIR"%s because it requires binary ninja", path, subname);
+						skip = true;
+						break;
+					}
+				}
+			}
+			if (skip) {
+				continue;
+			}
+#endif
 			if (skip_asm && strstr (path, R_SYS_DIR"asm"R_SYS_DIR)) {
-				eprintf ("R2R_SKIP_ASM: Skipping %s.\n", path);
+				R_LOG_INFO ("R2R_SKIP_ASM: Skipping %s", path);
 				continue;
 			}
 			bool is_archos_folder = !strcmp (path, "archos") || r_str_endswith (path, R_SYS_DIR"archos");
-			if (is_archos_folder && (skip_archos || strcmp (subname, R2R_ARCH_OS))) {
-				eprintf ("Skipping %s"R_SYS_DIR"%s because it does not match the current platform.\n", path, subname);
+			if (is_archos_folder && (skip_archos || strcmp (subname, archos))) {
+				R_LOG_ERROR ("Skipping %s"R_SYS_DIR"%s because it does not match the current platform \"%s\"", path, subname, archos);
 				continue;
 			}
 			r_strbuf_setf (&subpath, "%s%s%s", path, R_SYS_DIR, subname);
@@ -630,7 +663,7 @@ static bool database_load(R2RTestDatabase *db, const char *path, int depth) {
 	}
 
 	if (!r_file_exists (path)) {
-		eprintf ("Path \"%s\" does not exist\n", path);
+		R_LOG_ERROR ("Path \"%s\" does not exist", path);
 		return false;
 	}
 
@@ -760,7 +793,7 @@ R_API bool r2r_test_database_load_fuzz(R2RTestDatabase *db, const char *path) {
 	}
 
 	if (!r_file_exists (path)) {
-		eprintf ("Path \"%s\" does not exist\n", path);
+		R_LOG_ERROR ("Path \"%s\" does not exist", path);
 		return false;
 	}
 

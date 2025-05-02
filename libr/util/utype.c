@@ -2,12 +2,10 @@
 
 #include <r_util.h>
 
-// R2_580 - return bool instead of int
-R_API int r_type_set(Sdb *TDB, ut64 at, const char *field, ut64 val) {
-	const char *kind;
+R_API bool r_type_set(Sdb *TDB, ut64 at, const char *field, ut64 val) {
 	char var[128];
-	sprintf (var, "link.%08"PFMT64x, at);
-	kind = sdb_const_get (TDB, var, NULL);
+	snprintf (var, sizeof (var), "link.%08"PFMT64x, at);
+	const char *kind = sdb_const_get (TDB, var, NULL);
 	if (kind) {
 		const char *p = sdb_const_get (TDB, kind, NULL);
 		if (p) {
@@ -17,20 +15,16 @@ R_API int r_type_set(Sdb *TDB, ut64 at, const char *field, ut64 val) {
 			eprintf ("wv 0x%08"PFMT64x" @ 0x%08"PFMT64x"\n", val, at + off);
 			return true;
 		}
-		eprintf ("Invalid kind of type\n");
+		R_LOG_ERROR ("Invalid kind of type");
 	}
 	return false;
 }
 
-R_API int r_type_kind(Sdb *TDB, const char *name) {
-	r_return_val_if_fail (TDB, -1);
-	if (!name) {
-		// XXX should assert too
-		return -1;
-	}
+R_API RTypeKind r_type_kind(Sdb *TDB, const char *name) {
+	R_RETURN_VAL_IF_FAIL (TDB && R_STR_ISNOTEMPTY (name), -1);
 	const char *type = sdb_const_get (TDB, name, 0);
 	if (!type) {
-		return -1;
+		return R_TYPE_INVALID;
 	}
 	if (!strcmp (type, "enum")) {
 		return R_TYPE_ENUM;
@@ -47,17 +41,17 @@ R_API int r_type_kind(Sdb *TDB, const char *name) {
 	if (!strcmp (type, "typedef")) {
 		return R_TYPE_TYPEDEF;
 	}
-	return -1;
+	return R_TYPE_INVALID;
 }
 
-R_API RList* r_type_get_enum(Sdb *TDB, const char *name) {
+R_API RList *r_type_get_enum(Sdb *TDB, const char *name) {
 	char *p, var[130];
 	int n;
 
 	if (r_type_kind (TDB, name) != R_TYPE_ENUM) {
 		return NULL;
 	}
-	RList *res = r_list_new ();
+	RList *res = r_list_newf ((RListFree) r_type_enum_free);
 	snprintf (var, sizeof (var), "enum.%s", name);
 	for (n = 0; (p = sdb_array_get (TDB, var, n, NULL)); n++) {
 		RTypeEnum *member = R_NEW0 (RTypeEnum);
@@ -71,8 +65,8 @@ R_API RList* r_type_get_enum(Sdb *TDB, const char *name) {
 					r_list_append (res, member);
 				} else {
 					free (member);
-					free (var2);
 				}
+				free (var2);
 			} else {
 				free (member);
 			}
@@ -81,7 +75,16 @@ R_API RList* r_type_get_enum(Sdb *TDB, const char *name) {
 	return res;
 }
 
+R_API void r_type_enum_free(RTypeEnum *member) {
+	if (member) {
+		free (member->name);
+		free (member->val);
+		free (member);
+	}
+}
+
 R_API char *r_type_enum_member(Sdb *TDB, const char *name, const char *member, ut64 val) {
+	R_RETURN_VAL_IF_FAIL (TDB && name, NULL);
 	if (r_type_kind (TDB, name) != R_TYPE_ENUM) {
 		return NULL;
 	}
@@ -146,7 +149,7 @@ R_API ut64 r_type_get_bitsize(Sdb *TDB, const char *type) {
 		}
 		return 0;
 	}
-	if (!strcmp (t, "type")){
+	if (!strcmp (t, "type")) {
 		char *query = r_str_newf ("type.%s.size", tmptype);
 		ut64 r = sdb_num_get (TDB, query, 0); // returns size in bits
 		free (query);
@@ -276,7 +279,7 @@ R_API char *r_type_get_struct_memb(Sdb *TDB, const char *type, int offset) {
 }
 
 // XXX this function is slow!
-R_API RList* r_type_get_by_offset(Sdb *TDB, ut64 offset) {
+R_API RList *r_type_get_by_offset(Sdb *TDB, ut64 offset) {
 	RList *offtypes = r_list_new ();
 	SdbList *ls = sdb_foreach_list (TDB, true);
 	SdbListIter *lsi;
@@ -315,7 +318,7 @@ static void types_range_del(Sdb *db, ut64 addr) {
 	ut64 base = TYPE_RANGE_BASE (addr);
 	r_strf_var (k, 64, "range.%"PFMT64x, base);
 	char valstr[SDB_NUM_BUFSZ];
-	const char *v = sdb_itoa (addr, valstr, SDB_NUM_BASE);
+	const char *v = sdb_itoa (addr, SDB_NUM_BASE, valstr, sizeof (valstr));
 	sdb_array_remove (db, k, v, 0);
 }
 
@@ -481,7 +484,7 @@ R_API char *r_type_format(Sdb *TDB, const char *t) {
 			return strdup (fmt);
 		}
 	} else if (!strcmp (kind, "struct") || !strcmp (kind, "union")) {
-		return fmt_struct_union(TDB, var, false);
+		return fmt_struct_union (TDB, var, false);
 	}
 	if (!strcmp (kind, "typedef")) {
 		snprintf (var2, sizeof (var2), "typedef.%s", t);
@@ -506,11 +509,12 @@ R_API void r_type_del(Sdb *TDB, const char *name) {
 		sdb_unset (TDB, r_strf ("type.%s.meta", name), 0);
 		sdb_unset (TDB, name, 0);
 	} else if (!strcmp (kind, "struct") || !strcmp (kind, "union")) {
-		int i, n = sdb_array_length (TDB, r_strf ("%s.%s", kind, name));
 		char *elements_key = r_str_newf ("%s.%s", kind, name);
-		for (i = 0; i< n; i++) {
+		int i, n = sdb_array_length (TDB, elements_key);
+		for (i = 0; i < n; i++) {
 			char *p = sdb_array_get (TDB, elements_key, i, NULL);
 			sdb_unset (TDB, r_strf ("%s.%s", elements_key, p), 0);
+			sdb_unset (TDB, r_strf ("%s.%s.meta", elements_key, p), 0);
 			free (p);
 		}
 		sdb_unset (TDB, elements_key, 0);
@@ -558,7 +562,7 @@ R_API int r_type_func_exist(Sdb *TDB, const char *func_name) {
 	return fcn && !strcmp (fcn, "func");
 }
 
-R_API const char *r_type_func_ret(Sdb *TDB, const char *func_name){
+R_API const char *r_type_func_ret(Sdb *TDB, const char *func_name) {
 	r_strf_var (query, 64, "func.%s.ret", func_name);
 	return sdb_const_get (TDB, query, 0);
 }
@@ -578,18 +582,37 @@ R_API R_OWN char *r_type_func_args_type(Sdb *TDB, R_NONNULL const char *func_nam
 			*comma = 0;
 			return ret;
 		}
-		free (ret);
+		return ret;
 	}
 	return NULL;
 }
 
+const char *const argnames[10] = {
+	"arg0",
+	"arg1",
+	"arg2",
+	"arg3",
+	"arg4",
+	"arg5",
+	"arg6",
+	"arg7",
+	"arg8",
+	"arg9",
+};
+
 R_API const char *r_type_func_args_name(Sdb *TDB, R_NONNULL const char *func_name, int i) {
 	char *query = r_str_newf ("func.%s.arg.%d", func_name, i);
-	const char *get = sdb_const_get (TDB, query, 0);
+	const char *row = sdb_const_get (TDB, query, 0);
 	free (query);
-	if (get) {
-		char *ret = strchr (get, ',');
-		return ret == 0 ? ret : ret + 1;
+	if (row) {
+		const char *ret = strchr (row, ',');
+		if (ret) {
+			return ret + 1;
+		}
+		if (i >= 0 && i < 10) {
+			R_LOG_DEBUG ("Missing arg %d name for %s", i, func_name);
+			return argnames[i];
+		}
 	}
 	return NULL;
 }
@@ -597,19 +620,17 @@ R_API const char *r_type_func_args_name(Sdb *TDB, R_NONNULL const char *func_nam
 #define MIN_MATCH_LEN 4
 
 static inline bool is_function(const char *name) {
-	return name && !strcmp("func", name);
+	return name && !strcmp ("func", name);
 }
 
 static R_OWN char *type_func_try_guess(Sdb *TDB, R_NONNULL char *name) {
-	if (strlen(name) < MIN_MATCH_LEN) {
+	if (strlen (name) < MIN_MATCH_LEN) {
 		return NULL;
 	}
-
-	const char *res = sdb_const_get(TDB, name, NULL);
-	if (is_function(res)) {
-		return strdup(name);
+	const char *res = sdb_const_get (TDB, name, NULL);
+	if (is_function (res)) {
+		return strdup (name);
 	}
-
 	return NULL;
 }
 
@@ -669,8 +690,8 @@ static void clean_function_name(char *func_name) {
 R_API R_OWN char *r_type_func_guess(Sdb *TDB, R_NONNULL char *func_name) {
 	char *str = func_name;
 	char *result = NULL;
-	r_return_val_if_fail (TDB, false);
-	r_return_val_if_fail (func_name, false);
+	R_RETURN_VAL_IF_FAIL (TDB, false);
+	R_RETURN_VAL_IF_FAIL (func_name, false);
 
 	size_t slen = strlen (str);
 	if (slen < MIN_MATCH_LEN || is_auto_named(str, slen)) {
@@ -695,4 +716,20 @@ R_API R_OWN char *r_type_func_guess(Sdb *TDB, R_NONNULL char *func_name) {
 
 	free (str);
 	return result;
+}
+
+R_API char *r_type_func_name(Sdb *types, const char *fname) {
+	const char *str = fname;
+	const char *name = fname;
+	if (r_type_func_exist (types, fname)) {
+		return strdup (fname);
+	}
+	while ((str = strchr (str, '.'))) {
+		str++;
+		name = str;
+	}
+	if (r_type_func_exist (types, name)) {
+		return strdup (name);
+	}
+	return r_type_func_guess (types, (char*)fname);
 }

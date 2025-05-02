@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2020-2022 - gogo, pancake */
+/* radare - LGPL - Copyright 2020-2025 - gogo, pancake */
 
 #include <r_util.h>
 #include <config.h>
@@ -84,12 +84,12 @@ R_API void r_charset_free(RCharset *c) {
 }
 
 R_API void r_charset_close(RCharset *c) {
-	r_return_if_fail (c);
+	R_RETURN_IF_FAIL (c);
 	c->loaded = false;
 }
 
 R_API bool r_charset_use(RCharset *c, const char *cf) {
-	r_return_val_if_fail (c && cf, false);
+	R_RETURN_VAL_IF_FAIL (c && cf, false);
 	bool rc = false;
 	SdbGperf *gp = r_charset_get_gperf (cf);
 	if (gp) {
@@ -118,7 +118,7 @@ R_API bool r_charset_use(RCharset *c, const char *cf) {
 }
 
 R_API bool r_charset_open(RCharset *c, const char *cs) {
-	r_return_val_if_fail (c, false);
+	R_RETURN_VAL_IF_FAIL (c, false);
 	if (cs) {
 		sdb_reset (c->db);
 		sdb_open (c->db, cs);
@@ -136,12 +136,14 @@ R_API bool r_charset_open(RCharset *c, const char *cs) {
 		const char *new_key = kv->base.value;
 		const char *new_value = kv->base.key;
 		const size_t key_len = strlen (new_key);
-		const size_t val_len = strlen (new_value);
 		if (key_len > c->encode_maxkeylen) {
 			c->encode_maxkeylen = key_len;
 		}
-		if (val_len > c->decode_maxkeylen) {
-			c->decode_maxkeylen = val_len;
+		if (r_str_startswith (new_value, "0x")) {
+			size_t vlen = strlen (new_value + 2) / 2;
+			if (vlen > c->decode_maxkeylen) {
+				c->decode_maxkeylen = vlen;
+			}
 		}
 		sdb_add (c->db_char_to_hex, new_key, new_value, 0);
 		c->loaded = true;
@@ -153,11 +155,8 @@ R_API bool r_charset_open(RCharset *c, const char *cs) {
 
 // rune
 R_API RCharsetRune *r_charset_rune_new(const ut8 *ch, const ut8 *hx) {
-	r_return_val_if_fail (ch && hx, NULL);
+	R_RETURN_VAL_IF_FAIL (ch && hx, NULL);
 	RCharsetRune* c = R_NEW0 (RCharsetRune);
-	if (!c) {
-		return NULL;
-	}
 	c->ch = (ut8 *) strdup ((char *) ch);
 	c->hx = (ut8 *) strdup ((char *) hx);
 	c->left = NULL;
@@ -173,52 +172,44 @@ R_API void r_charset_rune_free(RCharsetRune *c) {
 	}
 }
 
-#if 0
-R_API RCharsetRune *add_rune(RCharsetRune *r, const ut8 *ch, const ut8 *hx) {
-	if (!r) {
-		r = r_charset_rune_new (ch, hx);
-	}
-	int cmp = strcmp ((char *)hx, (char *)r->hx);
-	if (cmp < 0) {
-		r->left = add_rune (r->left, ch, hx);
-	} else if (cmp > 0) {
-		r->right = add_rune (r->right, ch, hx);
-	} else {
-		int cmp = strcmp ((char *)ch, (char *)r->ch);
-		if (cmp > 0) {
-			r->left = add_rune (r->left, ch, hx);
-		} else if (cmp < 0) {
-			r->right = add_rune (r->right, ch, hx);
-		}
-	}
-	return r;
-}
-
-R_API RCharsetRune *search_from_hex(RCharsetRune *r, const ut8 *hx) {
-	if (!r) {
-		return NULL;
-	}
-	if (!strcmp ((char *)r->hx, (char *)hx)) {
-		return r;
-	}
-	RCharsetRune *left = search_from_hex (r->left, hx);
-	return left? left: search_from_hex (r->right, hx);
-}
-#endif
-
-R_API size_t r_charset_encode_str(RCharset *rc, ut8 *out, size_t out_len, const ut8 *in, size_t in_len) {
+R_API size_t r_charset_encode_str(RCharset *rc, ut8 *out, size_t out_len, const ut8 *in, size_t in_len, bool early_exit) {
 	if (!rc->loaded) {
 		return in_len;
 	}
 	char k[32];
 	char *o = (char*)out;
-	size_t i;
+	size_t i, oi;
 	char *o_end = o + out_len;
 	bool fine = false;
-	for (i = 0; i < in_len && o < o_end; i++) {
-		ut8 ch_in = in[i];
-		snprintf (k, sizeof (k), "0x%02x", ch_in);
+	size_t ws = rc->decode_maxkeylen;
+	if (ws < 1) {
+		ws = 1;
+	} else if (ws > 4) {
+		ws = 4;
+	}
+	for (i = oi = 0; i < in_len && o < o_end; i += ws) {
+		if (ws == 2) {
+			snprintf (k, sizeof (k), "0x%02x%02x", in[i], in[i + 1]);
+		} else {
+			snprintf (k, sizeof (k), "0x%02x", in[i]);
+		}
 		const char *v = sdb_const_get (rc->db, k, 0);
+		if (!v && in_len > 1 && ws == 1 && i + 1 < in_len) {
+			const char *v = sdb_const_get (rc->db, k, 0);
+			snprintf (k, sizeof (k), "0x%02x%02x", in[i], in[i + 1]);
+			v = sdb_const_get (rc->db, k, 0);
+			if (v) {
+				ws = 2;
+			}
+		}
+		if (!v) {
+			if (early_exit) {
+				break;
+			}
+			if (IS_PRINTABLE (in[i])) {
+				v = (const char*)(in + i);
+			}
+		}
 		const char *ret = r_str_get_fail (v, "?");
 		char *res = strdup (ret);
 		if (res) {
@@ -229,10 +220,12 @@ R_API size_t r_charset_encode_str(RCharset *rc, ut8 *out, size_t out_len, const 
 			fine = true;
 			r_str_unescape (res);
 		//	memcpy (o, res, out_len - i);
-			r_str_ncpy (o, res, out_len - i);
+			r_str_ncpy (o, res, out_len - oi);
 			free (res);
 		}
-		o += strlen (o);
+		const size_t di = strlen (o);
+		oi += di;
+		o += di;
 	}
 	if (!fine) {
 		return 0;
@@ -264,7 +257,7 @@ R_API size_t r_charset_decode_str(RCharset *rc, ut8 *out, size_t out_len, const 
 			str[j] = 0;
 			const char *v = sdb_const_get (rc->db_char_to_hex, (char *) str, 0);
 			if (v) {
-				int repeat = !strncmp (v, "0x", 2)? strlen (v + 2) / 2: 1;
+				int repeat = r_str_startswith (v, "0x")? strlen (v + 2) / 2: 1;
 				ut64 nv = r_num_get (NULL, v);
 				if (!nv) {
 					int i;
@@ -278,7 +271,7 @@ R_API size_t r_charset_decode_str(RCharset *rc, ut8 *out, size_t out_len, const 
 					found = true;
 					break;
 				}
-				//convert to ascii
+				// convert to ascii
 				char *str_hx = malloc (1 + maxkeylen);
 				if (!str_hx) {
 					break;
@@ -304,7 +297,7 @@ R_API size_t r_charset_decode_str(RCharset *rc, ut8 *out, size_t out_len, const 
 						break;
 					}
 					// eprintf ("-> 0x%02x\n", nv & 0xff);
-					//in the future handle multiple chars output
+					// TODO: support multiple chars output
 					str_hx[0] = bv;
 					str_hx[1] = 0;
 					const char *ret = r_str_get_fail (str_hx, "?");
@@ -326,8 +319,9 @@ R_API size_t r_charset_decode_str(RCharset *rc, ut8 *out, size_t out_len, const 
 			}
 		}
 		if (!found) {
-			strcpy (o, "?");
-			o += strlen ("?");
+			o[0] = '?';
+			o[1] = 0;
+			o++;
 		}
 		free (str);
 	}
