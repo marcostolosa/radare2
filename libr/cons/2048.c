@@ -145,9 +145,10 @@ static void twok_print(GameState *state, bool color) {
 }
 
 R_API void r_cons_2048(bool color) {
+	RCons *cons = r_cons_singleton ();
 	GameState state;
 	int ch;
-	r_cons_set_raw (1);
+	r_kons_set_raw (cons, 1);
 	twok_init (&state);
 	twok_add (&state);
 	twok_add (&state);
@@ -160,8 +161,8 @@ R_API void r_cons_2048(bool color) {
 		}
 		r_cons_flush ();
 		twok_print (&state, color);
-		ch = r_cons_readchar ();
-		ch = r_cons_arrow_to_hjkl (ch);
+		ch = r_cons_readchar (cons);
+		ch = r_cons_arrow_to_hjkl (cons, ch);
 		switch (ch) {
 		case 'h':
 			twok_move (&state, 1, 1);
@@ -180,14 +181,14 @@ R_API void r_cons_2048(bool color) {
 			break;
 		}
 	}
-	r_cons_clear00 ();
-	r_cons_printf ("[r2048] score: %d\n", state.score);
-	r_cons_flush ();
+	r_kons_clear00 (cons);
+	r_kons_printf (cons, "[r2048] score: %d\n", state.score);
+	r_kons_flush (cons);
 	twok_print (&state, color);
 
-	r_cons_printf ("\n  [r2048.score] %d\n", state.score);
+	r_kons_printf (cons, "\n  [r2048.score] %d\n", state.score);
 	do {
-		ch = r_cons_any_key ("Press 'q' to quit.");
+		ch = r_cons_any_key (cons, "Press 'q' to quit.");
 	} while (ch != 'q' && ch >= 1);
-	r_cons_set_raw (0);
+	r_kons_set_raw (cons, 0);
 }

@@ -303,7 +303,6 @@ R_API char *r_core_sysenv_begin(RCore *core, const char *cmd) {
 	r_sys_setenv ("R2_COLOR", s);
 	free (s);
 	r_sys_setenv ("R2_UTF8", r_config_get_b (core->config, "scr.utf8")? "1": "0");
-	r_sys_setenv ("R2_DEBUG", r_config_get_b (core->config, "cfg.debug")? "1": "0");
 	r_sys_setenv ("R2_IOVA", r_config_get_b (core->config, "io.va")? "1": "0");
 #if 0
 	free (config_sdb_path);
@@ -381,7 +380,7 @@ static bool setbpint(RCore *r, const char *mode, const char *sym) {
 #endif
 
 // XXX - need to handle index selection during debugging
-static int r_core_file_load_for_debug(RCore *r, ut64 baseaddr, R_NULLABLE const char *filenameuri) {
+static int r_core_file_load_for_debug(RCore *r, ut64 baseaddr, const char * R_NULLABLE filenameuri) {
 	RIODesc *desc = r->io->desc;
 	RBinFile *bf = NULL;
 	RBinPlugin *plugin;

@@ -29,9 +29,9 @@ static int win_xterm_get_cur_pos(RCons *cons, int *xpos) {
 	bool is_reply;
 	do {
 		is_reply = true;
-		ch = r_cons_readchar ();
+		ch = r_cons_readchar (cons);
 		if (ch != 0x1b) {
-			while ((ch = r_cons_readchar_timeout (25))) {
+			while ((ch = r_cons_readchar_timeout (cons, 25))) {
 				if (ch < 1) {
 					return 0;
 				}
@@ -40,9 +40,9 @@ static int win_xterm_get_cur_pos(RCons *cons, int *xpos) {
 				}
 			}
 		}
-		(void)r_cons_readchar ();
+		(void)r_cons_readchar (cons);
 		for (i = 0; i < R_ARRAY_SIZE (pos) - 1; i++) {
-			ch = r_cons_readchar ();
+			ch = r_cons_readchar (cons);
 			if ((!i && !isdigit (ch)) || // dumps arrow keys etc.
 			    (i == 1 && ch == '~')) {  // dumps PgUp, PgDn etc.
 				is_reply = false;
@@ -58,7 +58,7 @@ static int win_xterm_get_cur_pos(RCons *cons, int *xpos) {
 	pos[R_ARRAY_SIZE (pos) - 1] = 0;
 	ypos = atoi (pos);
 	for (i = 0; i < R_ARRAY_SIZE (pos) - 1; i++) {
-		if ((ch = r_cons_readchar ()) == 'R') {
+		if ((ch = r_cons_readchar (cons)) == 'R') {
 			pos[i] = 0;
 			break;
 		}
@@ -224,7 +224,7 @@ static bool w32_xterm_get_size(RCons *cons) {
 #endif
 
 // XXX: if this function returns <0 in rows or cols expect MAYHEM
-R_API int r_kons_get_size(RCons *cons, R_NULLABLE int *rows) {
+R_API int r_kons_get_size(RCons *cons, int * R_NULLABLE rows) {
 	R_RETURN_VAL_IF_FAIL (cons, 0);
 #if R2__WINDOWS__
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -438,7 +438,7 @@ R_API bool r_kons_is_interactive(RCons *cons) {
 R_API void r_kons_break_push(RCons *cons, RConsBreak cb, void *user) {
 	RConsContext *ctx = cons->context;
 	if (ctx->break_stack && r_stack_size (ctx->break_stack) > 0) {
-		r_cons_break_timeout (cons->otimeout);
+		r_kons_break_timeout (cons, cons->otimeout);
 	}
 	r_cons_context_break_push (ctx, cb, user, true);
 }
@@ -458,10 +458,12 @@ R_API void r_kons_flush(RCons *cons) {
 		r_kons_reset (cons);
 		return;
 	}
+#if 0
 	if (!r_list_empty (ctx->marks)) {
 		r_list_free (ctx->marks);
 		ctx->marks = r_list_newf ((RListFree)r_cons_mark_free);
 	}
+#endif
 	if (lastMatters (ctx)) {
 		// snapshot of the output
 		if (ctx->buffer_len > ctx->lastLength) {
@@ -692,9 +694,14 @@ static void cons_context_deinit(RConsContext *ctx) {
 }
 #endif
 
-static void init_cons_context(RCons *cons, R_NULLABLE RConsContext *parent) {
+static void mark_free(RConsMark *m) {
+	free (m->name);
+	free (m);
+}
+
+static void init_cons_context(RCons *cons, RConsContext * R_NULLABLE parent) {
 	RConsContext *ctx = cons->context;
-	ctx->marks = r_list_newf ((RListFree)r_cons_mark_free);
+	ctx->marks = r_list_newf ((RListFree)mark_free);
 	ctx->breaked = false;
 	// ctx->cmd_depth = R_CONS_CMD_DEPTH + 1;
 	ctx->buffer_sz = 0;
@@ -744,7 +751,6 @@ static inline void init_cons_input(InputState *state) {
 
 R_API RCons *r_kons_new(void) {
 	RCons *cons = R_NEW0 (RCons);
-	cons->refcnt++;
 #if 0
 	if (cons->refcnt != 1) {
 		return cons;
@@ -764,8 +770,7 @@ R_API RCons *r_kons_new(void) {
 	init_cons_input (&cons->input_state);
 	cons->lock = r_th_lock_new (false);
 	cons->use_utf8 = r_cons_is_utf8 ();
-	cons->rgbstr = r_cons_rgb_str_off;
-	cons->line = r_line_new ();
+	cons->rgbstr = r_cons_rgb_str_off; // XXX maybe we can kill that
 	cons->enable_highlight = true;
 	cons->highlight = NULL;
 	cons->is_wine = -1;
@@ -821,29 +826,24 @@ R_API RCons *r_kons_new(void) {
 	r_kons_reset (cons);
 	r_kons_rgb_init (cons);
 	r_print_set_is_interrupted_cb (r_cons_is_breaked);
+	cons->line = r_line_new (cons);
 	return cons;
 }
 
-R_API void r_kons_free(R_NULLABLE RCons *cons) {
+R_API void r_kons_free(RCons * R_NULLABLE cons) {
 	if (!cons) {
 		return;
 	}
 #if R2__WINDOWS__
-	r_cons_enable_mouse (false);
+	r_kons_enable_mouse (cons, false);
 	if (cons->old_cp) {
 		(void)SetConsoleOutputCP (cons->old_cp);
 		// chcp doesn't pick up the code page switch for some reason
 		(void)r_sys_cmdf ("chcp %u > NUL", cons->old_cp);
 	}
 #endif
-#if 0
-	cons->refcnt--;
-	if (cons->refcnt != 0) {
-		return;
-	}
-#endif
 	if (cons->line) {
-		r_line_free ();
+		r_line_free (cons->line);
 		cons->line = NULL;
 	}
 	while (!r_list_empty (cons->ctx_stack)) {
@@ -973,7 +973,7 @@ R_API void r_kons_filter(RCons *cons) {
 	}
 }
 
-R_API void r_cons_context_free(R_NULLABLE RConsContext *ctx) {
+R_API void r_cons_context_free(RConsContext * R_NULLABLE ctx) {
 	if (ctx) {
 		// TODO: free more stuff
 #if 0
@@ -1005,7 +1005,7 @@ R_API RConsContext *r_cons_context_clone(RConsContext *ctx) {
 	if (ctx->unsorted_lines) {
 		c->unsorted_lines = r_list_clone (ctx->unsorted_lines, (RListClone)strdup);
 	}
-	c->marks = r_list_clone (ctx->marks, (RListClone)strdup);
+	// c->marks = r_list_clone (ctx->marks, (RListClone)strdup);
 	c->pal.rainbow = NULL;
 	r_kons_pal_clone (c);
 	// rainbow_clone (c);
@@ -1111,7 +1111,7 @@ R_API char *r_kons_drain(RCons *cons) {
 	return s;
 }
 
-R_API void r_kons_print_fps(RCons *cons, int col) {
+static void print_fps(RCons *cons, int col) {
 	int fps = 0, w = r_cons_get_size (NULL);
 	fps = 0;
 	if (cons->prev) {
@@ -1219,7 +1219,7 @@ R_API void r_kons_visual_write(RCons *cons, char *buffer) {
 	}
 }
 
-R_API void r_kons_visual_flush(RCons *cons) {
+R_API void r_cons_visual_flush(RCons *cons) {
 	RConsContext *ctx = cons->context;
 	if (ctx->noflush) {
 		return;
@@ -1239,7 +1239,7 @@ R_API void r_kons_visual_flush(RCons *cons) {
 	}
 	r_kons_reset (cons);
 	if (cons->fps) {
-		r_kons_print_fps (cons, 0);
+		print_fps (cons, 0);
 	}
 }
 
@@ -1453,10 +1453,6 @@ R_API void r_kons_set_utf8(RCons *cons, bool b) {
 #endif
 }
 
-R_API void r_kons_invert(RCons *cons, int set, int color) {
-	r_kons_print (cons, R_CONS_INVERT (set, color));
-}
-
 R_API void r_kons_column(RCons *cons, int c) {
 	RConsContext *ctx = cons->context;
 	char *b = malloc (ctx->buffer_len + 1);
@@ -1510,7 +1506,7 @@ R_API void r_kons_highlight(RCons *cons, const char *word) {
 	};
 
 	if (!cons->enable_highlight) {
-		r_cons_enable_highlight (true);
+		r_cons_enable_highlight (cons, true);
 		return;
 	}
 	RConsContext *C = cons->context;
@@ -1633,7 +1629,7 @@ R_API void r_kons_trim(RCons *cons) {
 	}
 }
 
-R_API void r_kons_breakword(RCons *cons, R_NULLABLE const char *s) {
+R_API void r_kons_breakword(RCons *cons, const char * R_NULLABLE s) {
 	free (cons->break_word);
 	if (s) {
 		cons->break_word = strdup (s);
@@ -1652,30 +1648,19 @@ R_API void r_kons_clear_buffer(RCons *cons) {
 	}
 }
 
-R_API void r_cons_mark_free(RConsMark *m) {
-	if (m) {
-		free (m->name);
-		free (m);
-	}
-}
-
-R_API void r_kons_mark(RCons *cons, ut64 addr, const char *name) {
+R_API void r_cons_mark(RCons *cons, ut64 addr, const char *name) {
 	RConsMark *mark = R_NEW0 (RConsMark);
 	RConsContext *ctx = cons->context;
 	mark->addr = addr;
-	int row = 0, col = r_cons_get_cursor (&row);
-	mark->name = strdup (name); // TODO. use a const pool
+	int row = 0, col = r_kons_get_cursor (cons, &row);
+	mark->name = strdup (name); // TODO. use a const pool instead
 	mark->pos = ctx->buffer_len;
 	mark->col = col;
 	mark->row = row;
 	r_list_append (ctx->marks, mark);
 }
 
-R_API void r_kons_mark_flush(RCons *cons) {
-	r_list_free (cons->context->marks);
-}
-
-R_API RConsMark *r_kons_mark_at(RCons *cons, ut64 addr, const char *name) {
+R_API RConsMark *r_cons_mark_at(RCons *cons, ut64 addr, const char *name) {
 	RConsContext *C = cons->context;
 	RListIter *iter;
 	RConsMark *mark;
@@ -1704,7 +1689,7 @@ R_API bool r_kons_is_breaked(RCons *cons) {
 			if (r_time_now_mono () > cons->timeout) {
 				C->breaked = true;
 				C->was_breaked = true;
-				r_cons_break_timeout (cons->otimeout);
+				r_kons_break_timeout (cons, cons->otimeout);
 			}
 		}
 	}
@@ -1821,3 +1806,11 @@ R_API void r_kons_cmd_help(RCons *cons, RCoreHelpMessage help, bool use_color) {
 		}
 	}
 }
+
+R_API void r_kons_set_click(RCons *cons, int x, int y) {
+	cons->click_x = x;
+	cons->click_y = y;
+	cons->click_set = true;
+	cons->mouse_event = 1;
+}
+

@@ -1,6 +1,7 @@
-/* radare - LGPL - Copyright 2009-2023 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
 #include <r_debug.h>
+#include <r_core.h>
 #include <r_list.h>
 
 /* Print out the JSON body for memory maps in the passed map region */
@@ -217,7 +218,8 @@ static void print_debug_maps_ascii_art(RDebug *dbg, RList *maps, ut64 addr, int 
 	int width = r_cons_get_size (NULL) - 90;
 	RListIter *iter;
 	RDebugMap *map;
-	RConsPrintablePalette *pal = &r_cons_singleton ()->context->pal;
+	RCore *core = (RCore *)dbg->coreb.core;
+	RConsPrintablePalette *pal = &core->cons->context->pal;
 	if (width < 1) {
 		width = 30;
 	}
@@ -302,7 +304,7 @@ R_API void r_debug_map_list_visual(RDebug *dbg, ut64 addr, const char *input, in
 	}
 }
 
-R_API R_NONNULL RDebugMap *r_debug_map_new(char *name, ut64 addr, ut64 addr_end, int perm, int user) {
+R_API RDebugMap * R_NONNULL r_debug_map_new(char *name, ut64 addr, ut64 addr_end, int perm, int user) {
 	/* range could be 0k on OpenBSD, it's a honeypot */
 	if (!name || addr > addr_end) {
 		R_LOG_ERROR ("r_debug_map_new: invalid (0x%" PFMT64x " > 0x%" PFMT64x ")", addr, addr_end);

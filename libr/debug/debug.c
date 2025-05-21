@@ -737,12 +737,9 @@ R_API RDebugReasonType r_debug_stop_reason(RDebug *dbg) {
  *
  * Returns  R_DEBUG_REASON_*
  */
-R_API RDebugReasonType r_debug_wait(RDebug *dbg, R_NULLABLE RBreakpointItem **bp) {
+R_API RDebugReasonType r_debug_wait(RDebug * R_NONNULL dbg, RBreakpointItem ** R_NULLABLE bp) {
 	R_RETURN_VAL_IF_FAIL (dbg, R_DEBUG_REASON_ERROR);
 	RDebugReasonType reason = R_DEBUG_REASON_ERROR;
-	if (!dbg) {
-		return reason;
-	}
 	if (bp) {
 		*bp = NULL;
 	}
@@ -1598,8 +1595,9 @@ R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc) {
 	}
 	for (;;) {
 		RDebugReasonType reason;
+		RCore *core = (RCore *)dbg->coreb.core;
 
-		if (r_cons_singleton ()->context->breaked) {
+		if (core->cons->context->breaked) {
 			break;
 		}
 #if __linux__

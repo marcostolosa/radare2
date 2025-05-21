@@ -854,7 +854,7 @@ static int cmd_help(void *data, const char *input) {
 		}
 		break;
 	case 'F': // "?F"
-		r_cons_flush ();
+		r_kons_flush (core->cons);
 		break;
 	case 'f': // "?f"
 		if (input[1] == ' ') {
@@ -1329,7 +1329,7 @@ static int cmd_help(void *data, const char *input) {
 				int res_len = 0;
 				ut8 *res = r_base64_decode_dyn (arg, -1, &res_len);
 				if (res && res_len > 0) {
-					r_cons_write ((const char *)res, res_len);
+					r_kons_write (core->cons, (const char *)res, res_len);
 				}
 				free (res);
 			}
@@ -1576,7 +1576,7 @@ static int cmd_help(void *data, const char *input) {
 				eprintf ("%s\n", r_str_bool (!core->num->value));
 				break;
 			case 'm': // "?im"
-				r_cons_message (input + 2);
+				r_cons_message (core->cons, input + 2);
 				break;
 			case 'p': // "?ip"
 				{
@@ -1591,11 +1591,11 @@ static int cmd_help(void *data, const char *input) {
 			case 'e': // "?ie"
 				{
 				char foo[1024];
-				r_cons_flush ();
+				r_kons_flush (core->cons);
 				input = r_str_trim_head_ro (input + 2);
 				// TODO: r_cons_input()
 				snprintf (foo, sizeof (foo) - 1, "%s: ", input);
-				r_line_set_prompt (foo);
+				r_line_set_prompt (core->cons->line, foo);
 				r_cons_fgets (core->cons, foo, sizeof (foo), 0, NULL);
 				foo[sizeof (foo) - 1] = 0;
 				r_cons_printf ("%s\n", foo);
@@ -1603,7 +1603,7 @@ static int cmd_help(void *data, const char *input) {
 				}
 				break;
 			case 'k': // "?ik"
-				 r_cons_any_key (NULL);
+				 r_cons_any_key (core->cons, NULL);
 				 break;
 			case 'y': // "?iy"
 				 input = r_str_trim_head_ro (input + 2);
@@ -1618,11 +1618,11 @@ static int cmd_help(void *data, const char *input) {
 				 break;
 			default: {
 				char foo[1024];
-				r_cons_flush ();
+				r_kons_flush (core->cons);
 				input = r_str_trim_head_ro (input + 1);
 				// TODO: use r_cons_input()
 				snprintf (foo, sizeof (foo) - 1, "%s: ", input);
-				r_line_set_prompt (foo);
+				r_line_set_prompt (core->cons->line, foo);
 				r_cons_fgets (core->cons, foo, sizeof (foo), 0, NULL);
 				foo[sizeof (foo) - 1] = 0;
 				r_core_yank_set_str (core, R_CORE_FOREIGN_ADDR, foo, strlen (foo) + 1);

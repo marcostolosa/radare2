@@ -551,7 +551,7 @@ static bool cmd_ec(RCore *core, const char *input) {
 			  case 'i': // "ecHi"
 				  if (argc) {
 					  char *dup = r_str_newf ("bgonly %s", argv[0]);
-					  color_code = r_cons_pal_parse (dup, NULL);
+					  color_code = r_cons_pal_parse (core->cons, dup, NULL);
 					  free (dup);
 					  if (!color_code) {
 						  R_LOG_ERROR ("Unknown color %s", argv[0]);
@@ -569,7 +569,7 @@ static bool cmd_ec(RCore *core, const char *input) {
 				  word = strdup (argv[0]);
 				  if (argc > 1) {
 					  char *dup = r_str_newf ("bgonly %s", argv[1]);
-					  color_code = r_cons_pal_parse (dup, NULL);
+					  color_code = r_cons_pal_parse (core->cons, dup, NULL);
 					  R_FREE (dup);
 					  if (!color_code) {
 						  R_LOG_ERROR ("Unknown color %s", argv[1]);
@@ -611,7 +611,7 @@ static bool cmd_ec(RCore *core, const char *input) {
 			 } else {
 				 char color[32] = {0};
 				 RColor rcolor = r_cons_pal_get (core->cons, p);
-				 r_cons_rgb_str (color, sizeof (color), &rcolor);
+				 r_cons_rgb_str (core->cons, color, sizeof (color), &rcolor);
 				 if (*color) {
 					 eprintf ("(%s)(%sCOLOR"Color_RESET")\n", p, color);
 				 } else {
@@ -628,7 +628,7 @@ static bool cmd_ec(RCore *core, const char *input) {
 	return true;
 }
 
-static void r2rc_set(RCore *core, R_NULLABLE const char *k, R_NULLABLE const char *v) {
+static void r2rc_set(RCore *core, const char * R_NULLABLE k, const char * R_NULLABLE v) {
 	char *rcfile = r_file_home (".radare2rc");
 	char *rcdata = r_file_slurp (rcfile, NULL);
 	if (k) {
@@ -835,9 +835,9 @@ static int cmd_eval(void *data, const char *input) {
 			}
 		} else {
 			char *file = r_file_home (".radare2rc");
-			if (r_cons_is_interactive ()) {
+			if (r_kons_is_interactive (core->cons)) {
 				r_file_touch (file);
-				char *res = r_cons_editor (file, NULL);
+				char *res = r_cons_editor (core->cons, file, NULL);
 				if (res) {
 					if (r_cons_yesno ('y', "Reload? (Y/n)")) {
 						r_core_run_script (core, file);

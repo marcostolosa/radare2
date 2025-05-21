@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2021-2024 - pancake */
+/* radare - LGPL - Copyright 2021-2025 - pancake */
 
 #include <r_core.h>
 
@@ -86,7 +86,7 @@ static void render(SlidesState *state, RCore *core, RList *list, int mode, int p
 			} else if (r_str_startswith (s, "--color=")) {
 				char *kv = strdup (s + strlen ("--color="));
 				if (*kv) {
-					char *k = r_cons_pal_parse (kv, NULL);
+					char *k = r_cons_pal_parse (core->cons, kv, NULL);
 					r_strbuf_append (sb, k);
 					free (k);
 				} else {
@@ -169,9 +169,9 @@ R_API void r_core_visual_slides(RCore *core, const char *file) {
 	int mode = 1;
 	int sx = 0;
 	int sy = 0;
-	r_cons_set_raw (1);
+	r_kons_set_raw (core->cons, 1);
 	r_cons_show_cursor (false);
-	r_cons_enable_mouse (false);
+	r_kons_enable_mouse (core->cons, false);
 	int total_pages = count_pages (list);
 	SlidesState state = {0};
 	while (having_fun) {
@@ -188,8 +188,8 @@ R_API void r_core_visual_slides(RCore *core, const char *file) {
 		render_title (page, mode, total_pages);
 		r_cons_flush ();
 		r_cons_set_raw (true);
-		ch = r_cons_readchar ();
-		ch = r_cons_arrow_to_hjkl (ch);
+		ch = r_cons_readchar (core->cons);
+		ch = r_cons_arrow_to_hjkl (core->cons, ch);
 		switch (ch) {
 		case 'j':
 			sy++;
@@ -240,7 +240,7 @@ R_API void r_core_visual_slides(RCore *core, const char *file) {
 			eprintf (" e    = open vim to edit the current slide\n");
 			eprintf (" 12   = show 1 or two pages\n");
 			eprintf (" :    = enter command\n");
-			r_cons_any_key (NULL);
+			r_cons_any_key (core->cons, NULL);
 			break;
 		case 'e':
 		case '!':
@@ -279,7 +279,7 @@ R_API void r_core_visual_slides(RCore *core, const char *file) {
 			while (1) {
 				char cmd[1024];
 				*cmd = 0;
-				r_line_set_prompt (":> ");
+				r_line_set_prompt (core->cons->line, ":> ");
 				if (r_cons_fgets (core->cons, cmd, sizeof (cmd), 0, NULL) < 0) {
 					cmd[0] = '\0';
 				}
